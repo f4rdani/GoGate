@@ -1,0 +1,262 @@
+server:
+    host: 0.0.0.0
+    port: 8080
+    admin_secret: change-me-admin-secret
+    log_level: info
+    dashboard_enabled: true
+concurrency:
+    max_concurrent: 50
+    per_provider: 15
+    per_model: 8
+    queue_depth: 30
+    queue_timeout: 30s
+cache:
+    enabled: true
+    max_size: 200
+    ttl: 300
+retry:
+    max_retries: 2
+    initial_backoff: 500
+    max_backoff: 10000
+token_saver:
+    enabled: false
+    max_input_bytes: 4096
+    caveman_mode: true
+    compress_user: true
+    minify_json: true
+    strip_comments: true
+providers:
+    - name: openai
+      type: openai
+      base_url: https://api.openai.com/v1
+      api_keys:
+        - sk-your-openai-key-here
+      models: []
+      tier: 1
+      health_check_interval: 1m0s
+    - name: anthropic
+      type: anthropic
+      base_url: https://api.anthropic.com
+      api_keys:
+        - sk-ant-your-key-here
+      models: []
+      tier: 1
+      health_check_interval: 1m0s
+    - name: groq
+      type: groq
+      base_url: https://api.groq.com/openai/v1
+      api_keys:
+        - gsk_your_groq_key_here
+      models:
+        - qwen/qwen3.6-27b
+        - groq/compound
+        - openai/gpt-oss-20b
+        - openai/gpt-oss-120b
+        - qwen/qwen3-32b
+      tier: 2
+      health_check_interval: 1m0s
+    - name: mistral
+      type: mistral
+      base_url: https://api.mistral.ai/v1
+      api_keys:
+        - your_mistral_key_here
+      models:
+        - codestral-latest
+        - mistral-code-latest
+        - devstral-latest
+        - mistral-code-agent-latest
+        - mistral-small-latest
+        - voxtral-small-latest
+        - mistral-large-latest
+        - mistral-medium-latest
+        - magistral-small-latest
+        - magistral-medium-latest
+      tier: 1
+      health_check_interval: 1m0s
+    - name: neosan
+      type: openai
+      base_url: https://api.neosantara.xyz/v1
+      api_keys:
+        - nsk_your_neosantara_key_here
+      models:
+        - glm-4.7-flash
+        - grok-4.1-fast-non-reasoning
+        - grok-4.1-fast-reasoning
+      tier: 3
+      health_check_interval: 2m0s
+    - name: gemini
+      type: openai
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai
+      api_keys:
+        - AIzaSy_your_gemini_key_here
+      models:
+        - models/gemini-2.5-flash
+        - models/gemma-4-26b-a4b-it
+        - models/gemini-flash-latest
+        - models/gemini-flash-lite-latest
+        - models/gemini-3-flash-preview
+        - models/gemini-3.1-flash-lite-preview
+        - models/gemini-3.1-flash-lite
+        - models/gemini-3.5-flash
+      tier: 1
+    - name: cohere
+      type: cohere
+      base_url: https://api.cohere.com/compatibility/v1
+      api_keys:
+        - your_cohere_key_here
+      models:
+        - command-r-08-2024
+        - command-a-plus-05-2026
+        - command-a-reasoning-08-2025
+        - north-mini-code-1-0
+      tier: 1
+      health_check_interval: 1m0s
+    - name: opencode
+      type: opencode
+      base_url: https://opencode.ai/zen/v1
+      api_keys: []
+      models: []
+      tier: 3
+    - name: cerebras
+      type: cerebras
+      base_url: https://api.cerebras.ai/v1
+      api_keys:
+        - csk_your_cerebras_key_here
+      models:
+        - gpt-oss-120b
+        - gemma-4-31b
+        - zai-glm-4.7
+      tier: 3
+models:
+    - name: glm-4.7-flash
+      provider: neosan
+      model: glm-4.7-flash
+    - name: grok-4.1-fast-non-reasoning
+      provider: neosan
+      model: grok-4.1-fast-non-reasoning
+    - name: grok-4.1-fast-reasoning
+      provider: neosan
+      model: grok-4.1-fast-reasoning
+    - name: codestral-latest
+      provider: mistral
+      model: codestral-latest
+    - name: mistral-code-latest
+      provider: mistral
+      model: mistral-code-latest
+    - name: devstral-latest
+      provider: mistral
+      model: devstral-latest
+    - name: mistral-code-agent-latest
+      provider: mistral
+      model: mistral-code-agent-latest
+    - name: mistral-small-latest
+      provider: mistral
+      model: mistral-small-latest
+    - name: voxtral-small-latest
+      provider: mistral
+      model: voxtral-small-latest
+    - name: mistral-large-latest
+      provider: mistral
+      model: mistral-large-latest
+    - name: mistral-medium-latest
+      provider: mistral
+      model: mistral-medium-latest
+    - name: magistral-small-latest
+      provider: mistral
+      model: magistral-small-latest
+    - name: magistral-medium-latest
+      provider: mistral
+      model: magistral-medium-latest
+      reasoning: true
+    - name: qwen/qwen3.6-27b
+      provider: groq
+      model: qwen/qwen3.6-27b
+      reasoning: true
+    - name: groq/compound
+      provider: groq
+      model: groq/compound
+    - name: openai/gpt-oss-20b
+      provider: groq
+      model: openai/gpt-oss-20b
+      reasoning: true
+    - name: openai/gpt-oss-120b
+      provider: groq
+      model: openai/gpt-oss-120b
+      reasoning: true
+    - name: qwen/qwen3-32b
+      provider: groq
+      model: qwen/qwen3-32b
+      reasoning: true
+    - name: reasoning
+      strategy: round-robin
+      backends:
+        - provider: groq
+          model: qwen/qwen3.6-27b
+        - provider: groq
+          model: openai/gpt-oss-120b
+        - provider: groq
+          model: openai/gpt-oss-20b
+        - provider: groq
+          model: qwen/qwen3-32b
+        - provider: cerebras
+          model: gpt-oss-120b
+    - name: google/gemini-2.5-flash
+      provider: gemini
+      model: models/gemini-2.5-flash
+      reasoning: true
+    - name: google/gemma-4-26b-a4b-it
+      provider: gemini
+      model: models/gemma-4-26b-a4b-it
+    - name: google/gemini-flash-latest
+      provider: gemini
+      model: models/gemini-flash-latest
+      reasoning: true
+    - name: google/gemini-flash-lite-latest
+      provider: gemini
+      model: models/gemini-flash-lite-latest
+    - name: google/gemini-3-flash-preview
+      provider: gemini
+      model: models/gemini-3-flash-preview
+      reasoning: true
+    - name: google/gemini-3.1-flash-lite-preview
+      provider: gemini
+      model: models/gemini-3.1-flash-lite-preview
+    - name: google/gemini-3.1-flash-lite
+      provider: gemini
+      model: models/gemini-3.1-flash-lite
+    - name: google/gemini-3.5-flash
+      provider: gemini
+      model: models/gemini-3.5-flash
+      reasoning: true
+    - name: command-r-08-2024
+      provider: cohere
+      model: command-r-08-2024
+    - name: command-a-plus-05-2026
+      provider: cohere
+      model: command-a-plus-05-2026
+      reasoning: true
+    - name: command-a-reasoning-08-2025
+      provider: cohere
+      model: command-a-reasoning-08-2025
+      reasoning: true
+    - name: north-mini-code-1-0
+      provider: cohere
+      model: north-mini-code-1-0
+      reasoning: true
+    - name: gpt-oss-120b
+      provider: cerebras
+      model: gpt-oss-120b
+      reasoning: true
+    - name: gemma-4-31b
+      provider: cerebras
+      model: gemma-4-31b
+    - name: zai-glm-4.7
+      provider: cerebras
+      model: zai-glm-4.7
+      reasoning: true
+api_keys:
+    - key: sk-gw-your-client-key-here
+      name: developer-1
+      allowed_models:
+        - "*"
+      rate_limit: 60

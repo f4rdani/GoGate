@@ -1,0 +1,1737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Gateway — Dashboard</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Outfit:wght@600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg: radial-gradient(circle at 50% 0%, #0f172a 0%, #020617 100%);
+  --surface: rgba(17, 24, 39, 0.7);
+  --card: rgba(30, 41, 59, 0.4);
+  --card-hover: rgba(30, 41, 59, 0.6);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-hover: rgba(99, 102, 241, 0.4);
+  --text: #f8fafc;
+  --text2: #cbd5e1;
+  --text3: #64748b;
+  
+  --blue: #4f46e5;      /* Indigo */
+  --blue-glow: rgba(79, 70, 229, 0.35);
+  --blue2: #6366f1;
+  --green: #10b981;     /* Emerald */
+  --green-glow: rgba(16, 185, 129, 0.35);
+  --red: #f43f5e;       /* Rose */
+  --red-glow: rgba(244, 63, 94, 0.35);
+  --orange: #f59e0b;    /* Amber */
+  --purple: #8b5cf6;    /* Violet */
+  --cyan: #06b6d4;      /* Cyan */
+  
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+}
+
+html{font-size:14px}
+body{
+  font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  background: #030712;
+  background-image: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  min-height: 100vh;
+  padding-bottom: 2rem;
+}
+a{color: #6366f1;text-decoration:none;transition:color 0.15s}
+a:hover{color: #818cf8;text-decoration:none}
+
+/* Layout */
+.topbar {
+  background: rgba(3, 7, 18, 0.8);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 2rem;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(20px);
+}
+.topbar h1 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.topbar h1 span {
+  background: linear-gradient(135deg, #818cf8, #c084fc);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.ok {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green), 0 0 20px var(--green);
+  animation: pulse 2s infinite;
+}
+.status-dot.err {
+  background: var(--red);
+  box-shadow: 0 0 10px var(--red), 0 0 20px var(--red);
+  animation: pulse 2s infinite;
+}
+.status-dot.warn {
+  background: var(--orange);
+}
+@keyframes pulse {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.spacer { flex: 1; }
+.topbar-info {
+  font-size: 0.8rem;
+  color: var(--text3);
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+}
+.topbar-info span {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1.1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(30, 41, 59, 0.5);
+  color: var(--text2);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--card-hover);
+  border-color: var(--border-hover);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: translateY(0);
+}
+.btn-primary {
+  background: linear-gradient(135deg, #4f46e5, #6366f1);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 4px 14px var(--blue-glow);
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, #6366f1, #818cf8);
+  border-color: transparent;
+  box-shadow: 0 6px 20px var(--blue-glow);
+}
+.btn-danger {
+  border-color: rgba(244, 63, 94, 0.2);
+  color: var(--red);
+  background: rgba(244, 63, 94, 0.05);
+}
+.btn-danger:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+  box-shadow: 0 4px 14px var(--red-glow);
+}
+.btn-sm {
+  padding: 0.35rem 0.8rem;
+  font-size: 0.75rem;
+  border-radius: 6px;
+}
+
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 2rem 2rem;
+}
+
+/* Auth modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.75);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(10px);
+}
+.modal-overlay.hidden { display: none; }
+.modal {
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2.5rem;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: var(--shadow-lg), 0 0 40px rgba(99, 102, 241, 0.1);
+  backdrop-filter: blur(20px);
+  animation: modalIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.modal h2 {
+  font-family: 'Outfit', sans-serif;
+  margin-bottom: 0.5rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+.modal p {
+  color: var(--text2);
+  font-size: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+.modal input {
+  width: 100%;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 18, 0.4);
+  color: var(--text);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  outline: none;
+  transition: all 0.2s;
+}
+.modal input:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+}
+.modal .error-msg {
+  color: var(--red);
+  font-size: 0.8rem;
+  margin-bottom: 0.75rem;
+  min-height: 1.2rem;
+}
+
+/* Cards */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  box-shadow: var(--shadow);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 3px;
+  background: transparent;
+}
+.card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  background: var(--card-hover);
+}
+.card-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  margin-bottom: 0.4rem;
+  font-weight: 700;
+}
+.card-value {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.7rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.card-sub {
+  font-size: 0.75rem;
+  color: var(--text3);
+  margin-top: 0.25rem;
+}
+
+.card:nth-child(1)::before { background: var(--blue); }
+.card:nth-child(2)::before { background: var(--green); }
+.card:nth-child(3)::before { background: var(--cyan); }
+.card:nth-child(4)::before { background: var(--purple); }
+
+.card-value.green { color: var(--green); }
+.card-value.blue { color: #818cf8; }
+.card-value.orange { color: var(--orange); }
+.card-value.purple { color: var(--purple); }
+.card-value.cyan { color: var(--cyan); }
+
+/* Section */
+.section {
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  backdrop-filter: blur(12px);
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.section-header h2 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.section-header .badge {
+  font-size: 0.7rem;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+  padding: 0.15rem 0.55rem;
+  border-radius: 20px;
+  font-weight: 700;
+}
+.section-header .spacer { flex: 1; }
+
+/* Tables */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(3, 7, 18, 0.25);
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+thead {
+  background: rgba(15, 23, 42, 0.8);
+  position: sticky;
+  top: 0;
+}
+th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  font-weight: 600;
+  color: var(--text2);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+tr:last-child td { border-bottom: none; }
+tbody tr {
+  transition: background 0.15s;
+}
+tbody tr:hover {
+  background: rgba(99, 102, 241, 0.05);
+}
+.code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--cyan);
+  background: rgba(6, 182, 212, 0.05);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid rgba(6, 182, 212, 0.15);
+}
+.mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+}
+
+/* Tags */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.tag-green {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.2);
+  color: var(--green);
+}
+.tag-red {
+  background: rgba(244, 63, 94, 0.08);
+  border-color: rgba(244, 63, 94, 0.2);
+  color: var(--red);
+}
+.tag-blue {
+  background: rgba(99, 102, 241, 0.08);
+  border-color: rgba(99, 102, 241, 0.2);
+  color: #818cf8;
+}
+.tag-orange {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.2);
+  color: var(--orange);
+}
+.tag-purple {
+  background: rgba(139, 92, 246, 0.08);
+  border-color: rgba(139, 92, 246, 0.2);
+  color: var(--purple);
+}
+.tag-gray {
+  background: rgba(100, 116, 139, 0.08);
+  border-color: rgba(100, 116, 139, 0.2);
+  color: var(--text2);
+}
+
+/* Grid layout */
+.grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+@media(max-width:960px){.grid2{grid-template-columns:1fr}}
+
+/* Toast */
+.toast-container {
+  position: fixed;
+  top: 5rem;
+  right: 1.5rem;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.toast {
+  padding: 0.75rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-weight: 500;
+  animation: toastIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  max-width: 380px;
+  border: 1px solid;
+  box-shadow: var(--shadow);
+}
+.toast.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: var(--green);
+}
+.toast.error {
+  background: rgba(244, 63, 94, 0.1);
+  border-color: rgba(244, 63, 94, 0.25);
+  color: var(--red);
+}
+.toast.info {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(99, 102, 241, 0.25);
+  color: #818cf8;
+}
+@keyframes toastIn{
+  from{opacity:0;transform:translateY(-10px) scale(0.95)}
+  to{opacity:1;transform:none}
+}
+
+/* Health dot */
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.health-dot.up {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.health-dot.down {
+  background: var(--red);
+  box-shadow: 0 0 6px var(--red);
+}
+
+/* Inline form */
+.inline-form {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+  background: rgba(15, 23, 42, 0.3);
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.inline-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text2);
+  font-weight: 500;
+}
+.inline-form input, .inline-form select {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 18, 0.4);
+  color: var(--text);
+  font-size: 0.8rem;
+  outline: none;
+  transition: all 0.2s;
+}
+.inline-form input:focus, .inline-form select:focus {
+  border-color: #6366f1;
+}
+
+/* Provider models */
+.models-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.models-list .tag { cursor: default; }
+
+/* Scrollable section */
+.scroll-y {
+  max-height: 450px;
+  overflow-y: auto;
+}
+.scroll-y::-webkit-scrollbar { width: 6px; }
+.scroll-y::-webkit-scrollbar-track { background: transparent; }
+.scroll-y::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+}
+.scroll-y::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* Dynamic modal */
+.modal-lg { max-width: 650px; }
+.modal-lg .form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.modal-lg .form-grid .full { grid-column: 1/-1; }
+.modal-lg label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text2);
+  font-weight: 500;
+}
+.modal-lg input, .modal-lg select, .modal-lg textarea {
+  padding: 0.5rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 18, 0.4);
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+  font-family: inherit;
+  transition: all 0.2s;
+}
+.modal-lg input:focus, .modal-lg select:focus, .modal-lg textarea:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+}
+.modal-lg textarea {
+  resize: vertical;
+  min-height: 70px;
+}
+.modal-lg .form-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.modal-lg .form-section {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text3);
+  font-weight: 700;
+  margin: 0.75rem 0 0.25rem;
+  grid-column: 1/-1;
+}
+.modal-lg h2 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.2rem;
+  margin-bottom: 1.25rem;
+}
+.action-btns {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: flex-end;
+}
+
+/* Confirm dialog */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 7, 18, 0.7);
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(8px);
+}
+.confirm-overlay.hidden { display: none; }
+.confirm-box {
+  background: rgba(17, 24, 39, 0.9);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+  box-shadow: var(--shadow-lg);
+}
+.confirm-box p {
+  margin-bottom: 1.5rem;
+  color: var(--text2);
+  font-size: 0.9rem;
+}
+.confirm-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+/* Loading skeleton */
+.skeleton {
+  background: linear-gradient(90deg, var(--card) 25%, var(--card-hover) 50%, var(--card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+  height: 1rem;
+  display: inline-block;
+  min-width: 4rem;
+}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Key masked */
+.key-masked {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--text3);
+}
+</style>
+</head>
+<body>
+
+<!-- Auth Modal -->
+<div id="authModal" class="modal-overlay">
+  <div class="modal">    <h2>🔐 Admin Access</h2>
+    <p>Enter the admin secret to access the dashboard.</p>
+    {{DEFAULT_PASS_BOX}}
+    <input type="password" id="secretInput" placeholder="Admin secret..." autofocus>
+    <div class="error-msg" id="authError"></div>
+    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Connect</button>
+    <div style="text-align:center;margin-top:.75rem">
+      <a href="#" style="font-size:.8rem;color:var(--text3)" onclick="showChangePassword();return false;">Change admin password</a>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toasts"></div>
+
+<!-- Dynamic Modal -->
+<div id="formModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
+  <div class="modal modal-lg" id="formModalContent"></div>
+</div>
+
+<!-- Confirm Dialog -->
+<div id="confirmDialog" class="confirm-overlay hidden">
+  <div class="confirm-box">
+    <p id="confirmMsg"></p>
+    <div class="confirm-actions">
+      <button class="btn" onclick="handleConfirmClick(false)">Cancel</button>
+      <button class="btn btn-danger" id="confirmOk" onclick="handleConfirmClick(true)">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="status-dot ok" id="connDot"></div>
+  <h1>⚡ <span>AI Gateway</span></h1>
+  <div class="spacer"></div>
+  <div class="topbar-info">
+    <span id="uptime">—</span>
+    <span id="lastRefresh">—</span>
+  </div>
+  <button class="btn" onclick="reloadConfig()" title="Hot reload config">🔄 Reload</button>
+  <button class="btn" onclick="fetchAll()" title="Refresh now">↻ Refresh</button>
+  <button class="btn" onclick="showChangePassword()" title="Change admin password">🔑 Change Password</button>
+  <button class="btn" onclick="doLogout()" title="Switch admin / logout">🔓</button>
+</div>
+
+<div class="container">
+  {{DEFAULT_PASSWORD_BANNER}}
+
+  <!-- Quick Tunnel Panel -->
+  <div class="card" id="tunnelPanel" style="margin-bottom:1.5rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.5rem;">
+    <div style="display:flex; align-items:center; gap:1rem;">
+      <span style="font-size:2rem;">🌐</span>
+      <div>
+        <h4 style="margin:0; font-size:1rem; color:var(--text1)">Cloudflare Quick Tunnel</h4>
+        <p id="tunnelStatusText" style="margin:0.25rem 0 0; font-size:0.85rem; color:var(--text3)">Checking tunnel status...</p>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:1rem;">
+      <a id="tunnelLink" href="#" target="_blank" class="btn btn-sm btn-primary" style="display:none;">🔗 Open Public URL</a>
+      <button id="btnToggleTunnel" class="btn btn-sm" onclick="toggleTunnel()">Toggle Tunnel</button>
+    </div>
+  </div>
+
+  <!-- Overview Cards -->
+  <div class="cards" id="statsCards">
+    <div class="card"><div class="card-label">Total Requests</div><div class="card-value blue" id="statTotal">—</div></div>
+    <div class="card"><div class="card-label">Active Requests</div><div class="card-value green" id="statActive">—</div></div>
+    <div class="card"><div class="card-label">Uptime</div><div class="card-value cyan" id="statUptime">—</div></div>
+    <div class="card"><div class="card-label">Cache Hit Rate</div><div class="card-value purple" id="statCache">—</div></div>
+    <div class="card"><div class="card-label">Providers</div><div class="card-value orange" id="statProviders">—</div></div>
+    <div class="card"><div class="card-label">Models</div><div class="card-value" id="statModels">—</div></div>
+    <div class="card"><div class="card-label">API Keys</div><div class="card-value" id="statKeys">—</div></div>
+    <div class="card"><div class="card-label">Total Tokens</div><div class="card-value" id="statTokens">—</div></div>
+  </div>
+
+  <div class="grid2">
+    <!-- Left Column -->
+    <div>
+      <!-- Providers -->
+      <div class="section">
+        <div class="section-header">
+          <h2>📡 Providers</h2>
+          <span class="badge" id="providerCount">0</span>
+          <div class="spacer"></div>
+          <button class="btn btn-sm btn-primary" onclick="showAddProvider()">+ Add Provider</button>
+        </div>
+        <div class="table-wrap scroll-y">
+          <table>
+            <thead><tr><th>Status</th><th>Name</th><th>Type</th><th>Tier</th><th>Models</th><th>Keys</th><th></th></tr></thead>
+            <tbody id="providerTable"><tr><td colspan="6" style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Models -->
+      <div class="section">
+        <div class="section-header">
+          <h2>🤖 Model Routes</h2>
+          <span class="badge" id="modelCount">0</span>
+          <div class="spacer"></div>
+          <button class="btn btn-sm btn-primary" onclick="showAddModel()">+ Add Model</button>
+        </div>
+        <div class="table-wrap scroll-y">
+          <table>
+            <thead><tr><th>Status</th><th>Name</th><th>Type</th><th>Provider / Strategy</th><th>Backends</th><th></th></tr></thead>
+            <tbody id="modelTable"><tr><td colspan="6" style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- API Keys -->
+      <div class="section">
+        <div class="section-header">
+          <h2>🔑 API Keys</h2>
+          <span class="badge" id="keyCount">0</span>
+          <div class="spacer"></div>
+          <button class="btn btn-sm btn-primary" onclick="showCreateKey()">+ Add Key</button>
+        </div>
+        <!-- Create key form -->
+        <div id="createKeyForm" class="inline-form" style="display:none">
+          <label>Name<input id="newKeyName" placeholder="e.g. My App"></label>
+          <label>Allowed Models<input id="newKeyModels" placeholder="* for all, or model1,model2"></label>
+          <label>Rate Limit<input id="newKeyRate" type="number" placeholder="0=unlimited" value="0"></label>
+          <button class="btn btn-primary btn-sm" onclick="createKey()">Create</button>
+          <button class="btn btn-sm" onclick="hideCreateKey()">Cancel</button>
+        </div>
+        <div class="table-wrap scroll-y">
+          <table>
+            <thead><tr><th>Status</th><th>Name</th><th>Key</th><th>Allowed Models</th><th>Rate</th><th>Token Saver (RTK)</th><th></th></tr></thead>
+            <tbody id="keyTable"><tr><td colspan="7" style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column -->
+    <div>
+      <!-- Usage by Model -->
+      <div class="section">
+        <div class="section-header">
+          <h2>📊 Usage by Model</h2>
+        </div>
+        <div class="table-wrap scroll-y">
+          <table>
+            <thead><tr><th>Model</th><th>Requests</th><th>Prompt Tokens</th><th>Output Tokens</th><th>Errors</th></tr></thead>
+            <tbody id="usageModelTable"><tr><td colspan="5" style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Usage by API Key -->
+      <div class="section">
+        <div class="section-header">
+          <h2>🔑 Usage by API Key</h2>
+        </div>
+        <div class="table-wrap scroll-y">
+          <table>
+            <thead><tr><th>Key Prefix</th><th>Requests</th><th>Tokens</th><th>Cache Hits</th><th>Errors</th></tr></thead>
+            <tbody id="usageKeyTable"><tr><td colspan="5" style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Cache Stats -->
+      <div class="section">
+        <div class="section-header">
+          <h2>💾 Cache</h2>
+        </div>
+        <div class="cards" id="cacheCards">
+          <div class="card"><div class="card-label">Hits</div><div class="card-value green" id="cacheHits">—</div></div>
+          <div class="card"><div class="card-label">Misses</div><div class="card-value orange" id="cacheMisses">—</div></div>
+          <div class="card"><div class="card-label">Size</div><div class="card-value blue" id="cacheSize">—</div></div>
+          <div class="card"><div class="card-label">Hit Rate</div><div class="card-value purple" id="cacheRate">—</div></div>
+        </div>
+      </div>
+
+      <!-- System Config -->
+      <div class="section">
+        <div class="section-header">
+          <h2>⚙️ System Config</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <tbody id="configTable"><tr><td style="text-align:center;color:var(--text3)">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Diagnostics & Testing -->
+      <div class="section">
+        <div class="section-header">
+          <h2>🧪 Diagnostics</h2>
+        </div>
+        <div class="cards">
+          <div class="card" style="cursor:pointer" onclick="showQuickSetup()"><div class="card-label">Quick Setup</div><div class="card-value blue" style="font-size:1.1rem">⚡ Setup Provider</div><div class="card-sub">Auto-fetch models from API</div></div>
+          <div class="card" style="cursor:pointer" onclick="showTestKey()"><div class="card-label">Verify</div><div class="card-value green" style="font-size:1.1rem">🔑 Test API Key</div><div class="card-sub">Check if key is valid</div></div>
+          <div class="card" style="cursor:pointer" onclick="showTestModel()"><div class="card-label">Verify</div><div class="card-value orange" style="font-size:1.1rem">🤖 Test Model</div><div class="card-sub">Send test request</div></div>
+          <div class="card" style="cursor:pointer" onclick="showSyncModels()"><div class="card-label">Sync</div><div class="card-value purple" style="font-size:1.1rem">🔄 Sync Models</div><div class="card-sub">Fetch from provider API</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== State ===== */
+let secret = localStorage.getItem('admin_secret') || '';
+let refreshTimer = null;
+let activeConfirmResolve = null;
+
+/* ===== Helpers ===== */
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return String(n)}
+function maskKey(k){if(!k)return'—';return k.substring(0,12)+'•••'+k.substring(k.length-4)}
+
+function parseBackendLines(text) {
+  const lines = text.split('\n').map(s=>s.trim()).filter(Boolean);
+  return lines.map(l => {
+    const parts = l.split('/');
+    if (parts.length >= 2) {
+      let tier = 1;
+      let modelParts = parts.slice(1);
+      const lastPart = parts[parts.length - 1];
+      if (/^\d+$/.test(lastPart) && parts.length > 2) {
+        tier = parseInt(lastPart, 10);
+        modelParts = parts.slice(1, -1);
+      }
+      return {
+        provider: parts[0],
+        model: modelParts.join('/'),
+        tier: tier
+      };
+    }
+    return { provider: '', model: '', tier: 1 };
+  }).filter(b => b.provider !== '');
+}
+
+async function api(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{'X-Admin-Secret':secret,'Content-Type':'application/json',...(opts.headers||{})}});
+  if(r.status===401){localStorage.removeItem('admin_secret');secret='';showAuth();throw new Error('Unauthorized');}
+  if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error?.message||r.statusText);}
+  if(r.status===204)return null;
+  return r.json();
+}
+
+function toast(msg,type='info'){
+  const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;
+  document.getElementById('toasts').appendChild(el);
+  setTimeout(()=>{el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),300)},3500);
+}
+
+function confirm(msg){
+  return new Promise(resolve=>{
+    document.getElementById('confirmMsg').textContent=msg;
+    document.getElementById('confirmDialog').classList.remove('hidden');
+    activeConfirmResolve = resolve;
+  });
+}
+
+function handleConfirmClick(val){
+  document.getElementById('confirmDialog').classList.add('hidden');
+  if(activeConfirmResolve){
+    activeConfirmResolve(val);
+    activeConfirmResolve = null;
+  }
+}
+
+function showAuth(){document.getElementById('authModal').classList.remove('hidden');document.getElementById('secretInput').focus();}
+function hideAuth(){document.getElementById('authModal').classList.add('hidden');}
+
+async function doLogin(){
+  const input=document.getElementById('secretInput');
+  const errEl=document.getElementById('authError');
+  secret=input.value.trim();
+  if(!secret){errEl.textContent='Please enter the admin secret';return;}
+  try{
+    await api('/admin/stats');
+    localStorage.setItem('admin_secret',secret);
+    errEl.textContent='';
+    hideAuth();
+    toast('Connected!','success');
+    startRefresh();
+    fetchAll();
+  }catch(e){
+    errEl.textContent='Invalid secret. Try again.';
+    secret='';
+  }
+}
+
+function doLogout(){
+  localStorage.removeItem('admin_secret');
+  secret='';
+  if(refreshTimer)clearInterval(refreshTimer);
+  showAuth();
+  toast('Logged out','info');
+}
+
+document.getElementById('secretInput').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()});
+
+/* ===== Data Fetching ===== */
+async function fetchAll(){
+  try{
+    const results=await Promise.allSettled([
+      api('/admin/stats'),
+      api('/admin/usage'),
+      api('/admin/providers'),
+      api('/admin/models'),
+      api('/admin/config'),
+      api('/admin/keys'),
+      api('/admin/tunnel'),
+    ]);
+    const stats=results[0].status==='fulfilled'?results[0].value:{};
+    const usage=results[1].status==='fulfilled'?results[1].value:{};
+    const providers=results[2].status==='fulfilled'?results[2].value:[];
+    const models=results[3].status==='fulfilled'?results[3].value:[];
+    const config=results[4].status==='fulfilled'?results[4].value:{};
+    const keys=results[5].status==='fulfilled'?results[5].value:[];
+    const tunnelRes=results[6].status==='fulfilled'?results[6].value:{};
+    _currentProviders=providers;_currentModels=models;_currentConfig=config;_currentKeys=keys;
+    _tunnelActive=tunnelRes.is_running || false;
+    _tunnelURL=tunnelRes.url || '';
+    updateTunnelUI();
+    renderStats(stats,usage,providers,models,keys);
+    renderProviders(providers);
+    renderModels(models);
+    renderKeys(keys);
+    renderUsage(usage);
+    renderCache(usage.cache||{});
+    renderConfig(config);
+    document.getElementById('connDot').className='status-dot ok';
+    document.getElementById('lastRefresh').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){
+    if(e.message!=='Unauthorized'){
+      document.getElementById('connDot').className='status-dot err';
+      console.error('Fetch error:',e);
+    }
+  }
+}
+
+let _tunnelActive = false;
+let _tunnelURL = '';
+
+function updateTunnelUI() {
+  const statusText = document.getElementById('tunnelStatusText');
+  const tunnelLink = document.getElementById('tunnelLink');
+  const btn = document.getElementById('btnToggleTunnel');
+  
+  if (_tunnelActive) {
+    statusText.innerHTML = `Running! Publicly accessible at: <strong style="color:var(--green)"><a href="${_tunnelURL}" target="_blank" style="color:var(--green); text-decoration:underline;">${_tunnelURL}</a></strong>`;
+    tunnelLink.href = _tunnelURL;
+    tunnelLink.style.display = 'inline-block';
+    btn.textContent = '🔌 Disconnect Tunnel';
+    btn.className = 'btn btn-sm btn-danger';
+  } else {
+    statusText.textContent = 'Disconnected. Turn it on to securely expose this gateway to the internet without port forwarding.';
+    tunnelLink.style.display = 'none';
+    btn.textContent = '🌐 Connect Tunnel';
+    btn.className = 'btn btn-sm btn-primary';
+  }
+}
+
+async function toggleTunnel() {
+  const btn = document.getElementById('btnToggleTunnel');
+  const statusText = document.getElementById('tunnelStatusText');
+  
+  btn.disabled = true;
+  if (!_tunnelActive) {
+    statusText.textContent = 'Downloading cloudflared & connecting to Cloudflare... Please wait...';
+  } else {
+    statusText.textContent = 'Disconnecting tunnel...';
+  }
+  
+  try {
+    const res = await api('/admin/tunnel/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !_tunnelActive })
+    });
+    _tunnelActive = res.is_running;
+    _tunnelURL = res.url;
+    toast(_tunnelActive ? 'Tunnel established!' : 'Tunnel stopped!', 'success');
+  } catch (e) {
+    toast('Tunnel error: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    updateTunnelUI();
+  }
+}
+
+/* ===== Renderers ===== */
+function renderStats(stats,usage,providers,models,keys){
+  document.getElementById('statTotal').textContent=fmt(stats.total_requests||0);
+  document.getElementById('statActive').textContent=fmt(stats.active_requests||0);
+  document.getElementById('statUptime').textContent=usage.uptime||'—';
+  document.getElementById('uptime').textContent='⏱ '+usage.uptime;
+  document.getElementById('statProviders').textContent=providers.length;
+  document.getElementById('statModels').textContent=models.length;
+  document.getElementById('statKeys').textContent=keys.length;
+
+  // Total tokens
+  let totalTokens=0;
+  for(const[k,v] of Object.entries(usage.by_model||{}))totalTokens+=(v.total_tokens||0);
+  document.getElementById('statTokens').textContent=fmt(totalTokens);
+
+  // Cache rate
+  const c=usage.cache||{};
+  document.getElementById('statCache').textContent=c.hit_rate||'0%';
+}
+
+function renderProviders(list){
+  const el=document.getElementById('providerTable');
+  document.getElementById('providerCount').textContent=list.length;
+  if(!list.length){el.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text3)">No providers</td></tr>';return;}
+  el.innerHTML=list.map(p=>`<tr>
+    <td><span class="health-dot ${p.healthy?'up':'down'}"></span></td>
+    <td><strong>${esc(p.name)}</strong></td>
+    <td><span class="tag tag-blue">${esc(p.type)}</span></td>
+    <td><span class="tag ${p.tier===1?'tag-green':p.tier===2?'tag-orange':'tag-purple'}">T${p.tier}</span></td>
+    <td>${p.models?p.models.length:0}</td>
+    <td>${p.has_key?'<span class="tag tag-green">'+p.key_count+'</span>':'<span class="tag tag-red">0</span>'}</td>
+    <td class="action-btns"><button class="btn btn-sm" onclick="editProvider('${esc(p.name)}')" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteProvider('${esc(p.name)}')" title="Delete">🗑</button></td>
+  </tr>`).join('');
+}
+
+function renderModels(list){
+  const el=document.getElementById('modelTable');
+  document.getElementById('modelCount').textContent=list.length;
+  if(!list.length){el.innerHTML='<tr><td colspan="6" style="text-align:center;color:var(--text3)">No models</td></tr>';return;}
+  el.innerHTML=list.map(m=>{
+    const icon = m.type === 'combo' ? (m.strategy === 'fallback' ? '🔄 ' : '🔀 ') : (m.reasoning ? '🧠 ' : '🤖 ');
+    const statusBadge = m.disabled ? '<span class="tag tag-red">Disabled</span>' : '<span class="tag tag-green">Active</span>';
+    const dimStyle = m.disabled ? ' style="opacity:0.6"' : '';
+    if(m.type==='combo'){
+      const backends=m.backends||[];
+      return`<tr${dimStyle}>
+        <td>${statusBadge}</td>
+        <td><strong>${icon}${esc(m.name)}</strong></td>
+        <td><span class="tag tag-purple">combo</span></td>
+        <td><span class="tag tag-orange">${esc(m.strategy)}</span></td>
+        <td><div class="models-list">${backends.map(b=>{
+          const tStr = b.tier && b.tier > 1 ? ' (T'+b.tier+')' : '';
+          const bName = b.provider+'/'+b.model;
+          const disp = bName.length > 25 ? bName.slice(0, 16)+'…'+bName.slice(-6) : bName;
+          return '<span class="tag tag-gray">'+esc(disp+tStr)+'</span>';
+        }).join('')}</div></td>
+        <td class="action-btns"><button class="btn btn-sm" onclick="editModel('${esc(m.name)}')" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(m.name)}')" title="Delete">🗑</button></td>
+      </tr>`;
+    }
+    return`<tr${dimStyle}>
+      <td>${statusBadge}</td>
+      <td><strong>${icon}${esc(m.name)}</strong></td>
+      <td><span class="tag tag-blue">direct</span></td>
+      <td><span class="tag tag-gray">${esc(m.provider)}</span></td>
+      <td><span class="code">${esc(m.model)}</span></td>
+      <td class="action-btns"><button class="btn btn-sm" onclick="editModel('${esc(m.name)}')" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(m.name)}')" title="Delete">🗑</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderKeys(list){
+  const el=document.getElementById('keyTable');
+  document.getElementById('keyCount').textContent=list.length;
+  if(!list.length){el.innerHTML='<tr><td colspan="7" style="text-align:center;color:var(--text3)">No API keys</td></tr>';return;}
+  el.innerHTML=list.map(k=>{
+    const models=k.allowed_models||[];
+    const modelsStr=models.includes('*')?'<span class="tag tag-green">All models</span>':
+      '<span class="tag tag-gray">'+models.length+' model'+(models.length>1?'s':'')+'</span>';
+    const statusBadge = k.disabled ? '<span class="tag tag-red">Disabled</span>' : '<span class="tag tag-green">Active</span>';
+    const dimStyle = k.disabled ? ' style="opacity:0.6"' : '';
+    
+    let tsBadge = '<span class="tag tag-gray">Default</span>';
+    if(k.token_saver === true) tsBadge = '<span class="tag tag-green">Always On</span>';
+    if(k.token_saver === false) tsBadge = '<span class="tag tag-red">Always Off</span>';
+
+    return`<tr${dimStyle}>
+      <td>${statusBadge}</td>
+      <td><strong>${esc(k.name)}</strong></td>
+      <td><span class="key-masked">${maskKey(k.key)}</span></td>
+      <td>${modelsStr}</td>
+      <td>${k.rate_limit?k.rate_limit+'/min':'<span class="text3">∞</span>'}</td>
+      <td>${tsBadge}</td>
+      <td class="action-btns"><button class="btn btn-sm" onclick="editKey('${esc(k.key)}','${esc(k.name)}',${k.disabled})" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteKey('${esc(k.key)}','${esc(k.name)}')" title="Delete">🗑</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderUsage(usage){
+  // By model
+  const mEl=document.getElementById('usageModelTable');
+  const byModel=usage.by_model||{};
+  const modelEntries=Object.entries(byModel).sort((a,b)=>(b[1].total_tokens||0)-(a[1].total_tokens||0));
+  if(!modelEntries.length){mEl.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--text3)">No usage data yet</td></tr>';}
+  else{
+    mEl.innerHTML=modelEntries.map(([name,s])=>`<tr>
+      <td><span class="code">${esc(name)}</span></td>
+      <td>${fmt(s.total_requests||0)}</td>
+      <td>${fmt(s.total_prompt_tokens||0)}</td>
+      <td>${fmt(s.total_output_tokens||0)}</td>
+      <td>${s.total_errors?'<span class="tag tag-red">'+s.total_errors+'</span>':'<span class="tag tag-green">0</span>'}</td>
+    </tr>`).join('');
+  }
+
+  // By key
+  const kEl=document.getElementById('usageKeyTable');
+  const byKey=usage.by_api_key||{};
+  const keyEntries=Object.entries(byKey).sort((a,b)=>(b[1].total_tokens||0)-(a[1].total_tokens||0));
+  if(!keyEntries.length){kEl.innerHTML='<tr><td colspan="5" style="text-align:center;color:var(--text3)">No usage data yet</td></tr>';}
+  else{
+    kEl.innerHTML=keyEntries.map(([prefix,s])=>`<tr>
+      <td><span class="mono">${esc(prefix)}…</span></td>
+      <td>${fmt(s.total_requests||0)}</td>
+      <td>${fmt(s.total_tokens||0)}</td>
+      <td>${fmt(s.total_cache_hits||0)}</td>
+      <td>${s.total_errors?'<span class="tag tag-red">'+s.total_errors+'</span>':'<span class="tag tag-green">0</span>'}</td>
+    </tr>`).join('');
+  }
+}
+
+function renderCache(c){
+  document.getElementById('cacheHits').textContent=fmt(c.hits||0);
+  document.getElementById('cacheMisses').textContent=fmt(c.misses||0);
+  document.getElementById('cacheSize').textContent=fmt(c.size||0);
+  document.getElementById('cacheRate').textContent=c.hit_rate||'0%';
+}function renderConfig(cfg){
+  const el=document.getElementById('configTable');
+  const rows=[];
+  function addGroup(title,items,editFn){
+    const editBtn=editFn?`<button class="btn btn-sm" onclick="${editFn}" style="margin-left:auto">✏️</button>`:'';
+    rows.push(`<tr><td colspan="2" style="background:var(--surface);font-weight:600;color:var(--text2);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;padding:.4rem .75rem;display:flex;align-items:center;gap:.5rem">${esc(title)}${editBtn}</td></tr>`);
+    for(const[k,v] of items)rows.push(`<tr><td style="color:var(--text2);width:50%">${esc(k)}</td><td class="mono">${typeof v==='boolean'?(v?'✅ Enabled':'❌ Disabled'):esc(String(v))}</td></tr>`);
+  }
+  const s=cfg.server||{};
+  addGroup('Server',[['Host',s.host],['Port',s.port],['Log Level',s.log_level]],'editServerConfig()');
+  const cc=cfg.concurrency||{};
+  addGroup('Concurrency',[['Max Concurrent',cc.max_concurrent],['Per Provider',cc.per_provider],['Per Model',cc.per_model],['Queue Depth',cc.queue_depth]],'editConcurrencyConfig()');
+  const ca=cfg.cache||{};
+  addGroup('Cache',[['Enabled',ca.enabled],['Max Size',ca.max_size],['TTL (sec)',ca.ttl]],'editCacheConfig()');
+  const re=cfg.retry||{};
+  addGroup('Retry',[['Max Retries',re.max_retries],['Initial Backoff (ms)',re.initial_backoff],['Max Backoff (ms)',re.max_backoff]],'editRetryConfig()');
+  addGroup('Summary',[['Providers',cfg.provider_count],['Models',cfg.model_count],['API Keys',cfg.api_key_count]]);
+  el.innerHTML=rows.join('');
+}
+
+/* ===== Dynamic Modal ===== */
+let _currentProviders=[];
+let _currentModels=[];
+let _currentConfig={};
+
+function openModal(title,html,onSubmit){
+  const el=document.getElementById('formModalContent');
+  el.innerHTML='<h2>'+title+'</h2>'+html+'<div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="modalSave">Save</button></div>';
+  document.getElementById('formModal').classList.remove('hidden');
+  if(onSubmit)document.getElementById('modalSave').onclick=onSubmit;
+}
+function closeModal(){document.getElementById('formModal').classList.add('hidden');}
+
+/* ===== Reload Config ===== */
+async function reloadConfig(){
+  try{
+    const r=await api('/admin/config/reload',{method:'POST'});
+    toast(r.status||'Config reloaded!','success');
+    fetchAll();
+  }catch(e){toast('Reload failed: '+e.message,'error');}
+}
+
+/* ===== Provider CRUD ===== */
+function showAddProvider(){
+  const types=['openai','cohere','opencode','cerebras','anthropic','groq','mistral','custom'];
+  openModal('➕ Add Provider',`
+    <div class="form-grid">
+      <label>Name<input id="mp_name" placeholder="my-provider"></label>
+      <label>Type<select id="mp_type">${types.map(t=>'<option>'+t+'</option>').join('')}</select></label>
+      <label class="full">Base URL<input id="mp_baseurl" placeholder="https://api.example.com/v1"></label>
+      <label class="full">API Keys (comma-separated)<textarea id="mp_keys" placeholder="sk-key1, sk-key2"></textarea></label>
+      <label>Tier<select id="mp_tier"><option value="1">1 — Subscription</option><option value="2">2 — Cheap</option><option value="3">3 — Free</option></select></label>
+      <label>Models (comma-separated)<input id="mp_models" placeholder="gpt-4o, gpt-4o-mini"></label>
+    </div>`,async()=>{
+    try{
+      const keys=document.getElementById('mp_keys').value.split(',').map(s=>s.trim()).filter(Boolean);
+      const models=document.getElementById('mp_models').value.split(',').map(s=>s.trim()).filter(Boolean);
+      await api('/admin/providers',{method:'POST',body:JSON.stringify({
+        name:document.getElementById('mp_name').value.trim(),
+        type:document.getElementById('mp_type').value,
+        base_url:document.getElementById('mp_baseurl').value.trim(),
+        api_keys:keys,models:models,
+        tier:parseInt(document.getElementById('mp_tier').value)||1
+      })});
+      closeModal();toast('Provider created!','success');fetchAll();
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+async function editProvider(name){
+  const p=_currentProviders.find(x=>x.name===name);
+  if(!p)return;
+  if(p.type === 'opencode'){
+    toast('OpenCode adalah provider gratis otomatis (Keyless) dan tidak memerlukan konfigurasi/setup!','warn');
+    return;
+  }
+  // Fetch full provider config to get api_keys and models
+  const cfg=_currentConfig;
+  // We only edit base_url and tier — api_keys/models preserved server-side
+  openModal('✏️ Edit Provider: '+esc(name),`
+    <div class="form-grid">
+      <label>Type<div class="mono" style="padding:.4rem 0;color:var(--text2)">${esc(p.type)}</div></label>
+      <label>Tier<select id="mp_tier"><option value="1" ${p.tier===1?'selected':''}>1 — Subscription</option><option value="2" ${p.tier===2?'selected':''}>2 — Cheap</option><option value="3" ${p.tier===3?'selected':''}>3 — Free</option></select></label>
+      <label class="full">Base URL<input id="mp_baseurl" value="${esc(p.base_url)}"></label>
+      <div class="form-section">API Keys & Models are managed separately. Only base_url and tier can be edited here.</div>
+    </div>`,async()=>{
+    try{
+      // Send only editable fields — backend preserves the rest via UpdateProvider
+      await api('/admin/providers/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({
+        base_url:document.getElementById('mp_baseurl').value.trim(),
+        tier:parseInt(document.getElementById('mp_tier').value)||1
+      })});
+      closeModal();toast('Provider updated!','success');fetchAll();
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+async function deleteProvider(name){
+  if(!await confirm('Delete provider "'+name+'"? All its models and combo backends will be removed.'))return;
+  try{
+    const r=await api('/admin/providers/'+encodeURIComponent(name),{method:'DELETE'});
+    toast('Deleted! '+r.routes_removed+' routes, '+r.combos_removed+' combos removed','success');
+    fetchAll();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+/* ===== Model CRUD ===== */
+function showAddModel(){
+  if(!_currentProviders.length){toast('Add a provider first','error');return;}
+  const opts=_currentProviders.map(p=>'<option>'+esc(p.name)+'</option>').join('');
+  openModal('➕ Add Model',`
+    <div class="form-grid">
+      <label class="form-section">Direct Model</label>
+      <label>Name (route name)<input id="mm_name" placeholder="gpt-4o-mini"></label>
+      <label>Provider<select id="mm_provider">${opts}</select></label>
+      <label>Model ID at provider<input id="mm_model" placeholder="gpt-4o-mini"></label>
+      <label class="full" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="mm_reasoning" style="width:auto;margin:0">Reasoning Model (🧠)</label>
+      <div class="form-section">— OR —</div>
+      <label class="form-section">Combo Model</label>
+      <label>Combo Name<input id="mm_combo_name" placeholder="budget-mix"></label>
+      <label>Strategy<select id="mm_strategy"><option value="round-robin">round-robin</option><option value="fallback">fallback</option></select></label>
+      <label class="full">Backends (provider/model/tier per line, tier is optional)<textarea id="mm_backends" placeholder="openai/gpt-4o&#10;groq/llama-3-70b/2 (optional tier)"></textarea></label>
+    </div>`,async()=>{
+    try{
+      const comboName=document.getElementById('mm_combo_name').value.trim();
+      const directName=document.getElementById('mm_name').value.trim();
+      let body;
+      if(comboName){
+        const backends=parseBackendLines(document.getElementById('mm_backends').value);
+        body={name:comboName,strategy:document.getElementById('mm_strategy').value,backends};
+      }else if(directName){
+        body={name:directName,provider:document.getElementById('mm_provider').value,model:document.getElementById('mm_model').value.trim(),reasoning:document.getElementById('mm_reasoning').checked};
+      }else{toast('Enter a model name','error');return;}
+      await api('/admin/models',{method:'POST',body:JSON.stringify(body)});
+      closeModal();toast('Model created!','success');fetchAll();
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+async function editModel(name){
+  const m=_currentModels.find(x=>x.name===name);
+  if(!m)return;
+  if(m.type==='combo'){
+    // Edit combo model
+    const backendStr=(m.backends||[]).map(b=>b.provider+'/'+b.model+(b.tier && b.tier > 1 ? '/'+b.tier : '')).join('\n');
+    openModal('✏️ Edit Combo: '+esc(name),`
+      <div class="form-grid">
+        <label>Strategy<select id="mm_strategy"><option value="round-robin" ${m.strategy==='round-robin'?'selected':''}>round-robin</option><option value="fallback" ${m.strategy==='fallback'?'selected':''}>fallback</option></select></label>
+        <label class="full">Backends (provider/model/tier per line)<textarea id="mm_backends" rows="5" placeholder="openai/gpt-4o&#10;groq/llama-3-70b/2">${esc(backendStr)}</textarea></label>
+        <label class="full" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="mm_disabled" ${m.disabled?'checked':''} style="width:auto;margin:0">Disable Model Route (🔌)</label>
+      </div>`,async()=>{
+      try{
+        const backends=parseBackendLines(document.getElementById('mm_backends').value);
+        await api('/admin/models/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({
+          strategy:document.getElementById('mm_strategy').value,
+          backends,
+          disabled:document.getElementById('mm_disabled').checked
+        })});
+        closeModal();toast('Combo updated!','success');fetchAll();
+      }catch(e){toast('Error: '+e.message,'error');}
+    });
+  }else{
+    // Edit direct model
+    const opts=_currentProviders.map(p=>'<option'+(p.name===m.provider?' selected':'')+'>'+esc(p.name)+'</option>').join('');
+    openModal('✏️ Edit Model: '+esc(name),`
+      <div class="form-grid">
+        <label>Provider<select id="mm_provider">${opts}</select></label>
+        <label>Model ID<input id="mm_model" value="${esc(m.model)}"></label>
+        <label class="full" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="mm_reasoning" ${m.reasoning?'checked':''} style="width:auto;margin:0">Reasoning Model (🧠)</label>
+        <label class="full" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="mm_disabled" ${m.disabled?'checked':''} style="width:auto;margin:0">Disable Model Route (🔌)</label>
+      </div>`,async()=>{
+      try{
+        await api('/admin/models/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({
+          provider:document.getElementById('mm_provider').value,
+          model:document.getElementById('mm_model').value.trim(),
+          reasoning:document.getElementById('mm_reasoning').checked,
+          disabled:document.getElementById('mm_disabled').checked
+        })});
+        closeModal();toast('Model updated!','success');fetchAll();
+      }catch(e){toast('Error: '+e.message,'error');}
+    });
+  }
+}
+
+async function deleteModel(name){
+  if(!await confirm('Delete model "'+name+'"? It will be removed from all API key allowed_models.'))return;
+  try{
+    await api('/admin/models/'+encodeURIComponent(name),{method:'DELETE'});
+    toast('Model deleted!','success');fetchAll();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+/* ===== API Key CRUD ===== */
+function showCreateKey(){
+  const modelOpts=_currentModels.map(m=>'<option>'+esc(m.name)+'</option>').join('');
+  openModal('➕ Create API Key',`
+    <div class="form-grid">
+      <label>Name<input id="mk_name" placeholder="My App"></label>
+      <label>Rate Limit (0=unlimited)<input id="mk_rate" type="number" value="0"></label>
+      <label class="full">Allowed Models (comma-separated, * for all)<input id="mk_models" value="*" placeholder="* or model1,model2"></label>
+      <label class="full">Token Saver (RTK)<select id="mk_token_saver"><option value="inherit">Default (Follow Global)</option><option value="true">Force Enabled</option><option value="false">Force Disabled</option></select></label>
+    </div>`,async()=>{
+    try{
+      const name=document.getElementById('mk_name').value.trim();
+      if(!name){toast('Name is required','error');return;}
+      const modelsStr=document.getElementById('mk_models').value.trim()||'*';
+      const models=modelsStr==='*'?['*']:modelsStr.split(',').map(s=>s.trim()).filter(Boolean);
+      const tsChoice=document.getElementById('mk_token_saver').value;
+      let token_saver=null;
+      if(tsChoice==='true')token_saver=true;
+      if(tsChoice==='false')token_saver=false;
+      const r=await api('/admin/keys',{method:'POST',body:JSON.stringify({name,allowed_models:models,rate_limit:parseInt(document.getElementById('mk_rate').value)||0,token_saver})});
+      closeModal();toast('Key created: '+r.name,'success');fetchAll();
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+async function editKey(key,name,disabled){
+  const k=(_currentKeys||[]).find(x=>x.key===key);
+  if(!k)return;
+  const selectedInherit = k.token_saver === undefined || k.token_saver === null ? 'selected' : '';
+  const selectedTrue = k.token_saver === true ? 'selected' : '';
+  const selectedFalse = k.token_saver === false ? 'selected' : '';
+  openModal('✏️ Edit Key: '+esc(name),`
+    <div class="form-grid">
+      <label>Name<input id="mk_name" value="${esc(k.name)}"></label>
+      <label>Rate Limit (0=unlimited)<input id="mk_rate" type="number" value="${k.rate_limit||0}"></label>
+      <label class="full">Allowed Models (comma-separated)<input id="mk_models" value="${esc((k.allowed_models||[]).join(','))}"></label>
+      <label class="full">Token Saver (RTK)<select id="mk_token_saver"><option value="inherit" ${selectedInherit}>Default (Follow Global)</option><option value="true" ${selectedTrue}>Force Enabled</option><option value="false" ${selectedFalse}>Force Disabled</option></select></label>
+      <label class="full" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer"><input type="checkbox" id="mk_disabled" ${disabled?'checked':''} style="width:auto;margin:0">Disable API Key (🔌)</label>
+    </div>`,async()=>{
+    try{
+      const modelsStr=document.getElementById('mk_models').value.trim();
+      const models=modelsStr==='*'?['*']:modelsStr.split(',').map(s=>s.trim()).filter(Boolean);
+      const tsChoice=document.getElementById('mk_token_saver').value;
+      let token_saver=null;
+      if(tsChoice==='true')token_saver=true;
+      if(tsChoice==='false')token_saver=false;
+      await api('/admin/keys/'+encodeURIComponent(key),{method:'PUT',body:JSON.stringify({
+        name:document.getElementById('mk_name').value.trim(),
+        allowed_models:models,
+        rate_limit:parseInt(document.getElementById('mk_rate').value)||0,
+        disabled:document.getElementById('mk_disabled').checked,
+        token_saver
+      })});
+      closeModal();toast('Key updated!','success');fetchAll();
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+async function deleteKey(key,name){
+  if(!await confirm('Delete API key "'+name+'"? This cannot be undone.'))return;
+  try{
+    await api('/admin/keys/'+encodeURIComponent(key),{method:'DELETE'});
+    toast('Key deleted: '+name,'success');fetchAll();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+/* ===== Config Edit ===== */
+function editServerConfig(){
+  const s=_currentConfig.server||{};
+  openModal('⚙️ Server Config',`
+    <div class="form-grid">
+      <label>Host<input id="mc_host" value="${esc(s.host||'0.0.0.0')}"></label>
+      <label>Port<input id="mc_port" type="number" value="${s.port||8080}"></label>
+      <label>Log Level<select id="mc_log"><option ${s.log_level==='info'?'selected':''}>info</option><option ${s.log_level==='debug'?'selected':''}>debug</option><option ${s.log_level==='warn'?'selected':''}>warn</option><option ${s.log_level==='error'?'selected':''}>error</option></select></label>
+    </div>`,async()=>{
+    try{await api('/admin/config/server',{method:'PUT',body:JSON.stringify({host:document.getElementById('mc_host').value,port:parseInt(document.getElementById('mc_port').value),log_level:document.getElementById('mc_log').value})});closeModal();toast('Server config updated!','success');fetchAll();}catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+function editConcurrencyConfig(){
+  const c=_currentConfig.concurrency||{};
+  openModal('⚙️ Concurrency Config',`
+    <div class="form-grid">
+      <label>Max Concurrent<input id="mc_max" type="number" value="${c.max_concurrent||100}"></label>
+      <label>Per Provider<input id="mc_pp" type="number" value="${c.per_provider||30}"></label>
+      <label>Per Model<input id="mc_pm" type="number" value="${c.per_model||15}"></label>
+      <label>Queue Depth<input id="mc_qd" type="number" value="${c.queue_depth||50}"></label>
+    </div>`,async()=>{
+    try{await api('/admin/config/concurrency',{method:'PUT',body:JSON.stringify({max_concurrent:parseInt(document.getElementById('mc_max').value),per_provider:parseInt(document.getElementById('mc_pp').value),per_model:parseInt(document.getElementById('mc_pm').value),queue_depth:parseInt(document.getElementById('mc_qd').value)})});closeModal();toast('Concurrency updated!','success');fetchAll();}catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+function editCacheConfig(){
+  const c=_currentConfig.cache||{};
+  openModal('⚙️ Cache Config',`
+    <div class="form-grid">
+      <label>Enabled<select id="mc_en"><option value="true" ${c.enabled?'selected':''}>Enabled</option><option value="false" ${!c.enabled?'selected':''}>Disabled</option></select></label>
+      <label>Max Size<input id="mc_ms" type="number" value="${c.max_size||1000}"></label>
+      <label>TTL (seconds)<input id="mc_ttl" type="number" value="${c.ttl||300}"></label>
+    </div>`,async()=>{
+    try{await api('/admin/config/cache',{method:'PUT',body:JSON.stringify({enabled:document.getElementById('mc_en').value==='true',max_size:parseInt(document.getElementById('mc_ms').value),ttl:parseInt(document.getElementById('mc_ttl').value)})});closeModal();toast('Cache config updated!','success');fetchAll();}catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+function editRetryConfig(){
+  const r=_currentConfig.retry||{};
+  openModal('⚙️ Retry Config',`
+    <div class="form-grid">
+      <label>Max Retries<input id="mc_mr" type="number" value="${r.max_retries||2}"></label>
+      <label>Initial Backoff (ms)<input id="mc_ib" type="number" value="${r.initial_backoff||500}"></label>
+      <label>Max Backoff (ms)<input id="mc_mb" type="number" value="${r.max_backoff||10000}"></label>
+    </div>`,async()=>{
+    try{await api('/admin/config/retry',{method:'PUT',body:JSON.stringify({max_retries:parseInt(document.getElementById('mc_mr').value),initial_backoff:parseInt(document.getElementById('mc_ib').value),max_backoff:parseInt(document.getElementById('mc_mb').value)})});closeModal();toast('Retry config updated!','success');fetchAll();}catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+/* ===== Diagnostics ===== */
+let _templates=[];
+
+async function loadTemplates(){
+  try{_templates=await api('/admin/templates');}catch(e){}
+}
+
+function showQuickSetup(){
+  loadTemplates().then(()=>{
+    const opts=_templates.map(t=>'<option value="'+esc(t.name)+'">'+esc(t.desc)+'</option>').join('');
+    openModal('⚡ Quick Setup Provider',`
+      <div class="form-grid">
+        <label class="full">Provider Template<select id="qs_tmpl">${opts}</select></label>
+        <label class="full">API Key<input id="qs_key" placeholder="sk-..." type="password"></label>
+        <div class="form-section" id="qs_info">Select a template to see details. Models will be auto-fetched from the provider API.</div>
+      </div>
+      <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="runQuickSetup()">⚡ Setup</button></div>`,null);
+    document.getElementById('qs_tmpl').onchange=function(){
+      const t=_templates.find(x=>x.name===this.value);
+      if(t)document.getElementById('qs_info').innerHTML='<strong>'+esc(t.name)+'</strong> — '+esc(t.desc)+'<br><a href="'+esc(t.help_url)+'" target="_blank">Get API key →</a>';
+    };
+    document.getElementById('qs_tmpl').dispatchEvent(new Event('change'));
+  });
+}
+
+async function runQuickSetup(){
+  const tmpl=document.getElementById('qs_tmpl').value;
+  const key=document.getElementById('qs_key').value.trim();
+  if(!key){toast('API key is required','error');return;}
+  try{
+    toast('Setting up '+tmpl+'... fetching models from API...','info');
+    const r=await api('/admin/templates/setup',{method:'POST',body:JSON.stringify({template_name:tmpl,api_key:key})});
+    closeModal();
+    toast('✅ '+r.provider+' created with '+r.models_count+' models!','success');
+    fetchAll();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+function showTestKey(){
+  if(!_currentProviders.length){toast('Add a provider first','error');return;}
+  const opts=_currentProviders.filter(p=>p.has_key).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+' ('+esc(p.type)+')</option>').join('');
+  openModal('🔑 Test API Key',`
+    <div class="form-grid">
+      <label class="full">Provider<select id="tk_provider" onchange="updateTestKeyKeys()">${opts}</select></label>
+      <label class="full" id="tk_key_container">API Key<select id="tk_key_idx"><option value="all">Test Semua (All Keys)</option></select></label>
+      <div id="tk_result" class="full" style="min-height:2rem;max-height:10rem;overflow-y:auto;background:rgba(0,0,0,0.2);padding:0.5rem;border-radius:var(--radius-sm);border:1px solid rgba(255,255,255,0.1)"></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runTestKey()">🔑 Test</button></div>`,null);
+  updateTestKeyKeys();
+}
+
+function updateTestKeyKeys(){
+  const name=document.getElementById('tk_provider').value;
+  const p=_currentProviders.find(x=>x.name===name);
+  const container=document.getElementById('tk_key_container');
+  const sel=document.getElementById('tk_key_idx');
+  if(!p || p.key_count <= 1){
+    container.style.display='none';
+    sel.innerHTML='<option value="0">Default Key</option>';
+    return;
+  }
+  container.style.display='block';
+  let opts='<option value="all">Test Semua (All Keys)</option>';
+  for(let i=0; i<p.key_count; i++){
+    opts+='<option value="'+i+'">Key #'+(i+1)+'</option>';
+  }
+  sel.innerHTML=opts;
+}
+
+async function runTestKey(){
+  const name=document.getElementById('tk_provider').value;
+  const p=_currentProviders.find(x=>x.name===name);
+  if(!p)return;
+  const keyIdxVal=document.getElementById('tk_key_idx').value;
+  const el=document.getElementById('tk_result');
+  el.innerHTML='';
+
+  const runTest = async (idx) => {
+    const keyLabel = p.key_count > 1 ? 'Key #'+(idx+1) : 'API Key';
+    const reqBody = { provider: p.name };
+    if (p.key_count > 1) {
+      reqBody.key_index = idx;
+    }
+    const itemEl = document.createElement('div');
+    itemEl.style.padding = '0.2rem 0';
+    itemEl.innerHTML = `<span style="color:var(--text3)">${esc(keyLabel)}: Testing...</span>`;
+    el.appendChild(itemEl);
+    try {
+      const r = await api('/admin/diag/test-key', { method: 'POST', body: JSON.stringify(reqBody) });
+      itemEl.innerHTML = `<span style="color:var(--green)">✅ ${esc(keyLabel)} VALID</span> — ${r.model_count} models`;
+    } catch (e) {
+      itemEl.innerHTML = `<span style="color:var(--red)">❌ ${esc(keyLabel)} FAILED</span> — ${esc(e.message)}`;
+    }
+  };
+
+  if(keyIdxVal==='all'){
+    for(let i=0; i<p.key_count; i++){
+      await runTest(i);
+    }
+  }else{
+    await runTest(parseInt(keyIdxVal, 10));
+  }
+}
+
+function showTestModel(){
+  if(!_currentProviders.length){toast('Add a provider first','error');return;}
+  const provs=_currentProviders.filter(p=>p.has_key).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+'</option>').join('');
+  openModal('🤖 Test Model',`
+    <div class="form-grid">
+      <label>Provider<select id="tm_provider" onchange="updateTestModels()">${provs}</select></label>
+      <label>Model<select id="tm_model"><option>Loading...</option></select></label>
+      <div id="tm_result" class="full" style="min-height:2rem"></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runTestModel()">🤖 Test</button></div>`,null);
+  updateTestModels();
+}
+
+function updateTestModels(){
+  const name=document.getElementById('tm_provider').value;
+  const p=_currentProviders.find(x=>x.name===name);
+  const sel=document.getElementById('tm_model');
+  if(!p||!p.models){sel.innerHTML='<option>No models</option>';return;}
+  sel.innerHTML=p.models.map(m=>'<option>'+esc(m)+'</option>').join('');
+}
+
+async function runTestModel(){
+  const provName=document.getElementById('tm_provider').value;
+  const model=document.getElementById('tm_model').value;
+  const p=_currentProviders.find(x=>x.name===provName);
+  if(!p||!model)return;
+  const el=document.getElementById('tm_result');
+  el.innerHTML='<span style="color:var(--text3)">Sending test request to '+esc(p.name)+'...</span>';
+  try{
+    const r=await api('/admin/diag/test-model',{method:'POST',body:JSON.stringify({provider:p.name,model})});
+    el.innerHTML='<span style="color:var(--green)">✅ WORKING</span><br><strong>Response:</strong> '+esc(r.response)+'<br><strong>Latency:</strong> '+r.latency_ms+'ms';
+  }catch(e){el.innerHTML='<span style="color:var(--red)">❌ FAILED</span> — '+esc(e.message);}
+}
+
+function showSyncModels(){
+  if(!_currentProviders.length){toast('Add a provider first','error');return;}
+  const opts=_currentProviders.filter(p=>p.has_key).map(p=>'<option value="'+esc(p.name)+'">'+esc(p.name)+' ('+p.models.length+' models)</option>').join('');
+  openModal('🔄 Sync Models from Provider API',`
+    <div class="form-grid">
+      <label class="full">Provider<select id="sm_provider">${opts}</select></label>
+      <div id="sm_result" class="full" style="min-height:2rem"></div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runSyncModels()">🔄 Fetch & Add</button></div>`,null);
+}
+
+async function runSyncModels(){
+  const name=document.getElementById('sm_provider').value;
+  const p=_currentProviders.find(x=>x.name===name);
+  if(!p)return;
+  const el=document.getElementById('sm_result');
+  el.innerHTML='<span style="color:var(--text3)">Fetching models from '+esc(p.name)+'...</span>';
+  try{
+    const r=await api('/admin/diag/fetch-models',{method:'POST',body:JSON.stringify({provider:p.name})});
+    const existing=new Set(p.models||[]);
+    const newModels=(r.models||[]).filter(m=>!existing.has(m));
+    if(newModels.length===0){
+      el.innerHTML='<span style="color:var(--green)">✅ All '+r.count+' models already synced</span>';
+      return;
+    }
+    el.innerHTML='<strong>'+newModels.length+' new models found.</strong> Adding...';
+    let added=0;
+    for(const m of newModels){
+      try{
+        await api('/admin/models',{method:'POST',body:JSON.stringify({name:m,provider:p.name,model:m})});
+        added++;
+      }catch(e){/* skip duplicates */}
+    }
+    el.innerHTML='<span style="color:var(--green)">✅ '+added+' new models added!</span>';
+    fetchAll();
+  }catch(e){el.innerHTML='<span style="color:var(--red)">❌ Failed</span> — '+esc(e.message);}
+}
+
+/* ===== Change Password ===== */
+function showChangePassword(){
+  openModal('🔑 Change Admin Password',`
+    <div class="form-grid">
+      <label class="full">Current Password<input id="cp_current" type="password" placeholder="Enter current admin secret"></label>
+      <label class="full">New Password<input id="cp_new" type="password" placeholder="Enter new password (min 6 chars)"></label>
+      <label class="full">Confirm New Password<input id="cp_confirm" type="password" placeholder="Re-enter new password"></label>
+    </div>`,async()=>{
+    try{
+      const cur=document.getElementById('cp_current').value;
+      const np=document.getElementById('cp_new').value;
+      const cp=document.getElementById('cp_confirm').value;
+      if(!cur){toast('Current password is required','error');return;}
+      if(np.length<6){toast('New password must be at least 6 characters','error');return;}
+      if(np!==cp){toast('New passwords do not match','error');return;}
+      await api('/admin/change-password',{method:'PUT',body:JSON.stringify({current_secret:cur,new_secret:np})});
+      localStorage.setItem('admin_secret',np);
+      secret=np;
+      closeModal();
+      toast('Password changed successfully!','success');
+    }catch(e){toast('Error: '+e.message,'error');}
+  });
+}
+
+/* ===== Auto Refresh ===== */
+function startRefresh(){
+  if(refreshTimer)clearInterval(refreshTimer);
+  refreshTimer=setInterval(()=>{
+    if(!document.hidden)fetchAll();
+  },5000);
+}
+
+/* ===== Init ===== */
+(async function init(){
+  // If secret is in query parameter, store it in localStorage
+  const urlSecret = new URLSearchParams(window.location.search).get('secret');
+  if(urlSecret){
+    secret = urlSecret;
+    localStorage.setItem('admin_secret', secret);
+    // Remove secret from URL bar for security / cleaner look
+    const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
+    window.history.replaceState({path: cleanUrl}, '', cleanUrl);
+  }
+
+  if(secret){
+    try{
+      await api('/admin/stats');
+      hideAuth();
+      startRefresh();
+      fetchAll();
+    }catch(e){
+      secret='';
+      showAuth();
+    }
+  }else{
+    showAuth();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Binaries
+aigateway
+aigateway.exe
+cloudflared
+cloudflared.exe
+cloudflared.exe.tmp
+
+# Configuration
+config.yaml
+config.yml
+
+# Logs
+*.log
+
+# Personal/Agent/IDE folders
+.agents/
+.gemini/
+scratch/
+*.tmp
+nohup.out
+.vscode/
+.idea/
