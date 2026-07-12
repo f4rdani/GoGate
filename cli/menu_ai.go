@@ -1290,19 +1290,20 @@ func deleteUpstreamKey(cfg *config.Config) {
 func menuModelsCombos(cfg *config.Config, cfgPath string) {
 	for {
 		clearScreen()
-		printSectionTitle("🤖", "Kelola Models & Combos")
+		printSectionTitle("🤖", T("Kelola Models & Combos", "Manage Models & Combos"))
 
 		var choice string
 		err := huh.NewSelect[string]().
 			Title("").
 			Options(
-				huh.NewOption("📋  Lihat semua model & combo", "list"),
-				huh.NewOption("➕  Tambah model direct", "add_direct"),
-				huh.NewOption("➕  Tambah model combo/balancer", "add_combo"),
-				huh.NewOption("✏️   Edit model combo", "edit_combo"),
-				huh.NewOption("🔌  Enable/Disable model route", "toggle_enable"),
-				huh.NewOption("❌   Hapus model / combo", "delete"),
-				huh.NewOption(" ←  Kembali", "cancel"),
+				huh.NewOption(T("📋  Lihat semua model & combo", "📋  View all models & combos"), "list"),
+				huh.NewOption(T("➕  Tambah model direct", "➕  Add direct model"), "add_direct"),
+				huh.NewOption(T("➕  Tambah model combo/balancer", "➕  Add combo/balancer model"), "add_combo"),
+				huh.NewOption(T("✏️   Edit model combo", "✏️   Edit combo model"), "edit_combo"),
+				huh.NewOption(T("🔌  Enable/Disable model route", "🔌  Enable/Disable model route"), "toggle_enable"),
+				huh.NewOption(T("❌  Hapus model / combo", "❌  Delete model / combo"), "delete"),
+				huh.NewOption(T("🗑️  Hapus semua model dari satu provider", "🗑️  Delete all models of a provider"), "delete_by_provider"),
+				huh.NewOption(T(" ←  Kembali", " ←  Back"), "cancel"),
 			).
 			Value(&choice).
 			Run()
@@ -1332,6 +1333,10 @@ func menuModelsCombos(cfg *config.Config, cfgPath string) {
 			pause()
 		case "delete":
 			deleteModel(cfg)
+			safeSave(cfg, cfgPath)
+			pause()
+		case "delete_by_provider":
+			deleteModelsByProvider(cfg)
 			safeSave(cfg, cfgPath)
 			pause()
 		}
@@ -2096,6 +2101,71 @@ func deleteModel(cfg *config.Config) {
 	printSuccess(fmt.Sprintf("%d model berhasil dihapus", deleted))
 	printInfo("  ↳ Model juga dihapus dari provider list & allowed_models API key (cascade)")
 }
+
+func deleteModelsByProvider(cfg *config.Config) {
+	if len(cfg.Providers) == 0 {
+		printInfo(T("Belum ada provider.", "No providers configured."))
+		return
+	}
+
+	opts := providerSelectOptions(cfg)
+	opts = append(opts, huh.NewOption(T("❌  Batal / kembali", "❌  Cancel / back"), "__cancel__"))
+
+	var idxStr string
+	err := huh.NewSelect[string]().
+		Title(T("Pilih provider yang modelnya akan dihapus semua (Esc untuk batal)", "Select provider to delete all its models (Esc to cancel)")).
+		Options(opts...).
+		Value(&idxStr).
+		Run()
+
+	if isAbort(err) || idxStr == "__cancel__" || idxStr == "" {
+		printInfo(T("Dibatalkan", "Cancelled"))
+		return
+	}
+
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 || idx >= len(cfg.Providers) {
+		return
+	}
+
+	p := &cfg.Providers[idx]
+
+	// Find all models belonging to this provider
+	var modelsToDelete []string
+	for _, m := range cfg.Models {
+		if m.Strategy == "" && m.Provider == p.Name {
+			modelsToDelete = append(modelsToDelete, m.Name)
+		}
+	}
+
+	if len(modelsToDelete) == 0 {
+		printInfo(T("Tidak ada model ditemukan untuk provider ini.", "No models found for this provider."))
+		return
+	}
+
+	var confirm bool
+	huh.NewConfirm().
+		Title(fmt.Sprintf(T("Yakin hapus %d model dari '%s'?", "Are you sure you want to delete %d models from '%s'?"), len(modelsToDelete), p.Name)).
+		Value(&confirm).
+		Run()
+
+	if !confirm {
+		printInfo(T("Dibatalkan", "Cancelled"))
+		return
+	}
+
+	deleted := 0
+	for _, name := range modelsToDelete {
+		if err := cfg.DeleteModel(name); err != nil {
+			printError(fmt.Sprintf(T("Gagal hapus '%s': %v", "Failed to delete '%s': %v"), name, err))
+		} else {
+			deleted++
+		}
+	}
+
+	printSuccess(fmt.Sprintf(T("%d model dari provider '%s' berhasil dihapus", "%d models from provider '%s' successfully deleted"), deleted, p.Name))
+}
+
 
 func testModelsBeforeAdd(baseURL, apiKey, providerType string, selectedModels []string) []string {
 	if len(selectedModels) == 0 {
