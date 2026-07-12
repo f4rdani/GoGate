@@ -246,11 +246,21 @@ func (c *Config) Validate() error {
 		validTypes := map[string]bool{
 			"openai": true, "anthropic": true, "groq": true,
 			"mistral": true, "custom": true, "cohere": true,
-			"opencode": true, "cerebras": true,
+			"opencode": true, "cerebras": true, "cloudflare": true,
 		}
 		if !validTypes[p.Type] {
-			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom)", p.Name, p.Type)
+			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare)", p.Name, p.Type)
 		}
+
+		if p.Type == "cloudflare" {
+			if p.AccountID == "" {
+				return fmt.Errorf("provider %s: cloudflare type requires account_id", p.Name)
+			}
+			if p.BaseURL == "" {
+				p.BaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", p.AccountID)
+			}
+		}
+
 		if p.BaseURL == "" {
 			return fmt.Errorf("provider %s: missing base_url", p.Name)
 		}
