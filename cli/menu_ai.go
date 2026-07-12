@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
@@ -708,7 +709,20 @@ func editProvider(cfg *config.Config) {
 		Run()
 
 	if newKey != "" {
-		pv.APIKeys = append(pv.APIKeys, newKey)
+		newKey = strings.TrimSpace(newKey)
+		exists := false
+		for _, k := range pv.APIKeys {
+			if k == newKey {
+				exists = true
+				break
+			}
+		}
+		if exists {
+			printError("API Key ini sudah terdaftar di provider ini!")
+			time.Sleep(1500 * time.Millisecond)
+		} else {
+			pv.APIKeys = append(pv.APIKeys, newKey)
+		}
 	}
 
 	if err := cfg.UpdateProvider(pv); err != nil {
@@ -1096,6 +1110,19 @@ func addUpstreamKey(cfg *config.Config) {
 		}
 	} else {
 		printSuccess(fmt.Sprintf("Koneksi sukses! API key aktif (ditemukan %d model).", count))
+	}
+
+	key = strings.TrimSpace(key)
+	exists := false
+	for _, k := range p.APIKeys {
+		if k == key {
+			exists = true
+			break
+		}
+	}
+	if exists {
+		printError("API Key ini sudah terdaftar di provider ini!")
+		return
 	}
 
 	p.APIKeys = append(p.APIKeys, key)

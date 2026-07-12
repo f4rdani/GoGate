@@ -552,7 +552,17 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 		existing.BaseURL = req.BaseURL
 	}
 	if req.APIKeys != nil {
-		existing.APIKeys = req.APIKeys
+		// Clean and remove duplicates
+		uniqueKeys := make([]string, 0, len(req.APIKeys))
+		seen := make(map[string]bool)
+		for _, k := range req.APIKeys {
+			k = strings.TrimSpace(k)
+			if k != "" && !seen[k] {
+				seen[k] = true
+				uniqueKeys = append(uniqueKeys, k)
+			}
+		}
+		existing.APIKeys = uniqueKeys
 	}
 	if req.Models != nil {
 		existing.Models = req.Models
