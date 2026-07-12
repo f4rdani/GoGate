@@ -1417,7 +1417,9 @@ func listModelsAndCombos(cfg *config.Config) {
 				statusStr = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render(" [DISABLED]")
 			}
 			icon := "🤖"
-			if m.Reasoning {
+			if m.Reasoning && m.Vision {
+				icon = "🧠👁️"
+			} else if m.Reasoning {
 				icon = "🧠"
 			} else if m.Vision {
 				icon = "👁️"
@@ -1566,6 +1568,36 @@ func addDirectModel(cfg *config.Config) {
 	}
 }
 
+func buildModelOptionsForProvider(p config.ProviderConfig, selected map[string]bool) []huh.Option[string] {
+	var modelOpts []huh.Option[string]
+	for _, m := range p.Models {
+		key := p.Name + "/" + m
+		label := m
+		if selected != nil && selected[key] {
+			label += "  ✅ " + T("sudah dipilih", "already selected")
+		}
+		modelOpts = append(modelOpts, huh.NewOption(label, m))
+	}
+	// Add virtual models
+	if p.Type == "opencode" {
+		key := p.Name + "/oc/auto"
+		label := "oc/auto [VIRTUAL]"
+		if selected != nil && selected[key] {
+			label += "  ✅ " + T("sudah dipilih", "already selected")
+		}
+		modelOpts = append(modelOpts, huh.NewOption(label, "oc/auto"))
+	}
+	if p.Type == "mimo" {
+		key := p.Name + "/mimo/auto"
+		label := "mimo/auto [VIRTUAL]"
+		if selected != nil && selected[key] {
+			label += "  ✅ " + T("sudah dipilih", "already selected")
+		}
+		modelOpts = append(modelOpts, huh.NewOption(label, "mimo/auto"))
+	}
+	return modelOpts
+}
+
 func addComboModel(cfg *config.Config) {
 	if len(cfg.Providers) == 0 {
 		printInfo("Belum ada provider.")
@@ -1632,15 +1664,7 @@ func addComboModel(cfg *config.Config) {
 		p := cfg.Providers[pIdx]
 
 		// Build model options
-		modelOpts := make([]huh.Option[string], 0, len(p.Models))
-		for _, m := range p.Models {
-			key := p.Name + "/" + m
-			label := m
-			if selected[key] {
-				label += "  ✅ sudah dipilih"
-			}
-			modelOpts = append(modelOpts, huh.NewOption(label, m))
-		}
+		modelOpts := buildModelOptionsForProvider(p, selected)
 
 		var modelID string
 		err = huh.NewSelect[string]().
@@ -1838,10 +1862,11 @@ func editComboModel(cfg *config.Config) {
 			pIdx, _ := strconv.Atoi(pIdxStr)
 			p := cfg.Providers[pIdx]
 
-			modelOpts := make([]huh.Option[string], len(p.Models))
-			for idx, mdl := range p.Models {
-				modelOpts[idx] = huh.NewOption(mdl, mdl)
+			selectedBackends := make(map[string]bool)
+			for _, b := range m.Backends {
+				selectedBackends[b.Provider+"/"+b.Model] = true
 			}
+			modelOpts := buildModelOptionsForProvider(p, selectedBackends)
 
 			var modelID string
 			huh.NewSelect[string]().
@@ -1899,10 +1924,11 @@ func editComboModel(cfg *config.Config) {
 			pIdx, _ := strconv.Atoi(pIdxStr)
 			p := cfg.Providers[pIdx]
 
-			modelOpts := make([]huh.Option[string], len(p.Models))
-			for idx, mdl := range p.Models {
-				modelOpts[idx] = huh.NewOption(mdl, mdl)
+			selectedBackends := make(map[string]bool)
+			for _, b := range m.Backends {
+				selectedBackends[b.Provider+"/"+b.Model] = true
 			}
+			modelOpts := buildModelOptionsForProvider(p, selectedBackends)
 
 			var modelID string
 			huh.NewSelect[string]().

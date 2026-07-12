@@ -206,6 +206,92 @@ func (r *Router) resolveSmartVisionRoute(modelName string, req *models.ChatCompl
 	return modelName
 }
 
+func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
+	if model == "oc/auto" {
+		modelsList := provider.GetCachedDynamicModels(p.Name())
+		if len(modelsList) == 0 {
+			modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
+		}
+		var lastErr error
+		for _, mName := range modelsList {
+			req.Model = mName
+			slog.Info("routing oc/auto to model in combo", "model", mName)
+			resp, err := p.ChatCompletion(ctx, req)
+			if err == nil {
+				return resp, nil
+			}
+			slog.Warn("oc/auto failed model fallback in combo", "model", mName, "error", err)
+			lastErr = err
+		}
+		return nil, fmt.Errorf("all opencode free models failed in combo: %w", lastErr)
+	}
+
+	if model == "mimo/auto" {
+		modelsList := provider.GetCachedDynamicModels(p.Name())
+		if len(modelsList) == 0 {
+			modelsList = []string{"mimo-v2.5-free"}
+		}
+		var lastErr error
+		for _, mName := range modelsList {
+			req.Model = mName
+			slog.Info("routing mimo/auto to model in combo", "model", mName)
+			resp, err := p.ChatCompletion(ctx, req)
+			if err == nil {
+				return resp, nil
+			}
+			slog.Warn("mimo/auto failed model fallback in combo", "model", mName, "error", err)
+			lastErr = err
+		}
+		return nil, fmt.Errorf("all mimo free models failed in combo: %w", lastErr)
+	}
+
+	req.Model = model
+	return p.ChatCompletion(ctx, req)
+}
+
+func (r *Router) executeBackendStream(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error {
+	if model == "oc/auto" {
+		modelsList := provider.GetCachedDynamicModels(p.Name())
+		if len(modelsList) == 0 {
+			modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
+		}
+		var lastErr error
+		for _, mName := range modelsList {
+			req.Model = mName
+			slog.Info("routing oc/auto stream to model in combo", "model", mName)
+			err := p.ChatCompletionStream(ctx, req, w, flusher)
+			if err == nil {
+				return nil
+			}
+			slog.Warn("oc/auto stream failed model fallback in combo", "model", mName, "error", err)
+			lastErr = err
+		}
+		return fmt.Errorf("all opencode free models failed in combo stream: %w", lastErr)
+	}
+
+	if model == "mimo/auto" {
+		modelsList := provider.GetCachedDynamicModels(p.Name())
+		if len(modelsList) == 0 {
+			modelsList = []string{"mimo-v2.5-free"}
+		}
+		var lastErr error
+		for _, mName := range modelsList {
+			req.Model = mName
+			slog.Info("routing mimo/auto stream to model in combo", "model", mName)
+			err := p.ChatCompletionStream(ctx, req, w, flusher)
+			if err == nil {
+				return nil
+			}
+			slog.Warn("mimo/auto stream failed model fallback in combo", "model", mName, "error", err)
+			lastErr = err
+		}
+		return fmt.Errorf("all mimo free models failed in combo stream: %w", lastErr)
+	}
+
+	req.Model = model
+	return p.ChatCompletionStream(ctx, req, w, flusher)
+}
+
 // retryWithBackoff executes fn with exponential backoff on retryable errors.
 func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) error {
 	var lastErr error
@@ -340,7 +426,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 		// Direct: single backend
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, route.Backend.Provider.Name(), route.Backend.Model))
-		return route.Backend.Provider.ChatCompletion(ctx, req)
+		return r.executeBackend(ctx, route.Backend.Provider, route.Backend.Model, req)
 
 	case "round-robin":
 		// Round-robin with circuit breaker: try available backends
@@ -375,7 +461,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 		req.Model = backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
 
-		resp, err := backend.Provider.ChatCompletion(ctx, req)
+		resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, req)
 		if err != nil {
 			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
 			slog.Warn("backend disabled due to error",
@@ -429,7 +515,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 
 			var successResp *models.ChatCompletionResponse
 			retryErr := r.retryWithBackoff(ctx, func() (bool, error) {
-				resp, err := backend.Provider.ChatCompletion(ctx, &reqCopy)
+				resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
 				if err == nil {
 					successResp = resp
 					if i > 0 {
@@ -566,7 +652,7 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 	case "", "direct":
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, route.Backend.Provider.Name(), route.Backend.Model))
-		return route.Backend.Provider.ChatCompletionStream(ctx, req, w, flusher)
+		return r.executeBackendStream(ctx, route.Backend.Provider, route.Backend.Model, req, w, flusher)
 
 	case "round-robin":
 		// Round-robin with circuit breaker: try available backends
@@ -601,7 +687,7 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 		req.Model = backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
 
-		err := backend.Provider.ChatCompletionStream(ctx, req, w, flusher)
+		err := r.executeBackendStream(ctx, backend.Provider, backend.Model, req, w, flusher)
 		if err != nil {
 			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
 			slog.Warn("backend disabled due to error",
@@ -658,7 +744,7 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 			reqCopy := *req
 			reqCopy.Model = backend.Model
 
-			err := backend.Provider.ChatCompletionStream(ctx, &reqCopy, w, flusher)
+			err := r.executeBackendStream(ctx, backend.Provider, backend.Model, &reqCopy, w, flusher)
 			if err == nil {
 				return nil
 			}

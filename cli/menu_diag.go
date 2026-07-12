@@ -173,15 +173,18 @@ func maskAPIKey(key string) string {
 	return key[:4] + "••••" + key[len(key)-4:]
 }
 
-// updateModelReasoningInCfg updates the reasoning flag on all model routes
+// updateModelCapabilitiesInCfg updates both reasoning and vision flags on all model routes
 // that match the given provider+modelID pair. Returns true if anything changed.
-func updateModelReasoningInCfg(cfg *config.Config, providerName, modelID string, isReasoning bool) bool {
+func updateModelCapabilitiesInCfg(cfg *config.Config, providerName, modelID string, isReasoning, isVision bool) bool {
 	changed := false
 	for i, m := range cfg.Models {
-		if m.Provider == providerName && m.Model == modelID && m.Reasoning != isReasoning {
-			cfg.Models[i].Reasoning = isReasoning
-			detectedReasoningModels[modelID] = isReasoning
-			changed = true
+		if m.Provider == providerName && m.Model == modelID {
+			if m.Reasoning != isReasoning || m.Vision != isVision {
+				cfg.Models[i].Reasoning = isReasoning
+				cfg.Models[i].Vision = isVision
+				detectedReasoningModels[modelID] = isReasoning
+				changed = true
+			}
 		}
 	}
 	return changed
@@ -346,7 +349,7 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 			}
 			printKeyValue("     📥 Response:", response)
 			printKeyValue("     ⏱  Latency:", fmt.Sprintf("%dms", latency))
-			updateModelReasoningInCfg(cfg, p.Name, modelID, isReasoning)
+			updateModelCapabilitiesInCfg(cfg, p.Name, modelID, isReasoning, isVision)
 		}
 	}
 	// Persist any reasoning flag changes back to disk
@@ -529,7 +532,7 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 				}
 				printKeyValue("     📥 Response:", response)
 				printKeyValue("     ⏱  Latency:", fmt.Sprintf("%dms", latency))
-				updateModelReasoningInCfg(cfg, p.Name, modelID, isReasoning)
+				updateModelCapabilitiesInCfg(cfg, p.Name, modelID, isReasoning, isVision)
 			}
 		}
 	}
