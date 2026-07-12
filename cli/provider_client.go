@@ -188,23 +188,28 @@ func isVisionModelID(modelID string) bool {
 // testModel sends a minimal chat completion request to verify the model works.
 // If the model supports vision, it will perform a vision test.
 // Returns (response_text, latency_ms, is_reasoning, is_vision, error).
-func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bool, bool, error) {
+func testModel(baseURL, apiKey, modelID, providerType string, forceVision bool) (string, int64, bool, bool, error) {
 	url := strings.TrimRight(baseURL, "/")
 
 	// Anthropic uses different endpoint and format
 	if providerType == "anthropic" {
-		return testModelAnthropic(url, apiKey, modelID)
+		return testModelAnthropic(url, apiKey, modelID, forceVision)
 	}
 
 	url += "/chat/completions"
 
-	// Always try vision test first for all models (generic probing)
-	response, latency, isReasoning, successVision, err := runActualModelTest(url, apiKey, modelID, providerType, true)
-	if err != nil {
-		slog.Debug("vision test failed, falling back to text test", "model", modelID, "error", err)
-		return runActualModelTest(url, apiKey, modelID, providerType, false)
+	if forceVision {
+		// Try vision test first
+		response, latency, isReasoning, successVision, err := runActualModelTest(url, apiKey, modelID, providerType, true)
+		if err != nil {
+			slog.Debug("vision test failed, falling back to text test", "model", modelID, "error", err)
+			return runActualModelTest(url, apiKey, modelID, providerType, false)
+		}
+		return response, latency, isReasoning, successVision, err
 	}
-	return response, latency, isReasoning, successVision, err
+
+	// Text test only
+	return runActualModelTest(url, apiKey, modelID, providerType, false)
 }
 
 func runActualModelTest(url, apiKey, modelID, providerType string, tryVision bool) (string, int64, bool, bool, error) {
@@ -355,15 +360,19 @@ func runActualModelTest(url, apiKey, modelID, providerType string, tryVision boo
 }
 
 // testModelAnthropic handles testing for Anthropic's different API format.
-func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, bool, error) {
+func testModelAnthropic(baseURL, apiKey, modelID string, forceVision bool) (string, int64, bool, bool, error) {
 	url := baseURL + "/v1/messages"
-	// Always try vision test first for all models (generic probing)
-	response, latency, isReasoning, successVision, err := runActualAnthropicTest(url, apiKey, modelID, true)
-	if err != nil {
-		slog.Debug("anthropic vision test failed, falling back to text test", "model", modelID, "error", err)
-		return runActualAnthropicTest(url, apiKey, modelID, false)
+	if forceVision {
+		// Try vision test first
+		response, latency, isReasoning, successVision, err := runActualAnthropicTest(url, apiKey, modelID, true)
+		if err != nil {
+			slog.Debug("anthropic vision test failed, falling back to text test", "model", modelID, "error", err)
+			return runActualAnthropicTest(url, apiKey, modelID, false)
+		}
+		return response, latency, isReasoning, successVision, err
 	}
-	return response, latency, isReasoning, successVision, err
+	// Text test only
+	return runActualAnthropicTest(url, apiKey, modelID, false)
 }
 
 func runActualAnthropicTest(url, apiKey, modelID string, tryVision bool) (string, int64, bool, bool, error) {

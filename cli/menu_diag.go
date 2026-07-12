@@ -298,6 +298,23 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 		return
 	}
 
+	var testType string
+	errType := huh.NewSelect[string]().
+		Title("Pilih jenis pengetesan model:").
+		Options(
+			huh.NewOption("📝  Test Teks Biasa (Hemat Token)", "text"),
+			huh.NewOption("👁️  Test Vision / Multimodal (Kirim Gambar)", "vision"),
+		).
+		Value(&testType).
+		Run()
+
+	if isAbort(errType) || testType == "" {
+		printInfo("Dibatalkan")
+		return
+	}
+
+	forceVision := testType == "vision"
+
 	fmt.Println()
 	printInfo(fmt.Sprintf("Memulai pengetesan %s...", plural(len(finalModels), "model", "models")))
 
@@ -311,7 +328,7 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 		var testErr error
 
 		spinnerErr := withSpinner(fmt.Sprintf("Testing model '%s' di %s...", modelID, p.Name), func() error {
-			response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
+			response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type, forceVision)
 			return testErr
 		})
 
@@ -453,6 +470,23 @@ func syncProviderModels(cfg *config.Config, providerIdx int) {
 }
 
 func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
+	var testType string
+	errType := huh.NewSelect[string]().
+		Title("Pilih jenis pengetesan untuk semua model:").
+		Options(
+			huh.NewOption("📝  Test Teks Biasa (Hemat Token)", "text"),
+			huh.NewOption("👁️  Test Vision / Multimodal (Kirim Gambar)", "vision"),
+		).
+		Value(&testType).
+		Run()
+
+	if isAbort(errType) || testType == "" {
+		printInfo("Dibatalkan")
+		return
+	}
+
+	forceVision := testType == "vision"
+
 	fmt.Println()
 	printInfo("Memulai pengetesan semua model dari semua provider...")
 
@@ -476,7 +510,7 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 			var testErr error
 
 			spinnerErr := withSpinner(fmt.Sprintf("Testing model '%s'...", modelID), func() error {
-				response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
+				response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type, forceVision)
 				return testErr
 			})
 

@@ -2003,6 +2003,22 @@ func testModelsBeforeAdd(baseURL, apiKey, providerType string, selectedModels []
 		return selectedModels
 	}
 
+	var testType string
+	errType := huh.NewSelect[string]().
+		Title("Pilih jenis pengetesan model:").
+		Options(
+			huh.NewOption("📝  Test Teks Biasa (Hemat Token)", "text"),
+			huh.NewOption("👁️  Test Vision / Multimodal (Kirim Gambar)", "vision"),
+		).
+		Value(&testType).
+		Run()
+
+	if isAbort(errType) || testType == "" {
+		return selectedModels
+	}
+
+	forceVision := testType == "vision"
+
 	fmt.Println()
 	printInfo("Memulai pengetesan model...")
 
@@ -2026,7 +2042,7 @@ func testModelsBeforeAdd(baseURL, apiKey, providerType string, selectedModels []
 		var testErr error
 
 		spinnerErr := withSpinner(fmt.Sprintf("Testing '%s'...", modelID), func() error {
-			response, latency, isReasoning, isVision, testErr = testModel(baseURL, apiKey, modelID, providerType)
+			response, latency, isReasoning, isVision, testErr = testModel(baseURL, apiKey, modelID, providerType, forceVision)
 			return testErr
 		})
 
