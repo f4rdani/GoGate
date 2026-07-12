@@ -69,8 +69,8 @@ func fetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 
 		var models []string
 		for _, m := range cfResp.Result {
-			if m.ID != "" {
-				models = append(models, m.ID)
+			if m.Name != "" {
+				models = append(models, m.Name)
 			}
 		}
 		if len(models) == 0 {
