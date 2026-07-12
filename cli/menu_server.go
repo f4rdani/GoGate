@@ -19,23 +19,24 @@ import (
 func menuServer(cfg *config.Config, cfgPath string) {
 	for {
 		clearScreen()
-		printSectionTitle("⚙️", "Manajemen Server")
+		printSectionTitle("⚙️", T("Manajemen Server", "Server Management"))
 
 		var choice string
 		err := huh.NewSelect[string]().
 			Title("").
 			Options(
-				huh.NewOption("📋  Lihat settings", "show"),
-				huh.NewOption("📋  Lihat log server (Live Logs)", "viewlogs"),
-				huh.NewOption("🌐  Edit host & port", "host"),
-				huh.NewOption("🔐  Edit admin secret", "secret"),
-				huh.NewOption("⚡  Edit concurrency limits", "concurrency"),
-				huh.NewOption("📝  Edit log level (Tingkat Detail)", "loglevel"),
-				huh.NewOption("🧠  Token Saver (RTK)", "tokensaver"),
-				huh.NewOption("🌐  Quick Tunnel (Cloudflare)", "tunnel"),
-				huh.NewOption("🛡️  Warp Proxy (Khusus OpenCode)", "warp"),
-				huh.NewOption("📊  Web Dashboard & Playground", "dashboard"),
-				huh.NewOption("←  Kembali", "back"),
+				huh.NewOption(T("📋  Lihat settings", "📋  View settings"), "show"),
+				huh.NewOption(T("📋  Lihat log server (Live Logs)", "📋  View server log (Live Logs)"), "viewlogs"),
+				huh.NewOption(T("🌐  Edit host & port", "🌐  Edit host & port"), "host"),
+				huh.NewOption(T("🔐  Edit admin secret", "🔐  Edit admin secret"), "secret"),
+				huh.NewOption(T("⚡  Edit concurrency limits", "⚡  Edit concurrency limits"), "concurrency"),
+				huh.NewOption(T("📝  Edit log level (Tingkat Detail)", "📝  Edit log level (Detail Level)"), "loglevel"),
+				huh.NewOption(T("🧠  Token Saver (RTK)", "🧠  Token Saver (RTK)"), "tokensaver"),
+				huh.NewOption(T("🌐  Quick Tunnel (Cloudflare)", "🌐  Quick Tunnel (Cloudflare)"), "tunnel"),
+				huh.NewOption(T("🛡️  Warp Proxy (Khusus OpenCode)", "🛡️  Warp Proxy (OpenCode Only)"), "warp"),
+				huh.NewOption(T("📊  Web Dashboard & Playground", "📊  Web Dashboard & Playground"), "dashboard"),
+				huh.NewOption(T("🌐  Ubah Bahasa / Change Language", "🌐  Change Language / Ubah Bahasa"), "language"),
+				huh.NewOption(T("←  Kembali", "←  Back"), "back"),
 			).
 			Value(&choice).
 			Run()
@@ -94,8 +95,38 @@ func menuServer(cfg *config.Config, cfgPath string) {
 				safeSave(cfg, cfgPath)
 			}
 			pause()
+		case "language":
+			if editLanguage(cfg) {
+				safeSave(cfg, cfgPath)
+			}
+			pause()
 		}
 	}
+}
+
+func editLanguage(cfg *config.Config) bool {
+	var lang string = cfg.Server.Language
+	if lang == "" {
+		lang = "id"
+	}
+
+	err := huh.NewSelect[string]().
+		Title(T("Pilih Bahasa / Select Language", "Select Language / Pilih Bahasa")).
+		Options(
+			huh.NewOption("🇮🇩 Bahasa Indonesia (id)", "id"),
+			huh.NewOption("🇬🇧 English (en)", "en"),
+		).
+		Value(&lang).
+		Run()
+
+	if isAbort(err) {
+		return false
+	}
+
+	cfg.Server.Language = lang
+	setLanguage(lang)
+	printSuccess(T("Bahasa diubah ke: "+lang, "Language changed to: "+lang))
+	return true
 }
 
 func showServerSettings(cfg *config.Config) {

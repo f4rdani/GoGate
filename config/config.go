@@ -33,12 +33,13 @@ type TokenSaverConfig struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
-	Host        string `yaml:"host" json:"host"`
-	Port        int    `yaml:"port" json:"port"`
-	AdminSecret string `yaml:"admin_secret" json:"admin_secret"`
+	Host             string `yaml:"host" json:"host"`
+	Port             int    `yaml:"port" json:"port"`
+	AdminSecret      string `yaml:"admin_secret" json:"admin_secret"`
 	LogLevel         string `yaml:"log_level,omitempty" json:"log_level,omitempty"` // "info", "debug", "warn", "error"
 	QuickTunnel      bool   `yaml:"quick_tunnel,omitempty" json:"quick_tunnel,omitempty"`
 	DashboardEnabled *bool  `yaml:"dashboard_enabled,omitempty" json:"dashboard_enabled,omitempty"` // enable or disable admin web dashboard (default: true)
+	Language         string `yaml:"language,omitempty" json:"language,omitempty"`                   // "id" or "en"
 }
 
 // ConcurrencyConfig holds concurrency limit settings.
@@ -53,14 +54,15 @@ type ConcurrencyConfig struct {
 // ProviderConfig defines an upstream AI provider.
 type ProviderConfig struct {
 	Name                string        `yaml:"name" json:"name"`
-	Type                string        `yaml:"type" json:"type"`                // "openai", "anthropic", "groq", "mistral", "custom"
+	Type                string        `yaml:"type" json:"type"` // "openai", "anthropic", "groq", "mistral", "custom", "cloudflare"
 	BaseURL             string        `yaml:"base_url" json:"base_url"`
 	APIKeys             []string      `yaml:"api_keys" json:"api_keys"`
+	AccountID           string        `yaml:"account_id,omitempty" json:"account_id,omitempty"` // for Cloudflare compatibility
 	Models              []string      `yaml:"models" json:"models"`
-	Tier                int           `yaml:"tier,omitempty" json:"tier,omitempty"`      // 1=subscription, 2=cheap, 3=free (default=1)
+	Tier                int           `yaml:"tier,omitempty" json:"tier,omitempty"`                         // 1=subscription, 2=cheap, 3=free (default=1)
 	HealthCheckURL      string        `yaml:"health_check_url,omitempty" json:"health_check_url,omitempty"` // custom health check endpoint
 	HealthCheckInterval time.Duration `yaml:"health_check_interval,omitempty" json:"health_check_interval,omitempty"` // e.g. 30s, 0=disabled
-	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"` // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
+	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"`               // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
 }
 
 // ModelConfig defines a model route (direct or combo).

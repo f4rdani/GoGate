@@ -94,6 +94,20 @@ var templates = []providerTemplate{
 		HelpURL: "https://opencode.ai",
 	},
 	{
+		Name:    "cloudflare",
+		Type:    "cloudflare",
+		BaseURL: "",
+		Desc:    "Cloudflare Workers AI — Llama, Mistral, Gemma",
+		HelpURL: "https://developers.cloudflare.com/workers-ai/get-started/",
+		FallbackModels: []string{
+			"@cf/meta/llama-3-8b-instruct",
+			"@cf/mistral/mistral-7b-instruct-v0.1",
+			"@cf/meta/llama-3-70b-instruct",
+			"@cf/qwen/qwen1.5-14b-chat",
+			"@cf/baai/bge-large-en-v1.5",
+		},
+	},
+	{
 		Name:    "cerebras",
 		Type:    "cerebras",
 		BaseURL: "https://api.cerebras.ai/v1",
@@ -209,24 +223,43 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	clearScreen()
 	printSectionTitle(tmpl.Name, fmt.Sprintf("Setup %s", strings.ToUpper(tmpl.Name)))
 
-	printInfo(fmt.Sprintf("Dapatkan API key di: %s", tmpl.HelpURL))
+	printInfo(fmt.Sprintf(T("Dapatkan API key di: %s", "Get API key at: %s"), tmpl.HelpURL))
 	fmt.Println()
+
+	var accountID string
+	if tmpl.Type == "cloudflare" {
+		errAcc := huh.NewInput().
+			Title(T("Account ID Cloudflare", "Cloudflare Account ID")).
+			Placeholder("e.g. 1a2b3c4d5e...").
+			Value(&accountID).
+			Run()
+		if isAbort(errAcc) {
+			printInfo(T("Dibatalkan", "Cancelled"))
+			return
+		}
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			printError(T("Account ID tidak boleh kosong", "Account ID cannot be empty"))
+			pause()
+			return
+		}
+	}
 
 	// Get API key
 	var apiKey string
 	errKey := huh.NewInput().
-		Title(fmt.Sprintf("API Key %s", tmpl.Name)).
+		Title(fmt.Sprintf(T("API Key %s", "%s API Key"), tmpl.Name)).
 		Placeholder("sk-...").
 		EchoMode(huh.EchoModePassword).
 		Value(&apiKey).
 		Run()
 
 	if isAbort(errKey) {
-		printInfo("Dibatalkan")
+		printInfo(T("Dibatalkan", "Cancelled"))
 		return
 	}
 	if apiKey == "" {
-		printError("API key tidak boleh kosong")
+		printError(T("API key tidak boleh kosong", "API key cannot be empty"))
 		pause()
 		return
 	}
@@ -236,15 +269,20 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	var fetchedModels []string
 	var fetchErr error
 
-	err := withSpinner("Mengambil model dari provider...", func() error {
-		fetchedModels, fetchErr = fetchModels(tmpl.BaseURL, apiKey, tmpl.Type)
+	effectiveBaseURL := tmpl.BaseURL
+	if tmpl.Type == "cloudflare" {
+		effectiveBaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
+	}
+
+	err := withSpinner(T("Mengambil model dari provider...", "Fetching models from provider..."), func() error {
+		fetchedModels, fetchErr = fetchModels(effectiveBaseURL, apiKey, tmpl.Type)
 		return fetchErr
 	})
 
 	if err != nil {
-		printWarning(fmt.Sprintf("Gagal fetch model: %v", err))
+		printWarning(fmt.Sprintf(T("Gagal fetch model: %v", "Failed to fetch models: %v"), err))
 		if len(tmpl.FallbackModels) > 0 {
-			printInfo("Menggunakan model default:")
+			printInfo(T("Menggunakan model default:", "Using default models:"))
 			fetchedModels = tmpl.FallbackModels
 		} else {
 			// Manual input
@@ -268,7 +306,7 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	}
 
 	// Select models with multi-select
-	fmt.Printf("\n  🤖 %d model tersedia:\n\n", len(fetchedModels))
+	fmt.Printf(T("\n  🤖 %d model tersedia:\n\n", "\n  🤖 %d models available:\n\n"), len(fetchedModels))
 
 	selectedModels := make([]string, 0)
 	modelOptions := make([]huh.Option[string], len(fetchedModels))
@@ -277,19 +315,19 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	}
 
 	huh.NewMultiSelect[string]().
-		Title("Pilih model (space untuk select, enter untuk confirm)").
+		Title(T("Pilih model (space untuk select, enter untuk confirm)", "Select models (space to select, enter to confirm)")).
 		Options(modelOptions...).
 		Value(&selectedModels).
 		Run()
 
 	if len(selectedModels) == 0 {
 		selectedModels = fetchedModels
-		printInfo("Semua model dipilih")
+		printInfo(T("Semua model dipilih", "All models selected"))
 	}
 
-	selectedModels = testModelsBeforeAdd(tmpl.BaseURL, apiKey, tmpl.Type, selectedModels)
+	selectedModels = testModelsBeforeAdd(effectiveBaseURL, apiKey, tmpl.Type, selectedModels)
 	if len(selectedModels) == 0 {
-		printInfo("Tidak ada model ditambahkan")
+		printInfo(T("Tidak ada model ditambahkan", "No models added"))
 		pause()
 		return
 	}
@@ -297,14 +335,14 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	// Ask for additional manual models
 	var addMore bool
 	huh.NewConfirm().
-		Title("Tambah model manual?").
+		Title(T("Tambah model manual?", "Add model manually?")).
 		Value(&addMore).
 		Run()
 
 	if addMore {
 		var manualStr string
 		huh.NewInput().
-			Title("Model name").
+			Title(T("Nama model", "Model name")).
 			Placeholder("model-1, model-2").
 			Value(&manualStr).
 			Run()
@@ -313,18 +351,19 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 	}
 
 	if len(selectedModels) == 0 {
-		printError("Tidak ada model dipilih")
+		printError(T("Tidak ada model dipilih", "No models selected"))
 		pause()
 		return
 	}
 
 	// Create provider
 	p := config.ProviderConfig{
-		Name:    tmpl.Name,
-		Type:    tmpl.Type,
-		BaseURL: tmpl.BaseURL,
-		APIKeys: []string{apiKey},
-		Models:  selectedModels,
+		Name:      tmpl.Name,
+		Type:      tmpl.Type,
+		BaseURL:   tmpl.BaseURL,
+		AccountID: accountID,
+		APIKeys:   []string{apiKey},
+		Models:    selectedModels,
 	}
 
 	if err := cfg.AddProvider(p); err != nil {
@@ -368,29 +407,30 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 
 func addCustomProvider(cfg *config.Config) {
 	clearScreen()
-	printSectionTitle("🔧", "Tambah Custom Provider")
+	printSectionTitle("🔧", T("Tambah Custom Provider", "Add Custom Provider"))
 
 	var name, baseURL, apiKey string
 	var providerType string
 
 	errN := huh.NewInput().
-		Title("Nama provider").
+		Title(T("Nama provider", "Provider name")).
 		Placeholder("my-llm").
 		Value(&name).
 		Run()
 	if isAbort(errN) {
-		printInfo("Dibatalkan")
+		printInfo(T("Dibatalkan", "Cancelled"))
 		return
 	}
 	if name == "" {
-		printError("Nama tidak boleh kosong")
+		printError(T("Nama tidak boleh kosong", "Name cannot be empty"))
 		return
 	}
 
 	errT := huh.NewSelect[string]().
-		Title("Tipe provider (Esc untuk batal)").
+		Title(T("Tipe provider (Esc untuk batal)", "Provider type (Esc to cancel)")).
 		Options(
 			huh.NewOption("openai     — OpenAI-compatible API", "openai"),
+			huh.NewOption("cloudflare — Cloudflare Workers AI", "cloudflare"),
 			huh.NewOption("cohere     — Cohere API", "cohere"),
 			huh.NewOption("opencode   — OpenCode Free API", "opencode"),
 			huh.NewOption("mimo       — Xiaomi MiMo API", "mimo"),
@@ -401,21 +441,39 @@ func addCustomProvider(cfg *config.Config) {
 		Value(&providerType).
 		Run()
 	if isAbort(errT) || providerType == "" {
-		printInfo("Dibatalkan")
+		printInfo(T("Dibatalkan", "Cancelled"))
 		return
+	}
+
+	var accountID string
+	if providerType == "cloudflare" {
+		errAcc := huh.NewInput().
+			Title(T("Account ID Cloudflare", "Cloudflare Account ID")).
+			Placeholder("e.g. 1a2b3c4d5e...").
+			Value(&accountID).
+			Run()
+		if isAbort(errAcc) {
+			printInfo(T("Dibatalkan", "Cancelled"))
+			return
+		}
+		accountID = strings.TrimSpace(accountID)
+		if accountID == "" {
+			printError(T("Account ID tidak boleh kosong", "Account ID cannot be empty"))
+			return
+		}
 	}
 
 	errU := huh.NewInput().
 		Title("Base URL").
-		Placeholder("https://api.example.com/v1").
+		Placeholder(T("https://api.example.com/v1 (kosongkan untuk default jika Cloudflare)", "https://api.example.com/v1 (leave empty for default if Cloudflare)")).
 		Value(&baseURL).
 		Run()
 	if isAbort(errU) {
-		printInfo("Dibatalkan")
+		printInfo(T("Dibatalkan", "Cancelled"))
 		return
 	}
-	if baseURL == "" {
-		printError("Base URL tidak boleh kosong")
+	if baseURL == "" && providerType != "cloudflare" {
+		printError(T("Base URL tidak boleh kosong", "Base URL cannot be empty"))
 		return
 	}
 
@@ -426,11 +484,11 @@ func addCustomProvider(cfg *config.Config) {
 		Value(&apiKey).
 		Run()
 	if isAbort(errK) {
-		printInfo("Dibatalkan")
+		printInfo(T("Dibatalkan", "Cancelled"))
 		return
 	}
 	if apiKey == "" {
-		printError("API key tidak boleh kosong")
+		printError(T("API key tidak boleh kosong", "API key cannot be empty"))
 		return
 	}
 
@@ -439,28 +497,50 @@ func addCustomProvider(cfg *config.Config) {
 	var models []string
 	var fetchErr error
 
-	err := withSpinner("Mengambil model dari provider...", func() error {
-		models, fetchErr = fetchModels(baseURL, apiKey, providerType)
+	// If cloudflare and baseURL is empty, construct it temporarily to fetch models
+	effectiveBaseURL := baseURL
+	if providerType == "cloudflare" && effectiveBaseURL == "" {
+		effectiveBaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
+	}
+
+	err := withSpinner(T("Mengambil model dari provider...", "Fetching models from provider..."), func() error {
+		models, fetchErr = fetchModels(effectiveBaseURL, apiKey, providerType)
 		return fetchErr
 	})
 
 	if err != nil {
-		printWarning(fmt.Sprintf("Gagal fetch: %v", err))
-		printInfo("Tambah model manual:")
+		printWarning(fmt.Sprintf(T("Gagal fetch: %v", "Failed to fetch: %v"), err))
+		
+		// If cloudflare, suggest fallback models
+		if providerType == "cloudflare" {
+			models = []string{
+				"@cf/meta/llama-3-8b-instruct",
+				"@cf/mistral/mistral-7b-instruct-v0.1",
+				"@cf/meta/llama-3-70b-instruct",
+				"@cf/qwen/qwen1.5-14b-chat",
+				"@cf/baai/bge-large-en-v1.5",
+			}
+			printInfo(T("Menggunakan model default Cloudflare:", "Using default Cloudflare models:"))
+		} else {
+			printInfo(T("Tambah model manual:", "Add model manually:"))
 
-		var modelsStr string
-		huh.NewInput().
-			Title("Models").
-			Placeholder("model-1, model-2, model-3").
-			Value(&modelsStr).
-			Run()
-		models = splitTrim(modelsStr)
-		if len(models) == 0 {
-			printError("Minimal 1 model")
-			return
+			var modelsStr string
+			huh.NewInput().
+				Title("Models").
+				Placeholder("model-1, model-2, model-3").
+				Value(&modelsStr).
+				Run()
+			models = splitTrim(modelsStr)
+			if len(models) == 0 {
+				printError(T("Minimal 1 model", "At least 1 model is required"))
+				return
+			}
 		}
-	} else {
-		fmt.Printf("\n  🤖 %d model ditemukan:\n\n", len(models))
+	}
+
+	// Select models with multi-select
+	if len(models) > 0 {
+		fmt.Printf(T("\n  🤖 %d model ditemukan:\n\n", "\n  🤖 %d models found:\n\n"), len(models))
 
 		selectedModels := make([]string, 0)
 		modelOptions := make([]huh.Option[string], len(models))
@@ -469,7 +549,7 @@ func addCustomProvider(cfg *config.Config) {
 		}
 
 		huh.NewMultiSelect[string]().
-			Title("Pilih model (space untuk select, enter untuk confirm)").
+			Title(T("Pilih model (space untuk select, enter untuk confirm)", "Select models (space to select, enter to confirm)")).
 			Options(modelOptions...).
 			Value(&selectedModels).
 			Run()
@@ -478,20 +558,21 @@ func addCustomProvider(cfg *config.Config) {
 			selectedModels = models
 		}
 
-		selectedModels = testModelsBeforeAdd(baseURL, apiKey, providerType, selectedModels)
+		selectedModels = testModelsBeforeAdd(effectiveBaseURL, apiKey, providerType, selectedModels)
 		if len(selectedModels) == 0 {
-			printInfo("Tidak ada model ditambahkan")
+			printInfo(T("Tidak ada model ditambahkan", "No models added"))
 			return
 		}
 		models = selectedModels
 	}
 
 	p := config.ProviderConfig{
-		Name:    name,
-		Type:    providerType,
-		BaseURL: baseURL,
-		APIKeys: []string{apiKey},
-		Models:  models,
+		Name:      name,
+		Type:      providerType,
+		BaseURL:   baseURL,
+		AccountID: accountID,
+		APIKeys:   []string{apiKey},
+		Models:    models,
 	}
 
 	if err := cfg.AddProvider(p); err != nil {
@@ -500,7 +581,7 @@ func addCustomProvider(cfg *config.Config) {
 	}
 
 	createModelRoutes(cfg, name, models)
-	printSuccess(fmt.Sprintf("Provider '%s' ditambahkan dengan %d model", name, len(models)))
+	printSuccess(fmt.Sprintf(T("Provider '%s' ditambahkan dengan %d model", "Provider '%s' added with %d models"), name, len(models)))
 }
 
 // ==================== Providers CRUD ====================
@@ -508,21 +589,21 @@ func addCustomProvider(cfg *config.Config) {
 func menuProviders(cfg *config.Config, cfgPath string) {
 	for {
 		clearScreen()
-		printSectionTitle("📡", "Kelola Provider")
+		printSectionTitle("📡", T("Kelola Provider", "Manage Providers"))
 
 		var choice string
 		err := huh.NewSelect[string]().
 			Title("").
 			Options(
-				huh.NewOption("📋  Lihat semua provider", "list"),
-				huh.NewOption("➕  Tambah provider (template)", "add_tmpl"),
-				huh.NewOption("➕  Tambah provider (custom)", "add_custom"),
-				huh.NewOption("✏️   Edit provider", "edit"),
-				huh.NewOption("🔑  Tambah API key ke provider", "add_key"),
-				huh.NewOption("🗑️   Hapus API key dari provider", "delete_key"),
-				huh.NewOption("➕  Tambah model ke provider", "add_model"),
-				huh.NewOption("🗑️   Hapus provider", "delete"),
-				huh.NewOption("←  Kembali", "back"),
+				huh.NewOption(T("📋  Lihat semua provider", "📋  View all providers"), "list"),
+				huh.NewOption(T("➕  Tambah provider (template)", "➕  Add provider (template)"), "add_tmpl"),
+				huh.NewOption(T("➕  Tambah provider (custom)", "➕  Add provider (custom)"), "add_custom"),
+				huh.NewOption(T("✏️   Edit provider", "✏️   Edit provider"), "edit"),
+				huh.NewOption(T("🔑  Tambah API key ke provider", "🔑  Add API key to provider"), "add_key"),
+				huh.NewOption(T("🗑️   Hapus API key dari provider", "🗑️   Delete API key from provider"), "delete_key"),
+				huh.NewOption(T("➕  Tambah model ke provider", "➕  Add model to provider"), "add_model"),
+				huh.NewOption(T("🗑️   Hapus provider", "🗑️   Delete provider"), "delete"),
+				huh.NewOption(T("←  Kembali", "←  Back"), "back"),
 			).
 			Value(&choice).
 			Run()

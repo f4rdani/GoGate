@@ -21,16 +21,16 @@ import (
 func menuTest(cfg *config.Config, cfgPath string) {
 	for {
 		clearScreen()
-		printSectionTitle("🧪", "Diagnostik & Testing")
+		printSectionTitle("🧪", T("Diagnostik & Testing", "Diagnostics & Testing"))
 
 		var choice string
 		err := huh.NewSelect[string]().
 			Title("").
 			Options(
-				huh.NewOption("🔑  Test API Key (verifikasi)", "testkey"),
-				huh.NewOption("🤖  Test Model (kirim request)", "testmodel"),
-				huh.NewOption("🔄  Sync Models (re-fetch dari API)", "sync"),
-				huh.NewOption("←  Kembali", "back"),
+				huh.NewOption(T("🔑  Test API Key (verifikasi)", "🔑  Test API Key (verify)"), "testkey"),
+				huh.NewOption(T("🤖  Test Model (kirim request)", "🤖  Test Model (send request)"), "testmodel"),
+				huh.NewOption(T("🔄  Sync Models (re-fetch dari API)", "🔄  Sync Models (re-fetch from API)"), "sync"),
+				huh.NewOption(T("←  Kembali", "←  Back"), "back"),
 			).
 			Value(&choice).
 			Run()

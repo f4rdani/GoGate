@@ -22,6 +22,7 @@ func Run(cfgPath string) {
 		fmt.Println(WarningStyle.Render(fmt.Sprintf("  ⚠  Config belum ada atau error: %v", err)))
 		cfg = defaultConfig()
 	}
+	setLanguage(cfg.Server.Language)
 
 	for {
 		clearScreen()
@@ -29,21 +30,21 @@ func Run(cfgPath string) {
 
 		var choice string
 		menu := huh.NewSelect[string]().
-			Title("  Pilih Menu").
+			Title(T("  Pilih Menu", "  Choose Menu")).
 			Options(
-				huh.NewOption("🤖  Manajemen AI (Provider/Model/Combo)", "ai"),
-				huh.NewOption("⚙️   Manajemen Server", "server"),
-				huh.NewOption("🔑  Manajemen API Key (User/Client)", "keys"),
-				huh.NewOption("🧪  Diagnostik & Testing", "diag"),
-				huh.NewOption("📋  Lihat Summary", "summary"),
-				huh.NewOption("💾  Simpan & Keluar", "quit"),
+				huh.NewOption(T("🤖  Manajemen AI (Provider/Model/Combo)", "🤖  AI Management (Provider/Model/Combo)"), "ai"),
+				huh.NewOption(T("⚙️   Manajemen Server", "⚙️   Server Management"), "server"),
+				huh.NewOption(T("🔑  Manajemen API Key (User/Client)", "🔑  API Key Management (User/Client)"), "keys"),
+				huh.NewOption(T("🧪  Diagnostik & Testing", "🧪  Diagnostics & Testing"), "diag"),
+				huh.NewOption(T("📋  Lihat Summary", "📋  View Summary"), "summary"),
+				huh.NewOption(T("💾  Simpan & Keluar", "💾  Save & Exit"), "quit"),
 			).
 			Value(&choice)
 
 		if err := menu.Run(); err != nil {
 			if errors.Is(err, tea.ErrProgramKilled) || errors.Is(err, huh.ErrUserAborted) {
 				safeSave(cfg, cfgPath)
-				fmt.Println(SuccessStyle.Render("\n  👋 Sampai jumpa!"))
+				fmt.Println(SuccessStyle.Render(T("\n  👋 Sampai jumpa!", "\n  👋 Goodbye!")))
 				return
 			}
 			continue
@@ -64,7 +65,7 @@ func Run(cfgPath string) {
 			pause()
 		case "quit":
 			safeSave(cfg, cfgPath)
-			fmt.Println(SuccessStyle.Render("\n  👋 Sampai jumpa!"))
+			fmt.Println(SuccessStyle.Render(T("\n  👋 Sampai jumpa!", "\n  👋 Goodbye!")))
 			return
 		}
 	}
@@ -88,7 +89,7 @@ func defaultConfig() *config.Config {
 // ==================== Summary ====================
 
 func showSummary(cfg *config.Config) {
-	printSectionTitle("📋", "Ringkasan Konfigurasi")
+	printSectionTitle("📋", T("Ringkasan Konfigurasi", "Configuration Summary"))
 
 	// Server info
 	printKeyValue("🌐  Server:", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port))
@@ -195,7 +196,7 @@ func pause() {
 	fmt.Println()
 	huh.NewInput().
 		Title("").
-		Description("Tekan Enter untuk lanjut...").
+		Description(T("Tekan Enter untuk lanjut...", "Press Enter to continue...")).
 		Value(new(string)).
 		Run()
 }

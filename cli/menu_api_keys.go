@@ -18,18 +18,18 @@ import (
 func menuAPIKeys(cfg *config.Config, cfgPath string) {
 	for {
 		clearScreen()
-		printSectionTitle("🔑", "Manajemen API Key (User/Client)")
+		printSectionTitle("🔑", T("Manajemen API Key (User/Client)", "API Key Management (User/Client)"))
 
 		var choice string
 		err := huh.NewSelect[string]().
 			Title("").
 			Options(
-				huh.NewOption("📋  Lihat semua API key", "list"),
-				huh.NewOption("➕  Buat API key baru", "add"),
-				huh.NewOption("✏️   Edit API key (model/rate limit)", "edit"),
-				huh.NewOption("🔌  Enable/Disable API key", "toggle_enable"),
-				huh.NewOption("🗑️   Hapus API key", "delete"),
-				huh.NewOption("←  Kembali", "back"),
+				huh.NewOption(T("📋  Lihat semua API key", "📋  View all API keys"), "list"),
+				huh.NewOption(T("➕  Buat API key baru", "➕  Create new API key"), "add"),
+				huh.NewOption(T("✏️   Edit API key (model/rate limit)", "✏️   Edit API key (models/rate limit)"), "edit"),
+				huh.NewOption(T("🔌  Enable/Disable API key", "🔌  Enable/Disable API key"), "toggle_enable"),
+				huh.NewOption(T("🗑️   Hapus API key", "🗑️   Delete API key"), "delete"),
+				huh.NewOption(T("←  Kembali", "←  Back"), "back"),
 			).
 			Value(&choice).
 			Run()

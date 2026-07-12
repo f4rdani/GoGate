@@ -227,6 +227,15 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		keys[i] = &UpstreamKey{Key: k}
 	}
 
+	if cfg.Type == "cloudflare" {
+		if cfg.AccountID == "" {
+			return nil, fmt.Errorf("provider %s: cloudflare requires account_id", cfg.Name)
+		}
+		if cfg.BaseURL == "" {
+			cfg.BaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", cfg.AccountID)
+		}
+	}
+
 	base := BaseProvider{
 		name:         cfg.Name,
 		providerType: cfg.Type,
@@ -240,6 +249,8 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 
 	switch cfg.Type {
 	case "openai":
+		return NewOpenAIProvider(&base), nil
+	case "cloudflare":
 		return NewOpenAIProvider(&base), nil
 	case "cohere":
 		return NewOpenAIProvider(&base), nil
