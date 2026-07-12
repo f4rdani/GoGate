@@ -335,11 +335,11 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *models.Chat
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
-		keyMasked = apiKey[:8] + "..."
+		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	} else if len(apiKey) > 0 {
-		keyMasked = apiKey
+		keyMasked = "****"
 	}
-	slog.Info(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
+	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
 	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
 
 	resp, err := a.client.Do(httpReq)
@@ -405,11 +405,11 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
-		keyMasked = apiKey[:8] + "..."
+		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	} else if len(apiKey) > 0 {
-		keyMasked = apiKey
+		keyMasked = "****"
 	}
-	slog.Info(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
+	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
 	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
 
 	resp, err := a.client.Do(httpReq)

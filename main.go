@@ -72,7 +72,7 @@ func runServerWithCLI(configPath string) {
 	}
 
 	// Setup logging to file (so it doesn't corrupt the TUI)
-	logFile, err := os.OpenFile("aigateway.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFile, err := os.OpenFile("aigateway.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {
 		fmt.Printf("Failed to open log file: %v\n", err)
 		os.Exit(1)

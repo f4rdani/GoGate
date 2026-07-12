@@ -2,6 +2,7 @@ package playground
 
 import (
 	_ "embed"
+	"html"
 	"net/http"
 	"strings"
 )
@@ -17,6 +18,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = "localhost:8080"
 	}
+	host = html.EscapeString(host)
 	// Use ws protocol for the same host
 	html := strings.ReplaceAll(playgroundHTML, "{{HOST}}", host)
 	w.Write([]byte(html))

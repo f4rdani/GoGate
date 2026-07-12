@@ -2,7 +2,6 @@ package admin
 
 import (
 	_ "embed"
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -19,20 +18,20 @@ func (a *AdminHandler) ServeDashboard(w http.ResponseWriter, r *http.Request) {
 	var passBox string
 	var banner string
 
-	if secret == "123456" || secret == "change-me-to-a-strong-secret" {
-		passBox = fmt.Sprintf(`
+	if secret == "123456" || secret == "change-me-to-a-strong-secret" || secret == "1111qqqq" {
+		passBox = `
     <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:var(--radius);padding:.6rem .8rem;margin-bottom:1rem;font-size:.8rem;display:flex;align-items:center;gap:.5rem">
-      <span style="color:#ef4444;font-weight:600">⚠️ Default Password:</span>
-      <code style="color:var(--cyan);font-weight:600;font-family:'Cascadia Code','Fira Code',monospace">%s</code>
-    </div>`, secret)
+      <span style="color:#ef4444;font-weight:600">⚠️ Security Warning:</span>
+      <span style="color:var(--text2)">Your admin secret is still default. Change it immediately!</span>
+    </div>`
 
-		banner = fmt.Sprintf(`
+		banner = `
   <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);color:#f87171;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:0.75rem;font-size:0.9rem">
     <span style="font-size:1.25rem">⚠️</span>
     <div>
-      <strong style="color:#ef4444">Security Warning:</strong> You are currently using the default admin password <code style="background:rgba(0,0,0,0.2);padding:0.1rem 0.3rem;border-radius:3px;color:var(--cyan)">%s</code>. Please change it immediately by clicking the <strong>🔑 Change Password</strong> button in the top right corner to secure your gateway!
+      <strong style="color:#ef4444">Security Warning:</strong> You are currently using a default admin password. Please change it immediately by clicking the <strong>🔑 Change Password</strong> button in the top right corner to secure your gateway!
     </div>
-  </div>`, secret)
+  </div>`
 	}
 
 	html := strings.ReplaceAll(dashboardHTML, "{{DEFAULT_PASS_BOX}}", passBox)

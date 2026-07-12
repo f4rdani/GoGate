@@ -58,11 +58,11 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
-		keyMasked = apiKey[:8] + "..."
+		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	} else if len(apiKey) > 0 {
-		keyMasked = apiKey
+		keyMasked = "****"
 	}
-	slog.Info(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
+	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
 	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
 
 	resp, err := o.client.Do(httpReq)
@@ -133,11 +133,11 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
-		keyMasked = apiKey[:8] + "..."
+		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	} else if len(apiKey) > 0 {
-		keyMasked = apiKey
+		keyMasked = "****"
 	}
-	slog.Info(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
+	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
 	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
 
 	resp, err := o.client.Do(httpReq)
@@ -222,11 +222,11 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
-		keyMasked = apiKey[:8] + "..."
+		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
 	} else if len(apiKey) > 0 {
-		keyMasked = apiKey
+		keyMasked = "****"
 	}
-	slog.Info(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
+	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
 	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
 
 	resp, err := o.client.Do(httpReq)
