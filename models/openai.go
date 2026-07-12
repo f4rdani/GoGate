@@ -45,6 +45,31 @@ func (m *Message) ContentString() string {
 	return string(m.Content)
 }
 
+// HasImage returns true if the message content contains image data (e.g., type is image_url).
+func (m *Message) HasImage() bool {
+	if len(m.Content) == 0 {
+		return false
+	}
+	// Attempt to unmarshal as array of content parts
+	var parts []map[string]interface{}
+	if err := json.Unmarshal(m.Content, &parts); err == nil {
+		for _, part := range parts {
+			if t, ok := part["type"].(string); ok && (t == "image_url" || t == "image") {
+				return true
+			}
+		}
+		return false
+	}
+	// Try single object
+	var single map[string]interface{}
+	if err := json.Unmarshal(m.Content, &single); err == nil {
+		if t, ok := single["type"].(string); ok && (t == "image_url" || t == "image") {
+			return true
+		}
+	}
+	return false
+}
+
 // ==================== Response Types ====================
 
 // ChatCompletionResponse represents an OpenAI chat completion response.

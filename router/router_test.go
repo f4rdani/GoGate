@@ -579,5 +579,54 @@ func TestEmbeddingsRouting(t *testing.T) {
 	}
 }
 
+func TestSmartVisionRouting(t *testing.T) {
+	pText := newMockProvider("openai-text")
+	pVision := newMockProvider("openai-vision")
+
+	registry := provider.NewRegistry()
+	registry.Register("openai-text", pText)
+	registry.Register("openai-vision", pVision)
+
+	cfg := &config.Config{
+		Models: []config.ModelConfig{
+			{Name: "text-model", Provider: "openai-text", Model: "gpt-3.5-turbo", Vision: false},
+			{Name: "vision-model", Provider: "openai-vision", Model: "gpt-4o", Vision: true},
+		},
+	}
+
+	r, err := NewRouter(cfg, registry)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	// Request with image targeting text-model
+	req := &models.ChatCompletionRequest{
+		Model: "text-model",
+		Messages: []models.Message{
+			{
+				Role:    "user",
+				Content: []byte(`[{"type": "image_url", "image_url": {"url": "data:image/png;base64,123"}}]`),
+			},
+		},
+	}
+
+	// Route it
+	resp, err := r.ChatCompletion(context.Background(), "text-model", req)
+	if err != nil {
+		t.Fatalf("ChatCompletion failed: %v", err)
+	}
+
+	// Verify that it routed to the vision-model instead of the text-model!
+	if pVision.callCount.Load() != 1 {
+		t.Errorf("expected 1 call to vision provider, got %d", pVision.callCount.Load())
+	}
+	if pText.callCount.Load() != 0 {
+		t.Errorf("expected 0 calls to text provider, got %d", pText.callCount.Load())
+	}
+	if resp.Model != "gpt-4o" {
+		t.Errorf("expected response model gpt-4o, got %s", resp.Model)
+	}
+}
+
 // ServeHTTP implements http.ResponseWriter for the mock provider's stream test.
 // This is already handled by httptest.ResponseRecorder in tests.

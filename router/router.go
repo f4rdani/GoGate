@@ -54,6 +54,7 @@ type Router struct {
 	routes   map[string]*ModelRoute
 	registry *provider.Registry
 	retryCfg RetryConfig
+	cfg      *config.Config
 }
 
 // NewRouter creates a Router from configuration.
@@ -61,6 +62,7 @@ func NewRouter(cfg *config.Config, registry *provider.Registry) (*Router, error)
 	r := &Router{
 		routes:   make(map[string]*ModelRoute),
 		registry: registry,
+		cfg:      cfg,
 		retryCfg: RetryConfig{
 			MaxRetries:     cfg.Retry.MaxRetries,
 			InitialBackoff: time.Duration(cfg.Retry.InitialBackoff) * time.Millisecond,
@@ -155,6 +157,55 @@ func (r *Router) GetModelNames() []string {
 	return names
 }
 
+// resolveSmartVisionRoute automatically redirects requests that contain an image
+// but target a non-vision model, to the first active model route that supports vision.
+func (r *Router) resolveSmartVisionRoute(modelName string, req *models.ChatCompletionRequest) string {
+	if req == nil || r.cfg == nil {
+		return modelName
+	}
+	hasImage := false
+	for _, msg := range req.Messages {
+		if msg.HasImage() {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		return modelName
+	}
+
+	isVisionModel := false
+	for _, m := range r.cfg.Models {
+		if m.Name == modelName && m.Vision {
+			isVisionModel = true
+			break
+		}
+	}
+	if isVisionModel {
+		return modelName
+	}
+
+	// Smart routing: search for the first active vision model route
+	var fallbackModel string
+	for _, m := range r.cfg.Models {
+		if m.Vision && !m.Disabled {
+			if _, exists := r.routes[m.Name]; exists {
+				fallbackModel = m.Name
+				break
+			}
+		}
+	}
+	if fallbackModel != "" {
+		slog.Warn("smart routing: requested model does not support vision but request contains an image, redirecting",
+			"from", modelName, "to", fallbackModel)
+		req.Model = fallbackModel
+		return fallbackModel
+	}
+
+	slog.Warn("smart routing: request contains an image and requested model does not support vision, but no active vision model is configured")
+	return modelName
+}
+
 // retryWithBackoff executes fn with exponential backoff on retryable errors.
 func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) error {
 	var lastErr error
@@ -202,6 +253,7 @@ func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) 
 
 // ChatCompletion routes a non-streaming chat completion request.
 func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
+	modelName = r.resolveSmartVisionRoute(modelName, req)
 	route, ok := r.routes[modelName]
 	if !ok {
 		// Dynamic prefix routing fallback
@@ -429,6 +481,7 @@ type HeaderWrittenChecker interface {
 
 // ChatCompletionStream routes a streaming chat completion request.
 func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error {
+	modelName = r.resolveSmartVisionRoute(modelName, req)
 	route, ok := r.routes[modelName]
 	if !ok {
 		// Dynamic prefix routing fallback
