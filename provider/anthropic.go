@@ -4,11 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,6 +29,138 @@ func NewAnthropicProvider(base *BaseProvider) *AnthropicProvider {
 	return &AnthropicProvider{BaseProvider: base}
 }
 
+// translateMessageContent translates OpenAI content parts to Anthropic content parts.
+// Specifically handles "image_url" conversion to Anthropic's "image" block format.
+func translateMessageContent(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+
+	// 1. Try to unmarshal as string first (standard text message)
+	var textStr string
+	if err := json.Unmarshal(raw, &textStr); err == nil {
+		return raw, nil // plain text string, no translation needed
+	}
+
+	// 2. Try to unmarshal as array of interfaces (multi-part content)
+	var parts []interface{}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return raw, nil // not an array, keep as is
+	}
+
+	translatedParts := make([]interface{}, 0, len(parts))
+	for _, part := range parts {
+		partMap, ok := part.(map[string]interface{})
+		if !ok {
+			translatedParts = append(translatedParts, part)
+			continue
+		}
+
+		partType, _ := partMap["type"].(string)
+		if partType == "image_url" {
+			imgURLObj, _ := partMap["image_url"].(map[string]interface{})
+			imgURL, _ := imgURLObj["url"].(string)
+
+			if strings.HasPrefix(imgURL, "data:image/") {
+				// Base64 Data URI: data:image/png;base64,iVBORw0KGgoAAAANS...
+				commaIdx := strings.Index(imgURL, ",")
+				if commaIdx != -1 {
+					prefix := imgURL[:commaIdx]
+					base64Data := imgURL[commaIdx+1:]
+					
+					// Extract media type from prefix (e.g. "data:image/png;base64")
+					mediaType := "image/jpeg" // default fallback
+					if semiIdx := strings.Index(prefix, ";"); semiIdx != -1 {
+						if colonIdx := strings.Index(prefix, ":"); colonIdx != -1 {
+							mediaType = prefix[colonIdx+1 : semiIdx]
+						}
+					}
+
+					translatedParts = append(translatedParts, map[string]interface{}{
+						"type": "image",
+						"source": map[string]interface{}{
+							"type":       "base64",
+							"media_type": mediaType,
+							"data":       base64Data,
+						},
+					})
+					continue
+				}
+			} else if strings.HasPrefix(imgURL, "http://") || strings.HasPrefix(imgURL, "https://") {
+				// Public URL: validate safety to prevent SSRF
+				if !isSafeURL(imgURL) {
+					slog.Warn("SSRF protection blocked image URL fetch", "url", imgURL)
+					continue
+				}
+
+				// Public URL: download and convert to base64
+				client := &http.Client{Timeout: 10 * time.Second}
+				resp, err := client.Get(imgURL)
+				if err == nil {
+					defer resp.Body.Close()
+					// Limit reading to 5MB to prevent memory exhaustion (OOM)
+					data, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+					if err == nil {
+						mediaType := resp.Header.Get("Content-Type")
+						if mediaType == "" {
+							mediaType = "image/jpeg"
+						}
+						// Strip parameters like charset from Content-Type if present
+						if idx := strings.Index(mediaType, ";"); idx != -1 {
+							mediaType = strings.TrimSpace(mediaType[:idx])
+						}
+
+						base64Data := base64.StdEncoding.EncodeToString(data)
+						translatedParts = append(translatedParts, map[string]interface{}{
+							"type": "image",
+							"source": map[string]interface{}{
+								"type":       "base64",
+								"media_type": mediaType,
+								"data":       base64Data,
+							},
+						})
+						continue
+					}
+				}
+				slog.Warn("failed to download image URL for Anthropic vision translation", "url", imgURL, "error", err)
+			}
+		}
+
+		// Keep any other parts (like type: "text") as they are
+		translatedParts = append(translatedParts, part)
+	}
+
+	result, err := json.Marshal(translatedParts)
+	if err != nil {
+		return raw, err
+	}
+	return json.RawMessage(result), nil
+}
+
+// isSafeURL checks if a URL is safe to download from (prevents SSRF).
+// It resolves the host's IP address and verifies it is not loopback, private, link-local, multicast, or unspecified.
+func isSafeURL(urlStr string) bool {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := u.Hostname()
+	// Resolve IP addresses
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return false
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsPrivate() {
+			return false
+		}
+	}
+	return true
+}
+
 // translateRequest converts an OpenAI-format request to Anthropic format.
 func (a *AnthropicProvider) translateRequest(req *models.ChatCompletionRequest) (*models.AnthropicRequest, error) {
 	anthReq := &models.AnthropicRequest{
@@ -39,9 +174,14 @@ func (a *AnthropicProvider) translateRequest(req *models.ChatCompletionRequest) 
 		if msg.Role == "system" {
 			systemParts = append(systemParts, msg.ContentString())
 		} else {
+			translatedContent, err := translateMessageContent(msg.Content)
+			if err != nil {
+				slog.Warn("failed to translate message content for vision/multi-part", "error", err)
+				translatedContent = msg.Content // fallback to raw
+			}
 			anthMsg := models.AnthropicMessage{
 				Role:    msg.Role,
-				Content: msg.Content,
+				Content: translatedContent,
 			}
 			anthReq.Messages = append(anthReq.Messages, anthMsg)
 		}
@@ -486,4 +626,9 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 	}
 
 	return scanner.Err()
+}
+
+// Embeddings is not supported by Anthropic.
+func (a *AnthropicProvider) Embeddings(ctx context.Context, req *models.EmbeddingsRequest) (*models.EmbeddingsResponse, error) {
+	return nil, fmt.Errorf("embeddings not supported by Anthropic")
 }

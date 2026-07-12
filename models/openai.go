@@ -127,3 +127,35 @@ type ErrorDetail struct {
 	Type    string `json:"type"`
 	Code    string `json:"code,omitempty"`
 }
+
+// ==================== Embeddings Types ====================
+
+// EmbeddingsRequest represents an OpenAI-compatible embeddings request.
+type EmbeddingsRequest struct {
+	Model          string      `json:"model"`
+	Input          interface{} `json:"input"` // string, []string, []int, or [][]int
+	User           string      `json:"user,omitempty"`
+	EncodingFormat string      `json:"encoding_format,omitempty"`
+	Dimensions     int         `json:"dimensions,omitempty"`
+}
+
+// EmbeddingsResponse represents an OpenAI embeddings response.
+type EmbeddingsResponse struct {
+	Object string          `json:"object"`
+	Data   []EmbeddingData `json:"data"`
+	Model  string          `json:"model"`
+	Usage  EmbeddingUsage  `json:"usage"`
+}
+
+// EmbeddingData represents a single embedding output vector.
+type EmbeddingData struct {
+	Object    string    `json:"object"`
+	Embedding []float32 `json:"embedding"`
+	Index     int       `json:"index"`
+}
+
+// EmbeddingUsage represents token usage for embeddings.
+type EmbeddingUsage struct {
+	PromptTokens int `json:"prompt_tokens"`
+	TotalTokens  int `json:"total_tokens"`
+}

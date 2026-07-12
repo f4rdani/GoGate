@@ -53,6 +53,8 @@ type Provider interface {
 	// ChatCompletionStream sends a streaming chat completion request.
 	// It writes SSE data directly to the ResponseWriter in OpenAI format.
 	ChatCompletionStream(ctx context.Context, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error
+	// Embeddings sends a non-streaming embeddings request.
+	Embeddings(ctx context.Context, req *models.EmbeddingsRequest) (*models.EmbeddingsResponse, error)
 	// IsHealthy returns true if the provider is currently healthy.
 	IsHealthy() bool
 	// SetHealthy sets the health status of the provider.

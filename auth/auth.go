@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,6 +65,12 @@ func (k *KeyInfo) CheckRateLimit() bool {
 	return count <= int64(k.RateLimit)
 }
 
+// HashKey returns the SHA-256 hash of an API key as a hex string.
+func HashKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
+
 // KeyStore manages API keys with thread-safe access.
 type KeyStore struct {
 	mu   sync.RWMutex
@@ -75,7 +83,8 @@ func NewKeyStore(configs []config.APIKeyConfig) *KeyStore {
 		keys: make(map[string]*KeyInfo),
 	}
 	for _, cfg := range configs {
-		store.keys[cfg.Key] = &KeyInfo{
+		h := HashKey(cfg.Key)
+		store.keys[h] = &KeyInfo{
 			Key:           cfg.Key,
 			Name:          cfg.Name,
 			AllowedModels: cfg.AllowedModels,
@@ -91,7 +100,8 @@ func NewKeyStore(configs []config.APIKeyConfig) *KeyStore {
 func (s *KeyStore) Validate(key string) (*KeyInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	info, ok := s.keys[key]
+	h := HashKey(key)
+	info, ok := s.keys[h]
 	if ok && info.Disabled {
 		return nil, false
 	}
@@ -112,16 +122,17 @@ func (s *KeyStore) AddKey(name string, allowedModels []string, rateLimit int, to
 		RateLimit:     rateLimit,
 		TokenSaver:    tokenSaver,
 	}
-	s.keys[key] = info
+	h := HashKey(key)
+	s.keys[h] = info
 	return info
 }
 
-// DeleteKey removes an API key. Returns true if the key existed.
-func (s *KeyStore) DeleteKey(key string) bool {
+// DeleteKey removes an API key by its hash. Returns true if the key existed.
+func (s *KeyStore) DeleteKey(hash string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.keys[key]; ok {
-		delete(s.keys, key)
+	if _, ok := s.keys[hash]; ok {
+		delete(s.keys, hash)
 		return true
 	}
 	return false
@@ -139,11 +150,11 @@ func (s *KeyStore) ListKeys() []*KeyInfo {
 	return result
 }
 
-// UpdateKey updates an existing API key's metadata. Returns true if the key existed.
-func (s *KeyStore) UpdateKey(key string, name string, allowedModels []string, rateLimit int, tokenSaver *bool, disabled bool) bool {
+// UpdateKey updates an existing API key's metadata by its hash. Returns true if the key existed.
+func (s *KeyStore) UpdateKey(hash string, name string, allowedModels []string, rateLimit int, tokenSaver *bool, disabled bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info, ok := s.keys[key]
+	info, ok := s.keys[hash]
 	if !ok {
 		return false
 	}

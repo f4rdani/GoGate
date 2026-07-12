@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -94,6 +95,22 @@ func fetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 	return uniq, nil
 }
 
+// isChatModel returns true if the model ID is likely to support chat completions.
+// Excludes audio, embedding, image generation, and moderation models.
+func isChatModel(modelID string) bool {
+	m := strings.ToLower(modelID)
+	// Exclude known non-chat models
+	if strings.Contains(m, "embed") ||
+		strings.Contains(m, "whisper") ||
+		strings.Contains(m, "tts") ||
+		strings.Contains(m, "dall-e") ||
+		strings.Contains(m, "moderation") ||
+		strings.Contains(m, "audio") {
+		return false
+	}
+	return true
+}
+
 // testAPIKey verifies if an API key is valid by calling the /models endpoint AND performing a 1-token test completion call.
 // Returns (ok, modelCount, error).
 func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
@@ -115,11 +132,22 @@ func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
 		return false, 0, fmt.Errorf("provider tidak mengembalikan model apa pun")
 	}
 
-	// Pick the first model and do a real 1-token completion test to enforce API key verification cheaply
-	modelToTest := models[0]
+	// Pick the first chat-compatible model to enforce API key verification cheaply
+	var modelToTest string
+	for _, m := range models {
+		if isChatModel(m) {
+			modelToTest = m
+			break
+		}
+	}
+	if modelToTest == "" {
+		// Fallback to the first model if no model is explicitly detected as chat
+		modelToTest = models[0]
+	}
+
 	testErr := testAPIKeyConnection(baseURL, apiKey, modelToTest, providerType)
 	if testErr != nil {
-		return false, 0, fmt.Errorf("kunci API salah / tidak memiliki akses (chat test failed: %v)", testErr)
+		return false, 0, fmt.Errorf("kunci API salah / tidak memiliki akses (chat test model '%s' failed: %v)", modelToTest, testErr)
 	}
 
 	return true, len(models), nil
@@ -140,9 +168,27 @@ func isReasoningModelID(modelID string) bool {
 		strings.Contains(m, "north-mini")
 }
 
+// isVisionModelID checks if the model ID matches common vision keywords.
+func isVisionModelID(modelID string) bool {
+	m := strings.ToLower(modelID)
+	return strings.Contains(m, "vision") ||
+		strings.Contains(m, "pixtral") ||
+		strings.Contains(m, "vl") || // like Llama-3.2-11B-Vision-Instruct or Qwen2-VL
+		strings.Contains(m, "gpt-4o") || // gpt-4o and gpt-4o-mini support vision
+		strings.Contains(m, "claude-3-5-sonnet") ||
+		strings.Contains(m, "claude-3-5-haiku") ||
+		strings.Contains(m, "claude-3-opus") ||
+		strings.Contains(m, "claude-3-sonnet") ||
+		strings.Contains(m, "gemini-1.5") ||
+		strings.Contains(m, "gemini-2.5") ||
+		strings.Contains(m, "gemini-3.5") ||
+		strings.Contains(m, "gemini-flash")
+}
+
 // testModel sends a minimal chat completion request to verify the model works.
-// Returns (response_text, latency_ms, is_reasoning, error).
-func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bool, error) {
+// If the model supports vision, it will perform a vision test.
+// Returns (response_text, latency_ms, is_reasoning, is_vision, error).
+func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bool, bool, error) {
 	url := strings.TrimRight(baseURL, "/")
 
 	// Anthropic uses different endpoint and format
@@ -152,36 +198,61 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 
 	url += "/chat/completions"
 
-	reqBody := map[string]interface{}{
-		"model":    modelID,
-		"messages": []map[string]string{{"role": "user", "content": "Say 'OK' and nothing else."}},
+	isVision := isVisionModelID(modelID)
+	response, latency, isReasoning, successVision, err := runActualModelTest(url, apiKey, modelID, providerType, isVision)
+	if err != nil && isVision {
+		slog.Warn("vision test failed, falling back to text test", "model", modelID, "error", err)
+		return runActualModelTest(url, apiKey, modelID, providerType, false)
 	}
+	return response, latency, isReasoning, successVision, err
+}
 
-	mLower := strings.ToLower(modelID)
-	// Reasoning models require max_completion_tokens instead of max_tokens.
-	// Some also support reasoning_effort parameter.
-	isOpenAIReasoning := strings.Contains(mLower, "o1") ||
-		strings.Contains(mLower, "o3") ||
-		strings.Contains(mLower, "gpt-oss") ||
-		strings.Contains(mLower, "qwen3") ||
-		strings.Contains(mLower, "qwq") ||
-		strings.Contains(mLower, "command-a") ||
-		strings.Contains(mLower, "north-mini")
+func runActualModelTest(url, apiKey, modelID, providerType string, tryVision bool) (string, int64, bool, bool, error) {
+	var reqBody map[string]interface{}
 
-	if isOpenAIReasoning {
-		reqBody["max_completion_tokens"] = 150
+	if tryVision {
+		reqBody = map[string]interface{}{
+			"model": modelID,
+			"messages": []map[string]interface{}{
+				{
+					"role": "user",
+					"content": []map[string]interface{}{
+						{"type": "text", "text": "Say 'OK'"},
+						{
+							"type": "image_url",
+							"image_url": map[string]string{
+								"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+							},
+						},
+					},
+				},
+			},
+			"max_tokens": 10,
+		}
 	} else {
-		reqBody["max_tokens"] = 10
+		reqBody = map[string]interface{}{
+			"model":    modelID,
+			"messages": []map[string]string{{"role": "user", "content": "Say 'OK' and nothing else."}},
+		}
+		mLower := strings.ToLower(modelID)
+		if strings.Contains(mLower, "o1") || strings.Contains(mLower, "o3") ||
+			strings.Contains(mLower, "gpt-oss") || strings.Contains(mLower, "qwen3") ||
+			strings.Contains(mLower, "qwq") || strings.Contains(mLower, "command-a") ||
+			strings.Contains(mLower, "north-mini") {
+			reqBody["max_completion_tokens"] = 150
+		} else {
+			reqBody["max_tokens"] = 10
+		}
 	}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", 0, false, fmt.Errorf("marshal request: %w", err)
+		return "", 0, false, false, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return "", 0, false, fmt.Errorf("create request: %w", err)
+		return "", 0, false, false, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -192,36 +263,35 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", latency, false, fmt.Errorf("request gagal: %w", err)
+		return "", latency, false, false, fmt.Errorf("request gagal: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", latency, false, fmt.Errorf("read response: %w", err)
+		return "", latency, false, false, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", latency, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+		return "", latency, false, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
 	}
 
-	// Parse OpenAI response dynamically (content can be a string or array of blocks)
+	// Parse OpenAI response dynamically
 	type OpenAIMessage struct {
 		ContentRaw       json.RawMessage `json:"content"`
 		ReasoningContent string          `json:"reasoning_content"`
 	}
-
 	var chatResp struct {
 		Choices []struct {
 			Message OpenAIMessage `json:"message"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return "", latency, false, fmt.Errorf("parse response: %w", err)
+		return "", latency, false, false, fmt.Errorf("parse response: %w", err)
 	}
 
 	if len(chatResp.Choices) == 0 {
-		return "(empty response)", latency, isReasoningModelID(modelID), nil
+		return "(empty response)", latency, isReasoningModelID(modelID), tryVision, nil
 	}
 
 	msg := chatResp.Choices[0].Message
@@ -229,7 +299,6 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 	isReasoning := msg.ReasoningContent != "" || isReasoningModelID(modelID)
 
 	if len(msg.ContentRaw) > 0 {
-		// Try string unmarshal first
 		var strVal string
 		if err := json.Unmarshal(msg.ContentRaw, &strVal); err == nil {
 			contentText = strVal
@@ -237,16 +306,9 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 			type ContentBlock struct {
 				Type        string          `json:"type"`
 				Text        string          `json:"text"`
-				Thinking    []struct {
-					Type string `json:"type"`
-					Text string `json:"text"`
-				} `json:"thinking"`
 				ThinkingRaw json.RawMessage `json:"thinking"`
 			}
-
 			var arrayVal []ContentBlock
-			var stringArray []string
-
 			if err := json.Unmarshal(msg.ContentRaw, &arrayVal); err == nil {
 				var texts []string
 				var thinkingTexts []string
@@ -255,18 +317,8 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 						isReasoning = true
 						if len(block.ThinkingRaw) > 0 {
 							var thinkStr string
-							if err := json.Unmarshal(block.ThinkingRaw, &thinkStr); err == nil {
-								if thinkStr != "" {
-									thinkingTexts = append(thinkingTexts, thinkStr)
-								}
-							}
-						}
-					}
-					if len(block.Thinking) > 0 {
-						isReasoning = true
-						for _, tBlock := range block.Thinking {
-							if tBlock.Text != "" {
-								thinkingTexts = append(thinkingTexts, tBlock.Text)
+							if err := json.Unmarshal(block.ThinkingRaw, &thinkStr); err == nil && thinkStr != "" {
+								thinkingTexts = append(thinkingTexts, thinkStr)
 							}
 						}
 					}
@@ -276,80 +328,89 @@ func testModel(baseURL, apiKey, modelID, providerType string) (string, int64, bo
 				}
 				contentText = strings.Join(texts, " ")
 				if len(thinkingTexts) > 0 && contentText == "" {
-					// Fallback to thinking text if no final text was generated yet
 					contentText = "(thinking: " + strings.Join(thinkingTexts, " ") + ")"
 				}
-			} else if err := json.Unmarshal(msg.ContentRaw, &stringArray); err == nil {
-				// Try array of strings format: ["..."]
-				contentText = strings.Join(stringArray, " ")
 			} else {
-				// Fallback to raw string
 				contentText = string(msg.ContentRaw)
 			}
 		}
 	}
 
-	// Double-check: if still empty, use the raw JSON string as fallback
-	if contentText == "" && len(msg.ContentRaw) > 0 {
-		raw := strings.TrimSpace(string(msg.ContentRaw))
-		// Skip empty JSON strings like `""` or `null`
-		if raw != `""` && raw != "null" {
-			contentText = raw
-		}
-	}
-
-	// If content is still empty, fallback to reasoning_content preview
 	if contentText == "" && msg.ReasoningContent != "" {
 		contentText = "(thinking: " + truncate(msg.ReasoningContent, 80) + ")"
 		isReasoning = true
 	}
 
-	// Final fallback if everything is empty
 	if contentText == "" {
-		contentText = "(empty — model only produced internal reasoning)"
-		isReasoning = true
+		contentText = "(empty response)"
 	}
 
-	// Format <think> tags if present
 	formattedContent, hasThinkTags := formatThinkTags(contentText)
 	if hasThinkTags {
 		isReasoning = true
 		contentText = formattedContent
 	}
 
-	return strings.TrimSpace(contentText), latency, isReasoning, nil
+	return strings.TrimSpace(contentText), latency, isReasoning, tryVision, nil
 }
 
 // testModelAnthropic handles testing for Anthropic's different API format.
-// Returns (response_text, latency_ms, is_reasoning, error).
-func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, error) {
+func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, bool, error) {
 	url := baseURL + "/v1/messages"
+	isVision := isVisionModelID(modelID)
+	response, latency, isReasoning, successVision, err := runActualAnthropicTest(url, apiKey, modelID, isVision)
+	if err != nil && isVision {
+		slog.Warn("anthropic vision test failed, falling back to text test", "model", modelID, "error", err)
+		return runActualAnthropicTest(url, apiKey, modelID, false)
+	}
+	return response, latency, isReasoning, successVision, err
+}
 
+func runActualAnthropicTest(url, apiKey, modelID string, tryVision bool) (string, int64, bool, bool, error) {
 	reqBody := map[string]interface{}{
-		"model":    modelID,
-		"messages": []map[string]string{{"role": "user", "content": "Say 'OK' and nothing else."}},
+		"model": modelID,
 	}
 
-	mLower := strings.ToLower(modelID)
-	// Anthropic Claude 3.7 supports the thinking parameter to enable reasoning.
-	if strings.Contains(mLower, "3-7") || strings.Contains(mLower, "3.7") {
-		reqBody["max_tokens"] = 150
-		reqBody["thinking"] = map[string]interface{}{
-			"type":          "enabled",
-			"budget_tokens": 100,
+	if tryVision {
+		reqBody["messages"] = []map[string]interface{}{
+			{
+				"role": "user",
+				"content": []map[string]interface{}{
+					{"type": "text", "text": "Say 'OK'"},
+					{
+						"type": "image",
+						"source": map[string]interface{}{
+							"type":       "base64",
+							"media_type": "image/png",
+							"data":       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+						},
+					},
+				},
+			},
 		}
-	} else {
 		reqBody["max_tokens"] = 10
+	} else {
+		reqBody["messages"] = []map[string]string{{"role": "user", "content": "Say 'OK' and nothing else."}}
+		mLower := strings.ToLower(modelID)
+		if strings.Contains(mLower, "3-7") || strings.Contains(mLower, "3.7") {
+			reqBody["max_tokens"] = 150
+			reqBody["thinking"] = map[string]interface{}{
+				"type":          "enabled",
+				"budget_tokens": 100,
+			}
+		} else {
+			reqBody["max_tokens"] = 10
+		}
 	}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", 0, false, fmt.Errorf("marshal request: %w", err)
+		return "", 0, false, false, fmt.Errorf("marshal request: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return "", 0, false, fmt.Errorf("create request: %w", err)
+		return "", 0, false, false, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -361,17 +422,17 @@ func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, e
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", latency, false, fmt.Errorf("request gagal: %w", err)
+		return "", latency, false, false, fmt.Errorf("request gagal: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", latency, false, fmt.Errorf("read response: %w", err)
+		return "", latency, false, false, fmt.Errorf("read response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", latency, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
+		return "", latency, false, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 300))
 	}
 
 	var anthResp struct {
@@ -382,7 +443,7 @@ func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, e
 		} `json:"content"`
 	}
 	if err := json.Unmarshal(respBody, &anthResp); err != nil {
-		return "", latency, false, fmt.Errorf("parse response: %w", err)
+		return "", latency, false, false, fmt.Errorf("parse response: %w", err)
 	}
 
 	isReasoning := isReasoningModelID(modelID)
@@ -408,7 +469,7 @@ func testModelAnthropic(baseURL, apiKey, modelID string) (string, int64, bool, e
 		responseText = formattedContent
 	}
 
-	return responseText, latency, isReasoning, nil
+	return responseText, latency, isReasoning, tryVision, nil
 }
 
 func truncate(s string, maxLen int) string {

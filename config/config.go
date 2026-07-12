@@ -71,6 +71,7 @@ type ModelConfig struct {
 	Strategy  string          `yaml:"strategy,omitempty" json:"strategy,omitempty"`  // "round-robin" or "fallback"
 	Backends  []BackendConfig `yaml:"backends,omitempty" json:"backends,omitempty"`  // for combo models
 	Reasoning bool            `yaml:"reasoning,omitempty" json:"reasoning,omitempty"` // indicates if model supports reasoning (thinking process)
+	Vision    bool            `yaml:"vision,omitempty" json:"vision,omitempty"`       // indicates if model supports vision (multimodal image input)
 	Disabled  bool            `yaml:"disabled,omitempty" json:"disabled,omitempty"` // indicates if model route is disabled
 }
 

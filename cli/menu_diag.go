@@ -239,7 +239,7 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 
 		spinnerErr := withSpinner("Testing oc/auto via AI Gateway...", func() error {
 			// Call the gateway directly using user's api key
-			response, latency, _, testErr = testGatewayModel(cfg, "oc/auto")
+			response, latency, _, _, testErr = testGatewayModel(cfg, "oc/auto")
 			return testErr
 		})
 
@@ -307,18 +307,23 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 		var response string
 		var latency int64
 		var isReasoning bool
+		var isVision bool
 		var testErr error
 
 		spinnerErr := withSpinner(fmt.Sprintf("Testing model '%s' di %s...", modelID, p.Name), func() error {
-			response, latency, isReasoning, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
+			response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
 			return testErr
 		})
 
 		if spinnerErr != nil {
 			printError(fmt.Sprintf("Model '%s' GAGAL: %v", modelID, spinnerErr))
 		} else {
-			if isReasoning {
+			if isReasoning && isVision {
+				fmt.Printf("  🧠👁️  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & REASONING & VISION "))
+			} else if isReasoning {
 				fmt.Printf("  🧠  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & REASONING "))
+			} else if isVision {
+				fmt.Printf("  👁️  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & VISION "))
 			} else {
 				fmt.Printf("  ✅  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI "))
 			}
@@ -467,10 +472,11 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 			var response string
 			var latency int64
 			var isReasoning bool
+			var isVision bool
 			var testErr error
 
 			spinnerErr := withSpinner(fmt.Sprintf("Testing model '%s'...", modelID), func() error {
-				response, latency, isReasoning, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
+				response, latency, isReasoning, isVision, testErr = testModel(p.BaseURL, p.APIKeys[0], modelID, p.Type)
 				return testErr
 			})
 
@@ -478,8 +484,12 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 				printError(fmt.Sprintf("Model '%s' GAGAL: %v", modelID, spinnerErr))
 			} else {
 				totalSuccess++
-				if isReasoning {
+				if isReasoning && isVision {
+					fmt.Printf("  🧠👁️  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & REASONING & VISION "))
+				} else if isReasoning {
 					fmt.Printf("  🧠  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & REASONING "))
+				} else if isVision {
+					fmt.Printf("  👁️  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & VISION "))
 				} else {
 					fmt.Printf("  ✅  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI "))
 				}
@@ -498,7 +508,7 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 }
 
 // testGatewayModel calls the local AI Gateway chat/completions endpoint to test a virtual model like oc/auto.
-func testGatewayModel(cfg *config.Config, modelID string) (response string, latencyMs int64, isReasoning bool, err error) {
+func testGatewayModel(cfg *config.Config, modelID string) (response string, latencyMs int64, isReasoning bool, isVision bool, err error) {
 	host := cfg.Server.Host
 	if host == "0.0.0.0" {
 		host = "localhost"
@@ -514,7 +524,7 @@ func testGatewayModel(cfg *config.Config, modelID string) (response string, late
 		}
 	}
 	if apiKey == "" {
-		return "", 0, false, fmt.Errorf("tidak ada API key gateway yang dikonfigurasi")
+		return "", 0, false, false, fmt.Errorf("tidak ada API key gateway yang dikonfigurasi")
 	}
 
 	body := map[string]interface{}{
@@ -529,7 +539,7 @@ func testGatewayModel(cfg *config.Config, modelID string) (response string, late
 	client := &http.Client{Timeout: 60 * time.Second}
 	req, err2 := http.NewRequest("POST", url, bytes.NewReader(body_bytes))
 	if err2 != nil {
-		return "", 0, false, err2
+		return "", 0, false, false, err2
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -538,13 +548,13 @@ func testGatewayModel(cfg *config.Config, modelID string) (response string, late
 	resp, err3 := client.Do(req)
 	latencyMs = time.Since(start).Milliseconds()
 	if err3 != nil {
-		return "", latencyMs, false, err3
+		return "", latencyMs, false, false, err3
 	}
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		return "", latencyMs, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return "", latencyMs, false, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
 	var result struct {
@@ -556,16 +566,16 @@ func testGatewayModel(cfg *config.Config, modelID string) (response string, late
 		} `json:"choices"`
 	}
 	if err4 := json.Unmarshal(respBody, &result); err4 != nil {
-		return "", latencyMs, false, err4
+		return "", latencyMs, false, false, err4
 	}
 	if len(result.Choices) == 0 {
-		return "", latencyMs, false, fmt.Errorf("tidak ada response dari gateway")
+		return "", latencyMs, false, false, fmt.Errorf("tidak ada response dari gateway")
 	}
 	content := strings.TrimSpace(result.Choices[0].Message.Content)
 	if len(content) > 200 {
 		content = content[:200] + "..."
 	}
 	reasoningUsed := result.Choices[0].Message.ReasoningContent != ""
-	return content, latencyMs, reasoningUsed, nil
+	return content, latencyMs, reasoningUsed, false, nil
 }
 

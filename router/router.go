@@ -638,3 +638,142 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 func (r *Router) Registry() *provider.Registry {
 	return r.registry
 }
+
+// Embeddings routes an embeddings request.
+func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.EmbeddingsRequest) (*models.EmbeddingsResponse, error) {
+	route, ok := r.routes[modelName]
+	if !ok {
+		// Dynamic prefix routing fallback (like for opencode)
+		if strings.HasPrefix(modelName, "oc/") {
+			p, pok := r.registry.Get("opencode")
+			if !pok {
+				for _, prov := range r.registry.All() {
+					if up, ok := prov.(provider.UpstreamConfigProvider); ok && up.ProviderType() == "opencode" {
+						p = prov
+						pok = true
+						break
+					}
+				}
+			}
+			if pok {
+				targetModel := strings.TrimPrefix(modelName, "oc/")
+				req.Model = targetModel
+				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
+				return p.Embeddings(ctx, req)
+			}
+		}
+		if strings.HasPrefix(modelName, "mimo/") {
+			p, pok := r.registry.Get("mimo")
+			if !pok {
+				for _, prov := range r.registry.All() {
+					if up, ok := prov.(provider.UpstreamConfigProvider); ok && up.ProviderType() == "mimo" {
+						p = prov
+						pok = true
+						break
+					}
+				}
+			}
+			if pok {
+				targetModel := strings.TrimPrefix(modelName, "mimo/")
+				req.Model = targetModel
+				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
+				return p.Embeddings(ctx, req)
+			}
+		}
+		return nil, fmt.Errorf("model not found: %s", modelName)
+	}
+	if route.Disabled {
+		return nil, fmt.Errorf("model is disabled: %s", modelName)
+	}
+
+	switch route.Strategy {
+	case "", "direct":
+		// Direct: single backend
+		req.Model = route.Backend.Model
+		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, route.Backend.Provider.Name(), route.Backend.Model))
+		return route.Backend.Provider.Embeddings(ctx, req)
+
+	case "round-robin":
+		// Round-robin with circuit breaker: try available backends
+		total := len(route.Backends)
+		firstIdx := route.Balancer.Next()
+		idx := firstIdx
+		var backend *Backend
+
+		for i := 0; i < total; i++ {
+			b := &route.Backends[idx]
+			now := time.Now().UnixNano()
+			if now >= b.DisabledUntil.Load() {
+				backend = b
+				break
+			}
+			idx = (idx + 1) % total
+		}
+
+		if backend == nil {
+			// All backends disabled — force try the first one
+			backend = &route.Backends[firstIdx]
+			slog.Warn("all backends disabled for model route, forcing first backend", "model", modelName)
+		}
+
+		var resp *models.EmbeddingsResponse
+		err := r.retryWithBackoff(ctx, func() (bool, error) {
+			req.Model = backend.Model
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, backend.Provider.Name(), backend.Model))
+			var callErr error
+			resp, callErr = backend.Provider.Embeddings(ctx, req)
+			if callErr != nil {
+				if provErr, ok := callErr.(*provider.ProviderError); ok {
+					if provErr.IsRetryable() {
+						backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+						slog.Warn("backend circuit broken (embeddings)", "provider", backend.Provider.Name(), "model", backend.Model)
+						// Pick next backend for retry
+						idx = (idx + 1) % total
+						backend = &route.Backends[idx]
+						return true, callErr
+					}
+				}
+				return false, callErr
+			}
+			return false, nil
+		})
+		return resp, err
+
+	case "fallback":
+		// Sequential fallback: try backends in order of tier
+		var resp *models.EmbeddingsResponse
+		var lastErr error
+
+		for i := range route.Backends {
+			b := &route.Backends[i]
+			now := time.Now().UnixNano()
+			if now < b.DisabledUntil.Load() {
+				continue // circuit broken, skip
+			}
+
+			req.Model = b.Model
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, b.Provider.Name(), b.Model))
+			var callErr error
+			resp, callErr = b.Provider.Embeddings(ctx, req)
+			if callErr == nil {
+				return resp, nil
+			}
+
+			lastErr = callErr
+			if provErr, ok := callErr.(*provider.ProviderError); ok && provErr.IsRetryable() {
+				b.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+				slog.Warn("backend circuit broken (embeddings)", "provider", b.Provider.Name(), "model", b.Model)
+			} else {
+				break // non-retryable error, stop fallback
+			}
+		}
+
+		if resp == nil && lastErr == nil {
+			lastErr = fmt.Errorf("no healthy backends available for fallback")
+		}
+		return resp, lastErr
+
+	default:
+		return nil, fmt.Errorf("unsupported strategy for embeddings: %s", route.Strategy)
+	}
+}

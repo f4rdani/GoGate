@@ -1306,6 +1306,8 @@ func listModelsAndCombos(cfg *config.Config) {
 			icon := "🤖"
 			if m.Reasoning {
 				icon = "🧠"
+			} else if m.Vision {
+				icon = "👁️"
 			}
 
 			// Show target info if it differs from the alias name
@@ -1353,6 +1355,8 @@ func listModelsAndCombos(cfg *config.Config) {
 			icon := "🤖"
 			if m.Reasoning {
 				icon = "🧠"
+			} else if m.Vision {
+				icon = "👁️"
 			}
 			fmt.Printf("    %d. %s %s (provider %s tidak ditemukan)%s\n", i+1, icon, KeyStyle.Render(m.Name), m.Provider, statusStr)
 		}
@@ -1439,6 +1443,7 @@ func addDirectModel(cfg *config.Config) {
 		Provider:  p.Name,
 		Model:     modelID,
 		Reasoning: detectedReasoningModels[modelID] || isReasoningModelID(modelID) || isReasoningModelID(name),
+		Vision:    isVisionModelID(modelID) || isVisionModelID(name),
 	}
 
 	if err := cfg.AddModel(m); err != nil {
@@ -1924,6 +1929,8 @@ func deleteModel(cfg *config.Config) {
 			icon := "🤖"
 			if m.Reasoning {
 				icon = "🧠"
+			} else if m.Vision {
+				icon = "👁️"
 			}
 			label := fmt.Sprintf("   %s %s", icon, m.Name)
 			opts = append(opts, huh.NewOption(label, m.Name))
@@ -2015,10 +2022,11 @@ func testModelsBeforeAdd(baseURL, apiKey, providerType string, selectedModels []
 		var response string
 		var latency int64
 		var isReasoning bool
+		var isVision bool
 		var testErr error
 
 		spinnerErr := withSpinner(fmt.Sprintf("Testing '%s'...", modelID), func() error {
-			response, latency, isReasoning, testErr = testModel(baseURL, apiKey, modelID, providerType)
+			response, latency, isReasoning, isVision, testErr = testModel(baseURL, apiKey, modelID, providerType)
 			return testErr
 		})
 
@@ -2033,9 +2041,14 @@ func testModelsBeforeAdd(baseURL, apiKey, providerType string, selectedModels []
 			fmt.Printf("  ❌  %-40s GAGAL: %v\n", modelID, spinnerErr)
 			failedModels = append(failedModels, modelID)
 		} else {
-			if isReasoning {
+			if isReasoning && isVision {
+				detectedReasoningModels[modelID] = true
+				fmt.Printf("  🧠👁️  %-40s OK (%dms) [Reasoning & Vision] -> Response: %q\n", modelID, latency, truncate(response, 45))
+			} else if isReasoning {
 				detectedReasoningModels[modelID] = true
 				fmt.Printf("  🧠  %-40s OK (%dms) [Reasoning] -> Response: %q\n", modelID, latency, truncate(response, 45))
+			} else if isVision {
+				fmt.Printf("  👁️  %-40s OK (%dms) [Vision] -> Response: %q\n", modelID, latency, truncate(response, 45))
 			} else {
 				fmt.Printf("  ✅  %-40s OK (%dms) -> Response: %q\n", modelID, latency, truncate(response, 45))
 			}
@@ -2132,6 +2145,8 @@ func toggleModelEnable(cfg *config.Config, cfgPath string) {
 			icon := "🤖"
 			if m.Reasoning {
 				icon = "🧠"
+			} else if m.Vision {
+				icon = "👁️"
 			}
 			label := fmt.Sprintf("   %s %s (%s)", icon, m.Name, status)
 			opts = append(opts, huh.NewOption(label, strconv.Itoa(item.index)))

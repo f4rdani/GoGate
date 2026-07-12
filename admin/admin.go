@@ -142,6 +142,7 @@ func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 	keys := a.getKeyStore().ListKeys()
 
 	type keyResponse struct {
+		ID            string   `json:"id"`
 		Key           string   `json:"key"`
 		Name          string   `json:"name"`
 		AllowedModels []string `json:"allowed_models"`
@@ -152,8 +153,13 @@ func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]keyResponse, 0, len(keys))
 	for _, k := range keys {
+		masked := k.Key
+		if len(masked) >= 12 {
+			masked = masked[:9] + "..." + masked[len(masked)-4:]
+		}
 		resp = append(resp, keyResponse{
-			Key:           k.Key,
+			ID:            auth.HashKey(k.Key),
+			Key:           masked,
 			Name:          k.Name,
 			AllowedModels: k.AllowedModels,
 			RateLimit:     k.RateLimit,
@@ -197,7 +203,7 @@ func (a *AdminHandler) HandleCreateKey(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("API key created",
 		"name", req.Name,
-		"key_prefix", keyInfo.Key[:16]+"...",
+		"key_prefix", keyInfo.Key[:9]+"...",
 		"allowed_models", req.AllowedModels,
 		"rate_limit", req.RateLimit,
 	)
@@ -222,16 +228,16 @@ func (a *AdminHandler) HandleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract key from URL path: /admin/keys/{key}
+	// Extract key hash from URL path: /admin/keys/{hash}
 	parts := strings.Split(strings.TrimSuffix(r.URL.Path, "/"), "/")
 	if len(parts) < 4 {
 		a.sendError(w, http.StatusBadRequest, "Key not specified in URL path")
 		return
 	}
-	key := parts[len(parts)-1]
+	keyHash := parts[len(parts)-1]
 
-	if a.getKeyStore().DeleteKey(key) {
-		slog.Info("API key deleted", "key_prefix", key[:min(16, len(key))]+"...")
+	if a.getKeyStore().DeleteKey(keyHash) {
+		slog.Info("API key deleted", "hash_prefix", keyHash[:min(8, len(keyHash))]+"...")
 		// Persist to config file
 		a.persistKeyStore()
 		w.WriteHeader(http.StatusNoContent)
@@ -762,10 +768,10 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	json.Unmarshal(bodyBytes, &rawMap)
 	_, hasTokenSaver := rawMap["token_saver"]
 
-	// Find the key in config
+	// Find the key in config by its hash
 	var existing *config.APIKeyConfig
 	for i := range a.cfg.APIKeys {
-		if a.cfg.APIKeys[i].Key == key {
+		if auth.HashKey(a.cfg.APIKeys[i].Key) == key {
 			existing = &a.cfg.APIKeys[i]
 			break
 		}
@@ -792,7 +798,7 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 
 	a.persistKeyStore()
 
-	slog.Info("API key updated via admin", "key_prefix", key[:min(16, len(key))]+"...")
+	slog.Info("API key updated via admin", "hash_prefix", key[:min(8, len(key))]+"...")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 }

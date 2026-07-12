@@ -112,6 +112,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 
 	// OpenAI-compatible API endpoints
 	mux.HandleFunc("POST /v1/chat/completions", proxyHandler.HandleChatCompletion)
+	mux.HandleFunc("POST /v1/embeddings", proxyHandler.HandleEmbeddings)
 	mux.HandleFunc("GET /v1/models", proxyHandler.HandleListModels)
 	mux.HandleFunc("GET /health", proxyHandler.HandleHealth)
 
@@ -319,6 +320,7 @@ func (s *Server) Start() error {
 
 	slog.Info("endpoints available",
 		"chat", "POST /v1/chat/completions",
+		"embeddings", "POST /v1/embeddings",
 		"models", "GET /v1/models",
 		"health", "GET /health",
 		"playground", "GET /playground",

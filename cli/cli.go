@@ -225,6 +225,7 @@ func createModelRoutes(cfg *config.Config, providerName string, models []string)
 			Provider:  providerName,
 			Model:     modelName,
 			Reasoning: detectedReasoningModels[modelName] || isReasoningModelID(modelName),
+			Vision:    isVisionModelID(modelName),
 		}
 		if err := cfg.AddModel(m); err == nil {
 			created++

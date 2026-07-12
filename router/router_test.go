@@ -65,6 +65,20 @@ func (m *mockProvider) ChatCompletionStream(ctx context.Context, req *models.Cha
 }
 func (m *mockProvider) IsHealthy() bool  { return m.healthy }
 func (m *mockProvider) SetHealthy(h bool) { m.healthy = h }
+func (m *mockProvider) Embeddings(ctx context.Context, req *models.EmbeddingsRequest) (*models.EmbeddingsResponse, error) {
+	m.callCount.Add(1)
+	if err, ok := m.errors[req.Model]; ok {
+		return nil, err
+	}
+	return &models.EmbeddingsResponse{
+		Object: "list",
+		Data: []models.EmbeddingData{
+			{Object: "embedding", Embedding: []float32{0.1, 0.2}, Index: 0},
+		},
+		Model: req.Model,
+		Usage: models.EmbeddingUsage{PromptTokens: 5, TotalTokens: 5},
+	}, nil
+}
 
 func TestDirectRouting(t *testing.T) {
 	p := newMockProvider("openai")
@@ -531,6 +545,37 @@ func TestBackendTierSorting(t *testing.T) {
 	}
 	if route.Backends[2].Tier != 3 {
 		t.Errorf("third backend should be tier 3, got %d", route.Backends[2].Tier)
+	}
+}
+
+func TestEmbeddingsRouting(t *testing.T) {
+	p := newMockProvider("openai")
+	registry := provider.NewRegistry()
+	registry.Register("openai", p)
+
+	cfg := &config.Config{
+		Retry: config.RetryConfig{MaxRetries: 1, InitialBackoff: 10, MaxBackoff: 50},
+		Models: []config.ModelConfig{
+			{Name: "text-embedding-3", Provider: "openai", Model: "text-embedding-3-small"},
+		},
+	}
+
+	r, err := NewRouter(cfg, registry)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	req := &models.EmbeddingsRequest{Model: "text-embedding-3", Input: "hello"}
+	resp, err := r.Embeddings(context.Background(), "text-embedding-3", req)
+	if err != nil {
+		t.Fatalf("Embeddings routing failed: %v", err)
+	}
+
+	if resp.Model != "text-embedding-3-small" {
+		t.Errorf("expected model text-embedding-3-small, got %s", resp.Model)
+	}
+	if len(resp.Data) != 1 || resp.Data[0].Embedding[0] != 0.1 {
+		t.Errorf("unexpected embedding data: %+v", resp.Data)
 	}
 }
 

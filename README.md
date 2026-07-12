@@ -26,8 +26,11 @@ Satu gateway untuk mengakses **60+ model AI** dari berbagai provider (OpenAI, An
 | 🌐 **Playground** | Web UI untuk test model langsung dari browser |
 | 🔐 **Admin API** | REST API untuk manage keys dan monitor gateway |
 | 🌐 **Admin Dashboard** | Web dashboard full CRUD — manage providers, models, keys, config dari browser |
-| 🧪 **Web Diagnostics** | Test API key, test model, sync models, quick setup langsung dari dashboard |
+| 🧪 **Web Diagnostics** | Test API key, test model, sync models, quick setup langsung dari dashboard (mendukung lencana 🧠 & 👁️) |
 | 🔄 **Simultaneous Mode** | Server + Terminal CLI jalan bersamaan — config dari mana saja |
+| 👁️ **Vision (Multimodal)** | Dukungan input gambar/multi-part (termasuk auto-translate format OpenAI `image_url` ke format native block Anthropic/Claude) |
+| 🔢 **Embeddings Support** | Proksi endpoint `/v1/embeddings` dengan load balancing, fallback, dan retry yang sama |
+| 🛡️ **Security Hardened** | Proteksi SSRF (blokir IP privat/lokal), validasi API key tahan timing-attack (SHA-256), pembatasan CORS admin, dan isolasi sesi |
 
 ---
 

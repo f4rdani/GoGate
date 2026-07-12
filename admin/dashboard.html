@@ -877,7 +877,7 @@ tbody tr:hover {
 
 <script>
 /* ===== State ===== */
-let secret = localStorage.getItem('admin_secret') || '';
+let secret = sessionStorage.getItem('admin_secret') || '';
 let refreshTimer = null;
 let activeConfirmResolve = null;
 
@@ -910,7 +910,7 @@ function parseBackendLines(text) {
 
 async function api(path,opts={}){
   const r=await fetch(path,{...opts,headers:{'X-Admin-Secret':secret,'Content-Type':'application/json',...(opts.headers||{})}});
-  if(r.status===401){localStorage.removeItem('admin_secret');secret='';showAuth();throw new Error('Unauthorized');}
+  if(r.status===401){sessionStorage.removeItem('admin_secret');secret='';showAuth();throw new Error('Unauthorized');}
   if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error?.message||r.statusText);}
   if(r.status===204)return null;
   return r.json();
@@ -948,7 +948,7 @@ async function doLogin(){
   if(!secret){errEl.textContent='Please enter the admin secret';return;}
   try{
     await api('/admin/stats');
-    localStorage.setItem('admin_secret',secret);
+    sessionStorage.setItem('admin_secret',secret);
     errEl.textContent='';
     hideAuth();
     toast('Connected!','success');
@@ -961,7 +961,7 @@ async function doLogin(){
 }
 
 function doLogout(){
-  localStorage.removeItem('admin_secret');
+  sessionStorage.removeItem('admin_secret');
   secret='';
   if(refreshTimer)clearInterval(refreshTimer);
   showAuth();
@@ -1019,8 +1019,8 @@ function updateTunnelUI() {
   const btn = document.getElementById('btnToggleTunnel');
   
   if (_tunnelActive) {
-    statusText.innerHTML = `Running! Publicly accessible at: <strong style="color:var(--green)"><a href="${_tunnelURL}" target="_blank" style="color:var(--green); text-decoration:underline;">${_tunnelURL}</a></strong>`;
-    tunnelLink.href = _tunnelURL;
+    statusText.innerHTML = `Running! Publicly accessible at: <strong style="color:var(--green)"><a href="${esc(_tunnelURL)}" target="_blank" style="color:var(--green); text-decoration:underline;">${esc(_tunnelURL)}</a></strong>`;
+    tunnelLink.href = esc(_tunnelURL);
     tunnelLink.style.display = 'inline-block';
     btn.textContent = '🔌 Disconnect Tunnel';
     btn.className = 'btn btn-sm btn-danger';
@@ -1147,11 +1147,11 @@ function renderKeys(list){
     return`<tr${dimStyle}>
       <td>${statusBadge}</td>
       <td><strong>${esc(k.name)}</strong></td>
-      <td><span class="key-masked">${maskKey(k.key)}</span></td>
+      <td><span class="key-masked">${esc(k.key)}</span></td>
       <td>${modelsStr}</td>
       <td>${k.rate_limit?k.rate_limit+'/min':'<span class="text3">∞</span>'}</td>
       <td>${tsBadge}</td>
-      <td class="action-btns"><button class="btn btn-sm" onclick="editKey('${esc(k.key)}','${esc(k.name)}',${k.disabled})" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteKey('${esc(k.key)}','${esc(k.name)}')" title="Delete">🗑</button></td>
+      <td class="action-btns"><button class="btn btn-sm" onclick="editKey('${esc(k.id)}','${esc(k.name)}',${k.disabled})" title="Edit">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteKey('${esc(k.id)}','${esc(k.name)}')" title="Delete">🗑</button></td>
     </tr>`;
   }).join('');
 }
@@ -1405,13 +1405,22 @@ function showCreateKey(){
       if(tsChoice==='true')token_saver=true;
       if(tsChoice==='false')token_saver=false;
       const r=await api('/admin/keys',{method:'POST',body:JSON.stringify({name,allowed_models:models,rate_limit:parseInt(document.getElementById('mk_rate').value)||0,token_saver})});
-      closeModal();toast('Key created: '+r.name,'success');fetchAll();
+      closeModal();
+      openModal('🔑 API Key Created', `
+        <div style="text-align: center; padding: 1rem 0;">
+          <p style="margin-bottom: 0.5rem;">Silakan salin API Key baru Anda sekarang. Anda tidak akan dapat melihatnya lagi setelah menutup dialog ini!</p>
+          <div style="background: var(--bg3); padding: 0.75rem; border-radius: 6px; font-family: monospace; font-size: 1.1rem; margin: 1rem 0; word-break: break-all; user-select: all; border: 1px solid var(--border);" id="newKeyVal">${esc(r.key)}</div>
+          <button class="btn" style="width:100%;" onclick="navigator.clipboard.writeText(document.getElementById('newKeyVal').textContent);toast('Salin ke clipboard sukses!','success');">📋 Salin Key</button>
+        </div>
+      `, () => {
+        fetchAll();
+      });
     }catch(e){toast('Error: '+e.message,'error');}
   });
 }
 
 async function editKey(key,name,disabled){
-  const k=(_currentKeys||[]).find(x=>x.key===key);
+  const k=(_currentKeys||[]).find(x=>x.id===key);
   if(!k)return;
   const selectedInherit = k.token_saver === undefined || k.token_saver === null ? 'selected' : '';
   const selectedTrue = k.token_saver === true ? 'selected' : '';
@@ -1690,7 +1699,7 @@ function showChangePassword(){
       if(np.length<6){toast('New password must be at least 6 characters','error');return;}
       if(np!==cp){toast('New passwords do not match','error');return;}
       await api('/admin/change-password',{method:'PUT',body:JSON.stringify({current_secret:cur,new_secret:np})});
-      localStorage.setItem('admin_secret',np);
+      sessionStorage.setItem('admin_secret',np);
       secret=np;
       closeModal();
       toast('Password changed successfully!','success');
@@ -1708,16 +1717,6 @@ function startRefresh(){
 
 /* ===== Init ===== */
 (async function init(){
-  // If secret is in query parameter, store it in localStorage
-  const urlSecret = new URLSearchParams(window.location.search).get('secret');
-  if(urlSecret){
-    secret = urlSecret;
-    localStorage.setItem('admin_secret', secret);
-    // Remove secret from URL bar for security / cleaner look
-    const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
-    window.history.replaceState({path: cleanUrl}, '', cleanUrl);
-  }
-
   if(secret){
     try{
       await api('/admin/stats');

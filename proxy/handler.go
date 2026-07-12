@@ -504,3 +504,94 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
+
+// HandleEmbeddings handles POST /v1/embeddings.
+func (h *Handler) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
+	h.Stats.TotalRequests.Add(1)
+	h.Stats.ActiveRequests.Add(1)
+	defer h.Stats.ActiveRequests.Add(-1)
+
+	// === Get Config (Thread Safe) ===
+	h.mu.RLock()
+	routerInst := h.router
+	keyStore := h.keyStore
+	limiter := h.limiter
+	tracker := h.tracker
+	h.mu.RUnlock()
+
+	// === Authenticate API Key ===
+	apiKey := h.extractAPIKey(r)
+	if apiKey == "" {
+		h.sendError(w, http.StatusUnauthorized, "Missing API Key", "invalid_request_error")
+		return
+	}
+	keyInfo, ok := keyStore.Validate(apiKey)
+	if !ok {
+		h.sendError(w, http.StatusUnauthorized, "Invalid API Key", "invalid_request_error")
+		return
+	}
+
+	// === Rate limit ===
+	if !keyInfo.CheckRateLimit() {
+		middleware.TooManyRequestsResponse(w)
+		return
+	}
+
+	// === Read and Parse Request Body ===
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.sendError(w, http.StatusBadRequest, "Failed to read request body", "invalid_request_error")
+		return
+	}
+
+	var req models.EmbeddingsRequest
+	if err := json.Unmarshal(bodyBytes, &req); err != nil {
+		h.sendError(w, http.StatusBadRequest, "Invalid request JSON: "+err.Error(), "invalid_request_error")
+		return
+	}
+
+	if req.Model == "" {
+		h.sendError(w, http.StatusBadRequest, "model is required", "invalid_request_error")
+		return
+	}
+
+	slog.Info(fmt.Sprintf("📥 POST /v1/embeddings | %s", req.Model))
+
+	// === Permission Check ===
+	if !keyInfo.IsModelAllowed(req.Model) {
+		h.sendError(w, http.StatusForbidden,
+			"Model '"+req.Model+"' is not allowed for this API key", "permission_error")
+		return
+	}
+
+	// === Concurrency Limit ===
+	if !limiter.AcquireGlobalWithQueue() {
+		middleware.QueueFullResponse(w)
+		return
+	}
+	defer limiter.ReleaseGlobal()
+
+	// === Route Request ===
+	startTime := time.Now()
+	resp, err := routerInst.Embeddings(r.Context(), req.Model, &req)
+	durationMs := time.Since(startTime).Milliseconds()
+
+	if err != nil {
+		slog.Error(fmt.Sprintf("❌ [EMBEDDING] %s | %dms | error: %v", req.Model, durationMs, err))
+		if tracker != nil {
+			tracker.RecordError("embeddings", req.Model)
+		}
+		h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+
+	if tracker != nil {
+		tracker.RecordUsage(apiKey, "embeddings", req.Model, resp.Usage.PromptTokens, 0, false)
+	}
+
+	slog.Info(fmt.Sprintf("📊 [USAGE] %s | in=%d | out=0", strings.ToUpper(req.Model), resp.Usage.PromptTokens))
+}
