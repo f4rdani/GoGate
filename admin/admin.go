@@ -86,7 +86,12 @@ func (a *AdminHandler) CheckAuth(r *http.Request) bool {
 		return false
 	}
 	provided := r.Header.Get("X-Admin-Secret")
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) == 1
+	ok := subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) == 1
+	if !ok {
+		// Brute-force protection: delay failed attempts
+		time.Sleep(1 * time.Second)
+	}
+	return ok
 }
 
 // persistKeyStore saves the current key store state to the config file.
