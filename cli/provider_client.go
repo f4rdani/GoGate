@@ -276,11 +276,11 @@ func runActualModelTest(url, apiKey, modelID, providerType string, tryVision boo
 				{
 					"role": "user",
 					"content": []map[string]interface{}{
-						{"type": "text", "text": "Say 'OK'"},
+						{"type": "text", "text": "What is the color of the dot in this image? Respond with the color name only in one word like 'red' or 'black'."},
 						{
 							"type": "image_url",
 							"image_url": map[string]string{
-								"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+								"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
 							},
 						},
 					},
@@ -439,13 +439,13 @@ func runActualAnthropicTest(url, apiKey, modelID string, tryVision bool) (string
 			{
 				"role": "user",
 				"content": []map[string]interface{}{
-					{"type": "text", "text": "Say 'OK'"},
+					{"type": "text", "text": "What is the color of the dot in this image? Respond with the color name only in one word like 'red' or 'black'."},
 					{
 						"type": "image",
 						"source": map[string]interface{}{
 							"type":       "base64",
 							"media_type": "image/png",
-							"data":       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+							"data":       "iVBORw0KGgoAAAANSUhEUgAAAAUAAAAFCAYAAACNbyblAAAAHElEQVQI12P4//8/w38GIAXDIBKE0DHxgljNBAAO9TXL0Y4OHwAAAABJRU5ErkJggg==",
 						},
 					},
 				},
