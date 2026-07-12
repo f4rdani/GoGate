@@ -25,6 +25,60 @@ func fetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 		return nil, fmt.Errorf("Anthropic tidak punya endpoint /models — tambah model manual")
 	}
 
+	// Cloudflare Workers AI doesn't support standard GET /v1/models (returns 405 Method Not Allowed).
+	// We call Cloudflare's specific model search catalog API instead.
+	if providerType == "cloudflare" {
+		url := strings.TrimRight(baseURL, "/")
+		url = strings.Replace(url, "/v1", "/models/search", 1)
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Accept", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("request gagal: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
+		}
+
+		var cfResp struct {
+			Result []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"result"`
+			Success bool `json:"success"`
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		if err := json.Unmarshal(body, &cfResp); err != nil {
+			return nil, fmt.Errorf("parse cloudflare response: %w", err)
+		}
+
+		var models []string
+		for _, m := range cfResp.Result {
+			if m.ID != "" {
+				models = append(models, m.ID)
+			}
+		}
+		if len(models) == 0 {
+			return nil, fmt.Errorf("tidak ada model ditemukan di catalog Cloudflare")
+		}
+		return models, nil
+	}
+
 	// Normalize URL
 	url := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(url, "/models") {
