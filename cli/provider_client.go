@@ -153,14 +153,18 @@ func fetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 // Excludes audio, embedding, image generation, and moderation models.
 func isChatModel(modelID string) bool {
 	m := strings.ToLower(modelID)
-	// Exclude known non-chat models
-	if strings.Contains(m, "embed") ||
-		strings.Contains(m, "whisper") ||
-		strings.Contains(m, "tts") ||
-		strings.Contains(m, "dall-e") ||
-		strings.Contains(m, "moderation") ||
-		strings.Contains(m, "audio") {
-		return false
+	// Exclude known non-chat models (embeddings, audio, image generation, vision/detection, etc.)
+	exclusions := []string{
+		"embed", "whisper", "tts", "dall-e", "moderation", "audio", "voice", "speech",
+		"smart-turn", "pipecat", "flux", "sdxl", "stable-diffusion", "resnet", "m2m100",
+		"bart", "summarization", "translation", "detection", "classification", "bge-",
+		"text-to-image", "image-to-text", "depth-estimation", "object-detection",
+		"image-classification", "keypoint-detection", "segmentation", "super-resolution",
+	}
+	for _, term := range exclusions {
+		if strings.Contains(m, term) {
+			return false
+		}
 	}
 	return true
 }
@@ -193,16 +197,33 @@ func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
 		return false, 0, fmt.Errorf("provider tidak mengembalikan model apa pun")
 	}
 
-	// Pick the first chat-compatible model to enforce API key verification cheaply
 	var modelToTest string
-	for _, m := range models {
-		if isChatModel(m) {
-			modelToTest = m
+	// Try to find a preferred chat model first (widely compatible chat models)
+	preferredPrefixes := []string{"llama", "qwen", "gpt", "claude", "gemini", "mistral", "deepseek", "command-r", "phi", "gemma"}
+	for _, pref := range preferredPrefixes {
+		for _, m := range models {
+			if strings.Contains(strings.ToLower(m), pref) && isChatModel(m) {
+				modelToTest = m
+				break
+			}
+		}
+		if modelToTest != "" {
 			break
 		}
 	}
+
+	// If no preferred chat model found, fallback to any chat model
 	if modelToTest == "" {
-		// Fallback to the first model if no model is explicitly detected as chat
+		for _, m := range models {
+			if isChatModel(m) {
+				modelToTest = m
+				break
+			}
+		}
+	}
+
+	// Ultimately fallback to the first model if all else fails
+	if modelToTest == "" {
 		modelToTest = models[0]
 	}
 
