@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -147,6 +148,23 @@ func (b *BaseProvider) IsHealthy() bool {
 // SetHealthy sets the health status of the provider.
 func (b *BaseProvider) SetHealthy(healthy bool) {
 	b.healthy.Store(healthy)
+}
+
+// ResolveKeyAndURL parses the key (splitting by colon if cloudflare type)
+// and returns the actual API key and target URL to use for the request.
+func (b *BaseProvider) ResolveKeyAndURL(rawKey, endpointPath string) (string, string) {
+	apiKey := rawKey
+	baseURL := b.baseURL
+
+	if b.providerType == "cloudflare" && strings.Contains(rawKey, ":") {
+		parts := strings.SplitN(rawKey, ":", 2)
+		accountID := parts[0]
+		apiKey = parts[1]
+		baseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
+	}
+
+	url := strings.TrimRight(baseURL, "/") + endpointPath
+	return apiKey, url
 }
 
 // ProviderError represents an error from an upstream provider.

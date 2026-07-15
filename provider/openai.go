@@ -40,17 +40,18 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := strings.TrimRight(o.baseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
 	keyObj, err := o.NextAPIKey()
 	if err != nil {
 		return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 	}
-	apiKey := keyObj.Key
+
+	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
@@ -115,17 +116,18 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := strings.TrimRight(o.baseURL, "/") + "/chat/completions"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
 	keyObj, err := o.NextAPIKey()
 	if err != nil {
 		return &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 	}
-	apiKey := keyObj.Key
+
+	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
@@ -204,17 +206,18 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	url := strings.TrimRight(o.baseURL, "/") + "/embeddings"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
 	keyObj, err := o.NextAPIKey()
 	if err != nil {
 		return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 	}
-	apiKey := keyObj.Key
+
+	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/embeddings")
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)

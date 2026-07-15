@@ -1169,15 +1169,47 @@ func addUpstreamKey(cfg *config.Config) {
 	}
 
 	var key string
-	huh.NewInput().
-		Title("API Key baru").
-		Placeholder("sk-...").
-		EchoMode(huh.EchoModePassword).
-		Value(&key).
-		Run()
+	if p.Type == "cloudflare" {
+		var cfAccountID, cfToken string
+		errAcc := huh.NewInput().
+			Title(T("Account ID Cloudflare baru", "New Cloudflare Account ID")).
+			Placeholder("e.g. 1a2b3c...").
+			Value(&cfAccountID).
+			Run()
+		if isAbort(errAcc) {
+			printInfo(T("Dibatalkan", "Cancelled"))
+			return
+		}
+
+		errTok := huh.NewInput().
+			Title(T("API Token Cloudflare baru", "New Cloudflare API Token")).
+			Placeholder("sk-...").
+			EchoMode(huh.EchoModePassword).
+			Value(&cfToken).
+			Run()
+		if isAbort(errTok) {
+			printInfo(T("Dibatalkan", "Cancelled"))
+			return
+		}
+
+		cfAccountID = strings.TrimSpace(cfAccountID)
+		cfToken = strings.TrimSpace(cfToken)
+		if cfAccountID == "" || cfToken == "" {
+			printError(T("Account ID dan Token tidak boleh kosong", "Account ID and Token cannot be empty"))
+			return
+		}
+		key = cfAccountID + ":" + cfToken
+	} else {
+		huh.NewInput().
+			Title("API Key baru").
+			Placeholder("sk-...").
+			EchoMode(huh.EchoModePassword).
+			Value(&key).
+			Run()
+	}
 
 	if key == "" {
-		printError("API key tidak boleh kosong")
+		printError(T("API key tidak boleh kosong", "API key cannot be empty"))
 		return
 	}
 

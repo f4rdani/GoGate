@@ -168,6 +168,13 @@ func isChatModel(modelID string) bool {
 // testAPIKey verifies if an API key is valid by calling the /models endpoint AND performing a 1-token test completion call.
 // Returns (ok, modelCount, error).
 func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
+	if providerType == "cloudflare" && strings.Contains(apiKey, ":") {
+		parts := strings.SplitN(apiKey, ":", 2)
+		accountID := parts[0]
+		apiKey = parts[1]
+		baseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
+	}
+
 	// Anthropic special case (no /models endpoint)
 	if providerType == "anthropic" {
 		err := testAPIKeyConnection(baseURL, apiKey, "claude-3-5-haiku-20241022", "anthropic")
