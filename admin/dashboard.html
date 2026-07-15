@@ -1237,11 +1237,12 @@ async function reloadConfig(){
 
 /* ===== Provider CRUD ===== */
 function showAddProvider(){
-  const types=['openai','cohere','opencode','cerebras','anthropic','groq','mistral','custom'];
+  const types=['openai','cohere','opencode','cerebras','anthropic','groq','mistral','cloudflare','custom'];
   openModal('➕ Add Provider',`
     <div class="form-grid">
       <label>Name<input id="mp_name" placeholder="my-provider"></label>
       <label>Type<select id="mp_type">${types.map(t=>'<option>'+t+'</option>').join('')}</select></label>
+      <label class="full" id="mp_accountid_container" style="display:none">Cloudflare Account ID<input id="mp_accountid" placeholder="e.g. 1a2b3c4d5e..."></label>
       <label class="full">Base URL<input id="mp_baseurl" placeholder="https://api.example.com/v1"></label>
       <label class="full">API Keys (comma-separated)<textarea id="mp_keys" placeholder="sk-key1, sk-key2"></textarea></label>
       <label>Tier<select id="mp_tier"><option value="1">1 — Subscription</option><option value="2">2 — Cheap</option><option value="3">3 — Free</option></select></label>
@@ -1254,12 +1255,28 @@ function showAddProvider(){
         name:document.getElementById('mp_name').value.trim(),
         type:document.getElementById('mp_type').value,
         base_url:document.getElementById('mp_baseurl').value.trim(),
+        account_id:document.getElementById('mp_type').value==='cloudflare'?document.getElementById('mp_accountid').value.trim():"",
         api_keys:keys,models:models,
         tier:parseInt(document.getElementById('mp_tier').value)||1
       })});
       closeModal();toast('Provider created!','success');fetchAll();
     }catch(e){toast('Error: '+e.message,'error');}
   });
+
+  const select = document.getElementById('mp_type');
+  const accContainer = document.getElementById('mp_accountid_container');
+  const baseUrlInput = document.getElementById('mp_baseurl');
+  const updateFields = () => {
+    if (select.value === 'cloudflare') {
+      accContainer.style.display = 'block';
+      baseUrlInput.placeholder = 'Auto-filled via Account ID (optional)';
+    } else {
+      accContainer.style.display = 'none';
+      baseUrlInput.placeholder = 'https://api.example.com/v1';
+    }
+  };
+  select.addEventListener('change', updateFields);
+  updateFields();
 }
 
 async function editProvider(name){
@@ -1269,20 +1286,20 @@ async function editProvider(name){
     toast('OpenCode adalah provider gratis otomatis (Keyless) dan tidak memerlukan konfigurasi/setup!','warn');
     return;
   }
-  // Fetch full provider config to get api_keys and models
-  const cfg=_currentConfig;
-  // We only edit base_url and tier — api_keys/models preserved server-side
+  // We only edit base_url, account_id, and tier — api_keys/models preserved server-side
   openModal('✏️ Edit Provider: '+esc(name),`
     <div class="form-grid">
       <label>Type<div class="mono" style="padding:.4rem 0;color:var(--text2)">${esc(p.type)}</div></label>
       <label>Tier<select id="mp_tier"><option value="1" ${p.tier===1?'selected':''}>1 — Subscription</option><option value="2" ${p.tier===2?'selected':''}>2 — Cheap</option><option value="3" ${p.tier===3?'selected':''}>3 — Free</option></select></label>
-      <label class="full">Base URL<input id="mp_baseurl" value="${esc(p.base_url)}"></label>
-      <div class="form-section">API Keys & Models are managed separately. Only base_url and tier can be edited here.</div>
+      <label class="full" id="mp_accountid_container" style="${p.type==='cloudflare'?'':'display:none'}">Cloudflare Account ID<input id="mp_accountid" value="${esc(p.account_id||'')}"></label>
+      <label class="full">Base URL<input id="mp_baseurl" value="${esc(p.base_url||'')}"></label>
+      <div class="form-section">API Keys & Models are managed separately. Only base_url, account_id, and tier can be edited here.</div>
     </div>`,async()=>{
     try{
       // Send only editable fields — backend preserves the rest via UpdateProvider
       await api('/admin/providers/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({
         base_url:document.getElementById('mp_baseurl').value.trim(),
+        account_id:p.type==='cloudflare' ? document.getElementById('mp_accountid').value.trim() : "",
         tier:parseInt(document.getElementById('mp_tier').value)||1
       })});
       closeModal();toast('Provider updated!','success');fetchAll();

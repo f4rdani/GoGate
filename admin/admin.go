@@ -493,7 +493,7 @@ func (a *AdminHandler) HandleCreateProvider(w http.ResponseWriter, r *http.Reque
 		a.sendError(w, http.StatusBadRequest, "'type' is required")
 		return
 	}
-	if p.BaseURL == "" {
+	if p.BaseURL == "" && p.Type != "cloudflare" {
 		a.sendError(w, http.StatusBadRequest, "'base_url' is required")
 		return
 	}
@@ -538,11 +538,12 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Type    string   `json:"type"`
-		BaseURL string   `json:"base_url"`
-		APIKeys []string `json:"api_keys"`
-		Models  []string `json:"models"`
-		Tier    *int     `json:"tier"`
+		Type      string   `json:"type"`
+		BaseURL   string   `json:"base_url"`
+		AccountID string   `json:"account_id"`
+		APIKeys   []string `json:"api_keys"`
+		Models    []string `json:"models"`
+		Tier      *int     `json:"tier"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -555,6 +556,12 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 	if req.BaseURL != "" {
 		existing.BaseURL = req.BaseURL
+	}
+	if req.AccountID != "" {
+		existing.AccountID = req.AccountID
+		if existing.Type == "cloudflare" {
+			existing.BaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", existing.AccountID)
+		}
 	}
 	if req.APIKeys != nil {
 		// Clean and remove duplicates

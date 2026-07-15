@@ -773,6 +773,22 @@ func editProvider(cfg *config.Config) {
 	}
 
 	var newURL, newKey string
+	var newAccountID string
+
+	if pv.Type == "cloudflare" {
+		huh.NewInput().
+			Title(fmt.Sprintf(T("Account ID Cloudflare [%s]", "Cloudflare Account ID [%s]"), pv.AccountID)).
+			Placeholder(pv.AccountID).
+			Value(&newAccountID).
+			Run()
+		if newAccountID != "" {
+			pv.AccountID = strings.TrimSpace(newAccountID)
+			if strings.Contains(pv.BaseURL, "api.cloudflare.com") || pv.BaseURL == "" {
+				pv.BaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", pv.AccountID)
+			}
+		}
+	}
+
 	huh.NewInput().
 		Title(fmt.Sprintf("Base URL [%s]", pv.BaseURL)).
 		Placeholder(pv.BaseURL).
