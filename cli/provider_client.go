@@ -198,33 +198,37 @@ func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
 	}
 
 	var modelToTest string
-	// Try to find a preferred chat model first (widely compatible chat models)
-	preferredPrefixes := []string{"llama", "qwen", "gpt", "claude", "gemini", "mistral", "deepseek", "command-r", "phi", "gemma"}
-	for _, pref := range preferredPrefixes {
-		for _, m := range models {
-			if strings.Contains(strings.ToLower(m), pref) && isChatModel(m) {
-				modelToTest = m
+	if providerType == "cloudflare" {
+		modelToTest = "@cf/meta/llama-3.2-1b-instruct"
+	} else {
+		// Try to find a preferred chat model first (widely compatible chat models)
+		preferredPrefixes := []string{"llama", "qwen", "gpt", "claude", "gemini", "mistral", "deepseek", "command-r", "phi", "gemma"}
+		for _, pref := range preferredPrefixes {
+			for _, m := range models {
+				if strings.Contains(strings.ToLower(m), pref) && isChatModel(m) {
+					modelToTest = m
+					break
+				}
+			}
+			if modelToTest != "" {
 				break
 			}
 		}
-		if modelToTest != "" {
-			break
-		}
-	}
 
-	// If no preferred chat model found, fallback to any chat model
-	if modelToTest == "" {
-		for _, m := range models {
-			if isChatModel(m) {
-				modelToTest = m
-				break
+		// If no preferred chat model found, fallback to any chat model
+		if modelToTest == "" {
+			for _, m := range models {
+				if isChatModel(m) {
+					modelToTest = m
+					break
+				}
 			}
 		}
-	}
 
-	// Ultimately fallback to the first model if all else fails
-	if modelToTest == "" {
-		modelToTest = models[0]
+		// Ultimately fallback to the first model if all else fails
+		if modelToTest == "" {
+			modelToTest = models[0]
+		}
 	}
 
 	testErr := testAPIKeyConnection(baseURL, apiKey, modelToTest, providerType)
