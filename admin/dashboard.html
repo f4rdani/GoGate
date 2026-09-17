@@ -7,6 +7,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  (function(){
+    try {
+      var saved = localStorage.getItem('gogate_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', saved);
+    } catch(e) {}
+  })();
+</script>
 <style>
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -87,9 +95,9 @@
   --border-subtle: #f1f5f9;
   --border-hover: #cbd5e1;
 
-  --text1: #090d16;
-  --text2: #1e293b;
-  --text3: #cbd5e1;
+  --text1: #0f172a;
+  --text2: #334155;
+  --text3: #475569;
   --text4: #64748b;
 
   --accent: #4f46e5;
@@ -385,7 +393,7 @@ a:hover { color: var(--accent-hover); }
   flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 0.5rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -396,11 +404,48 @@ a:hover { color: var(--accent-hover); }
   color: var(--text2);
   cursor: pointer;
   transition: all 0.15s ease;
+  user-select: none;
 }
 .theme-toggle-btn:hover {
   background: var(--surface-hover);
   color: var(--text1);
   border-color: var(--border-hover);
+}
+.theme-switch-pill {
+  width: 28px;
+  height: 16px;
+  border-radius: var(--radius-full);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.theme-switch-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text3);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), background 0.2s ease;
+}
+[data-theme="light"] .theme-switch-pill {
+  background: #fef3c7;
+  border-color: #fde68a;
+}
+[data-theme="light"] .theme-switch-dot {
+  transform: translateX(12px);
+  background: #d97706;
+}
+[data-theme="dark"] .theme-switch-pill {
+  background: #1e1b4b;
+  border-color: #3730a3;
+}
+[data-theme="dark"] .theme-switch-dot {
+  transform: translateX(0);
+  background: #818cf8;
 }
 
 /* Main Area */
@@ -499,19 +544,34 @@ a:hover { color: var(--accent-hover); }
 .topbar-theme-btn {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  width: 32px;
-  height: 32px;
-  display: flex;
+  border-radius: var(--radius-full);
+  padding: 0.35rem 0.72rem;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: 0.45rem;
   cursor: pointer;
-  font-size: 0.95rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text2);
   transition: all 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  user-select: none;
 }
 .topbar-theme-btn:hover {
   background: var(--surface-hover);
+  color: var(--text1);
   border-color: var(--border-hover);
+}
+.theme-icon-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.theme-mode-text {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--text1);
 }
 
 /* App Content Body */
@@ -1219,29 +1279,217 @@ input:focus, select:focus, textarea:focus {
   color: var(--text1);
 }
 
-/* Responsive */
+/* =========================================================
+   RESPONSIVE DESIGN SYSTEM
+   ========================================================= */
+
+.btn-label-desktop { display: inline; }
+.mobile-only { display: none !important; }
+
+/* Large Tablets & Medium Displays (<= 1024px) */
+@media (max-width: 1024px) {
+  .app-content-body { padding: 1.25rem 1rem; }
+  .ingress-panel { grid-template-columns: 1fr; }
+}
+
+/* Tablets & Mobile Navigation Drawer (<= 900px) */
 @media (max-width: 900px) {
   .app-sidebar {
     position: fixed;
     left: 0;
     top: 0;
     bottom: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 150;
     transform: translateX(-100%);
     box-shadow: var(--shadow-lg);
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   }
   .app-sidebar.open {
     transform: translateX(0);
   }
-  .mobile-close-btn { display: block; }
-  .mobile-hamburger { display: flex; }
-  .topbar-search { max-width: 200px; }
-  .app-content-body { padding: 1rem; }
+  .sidebar-backdrop {
+    z-index: 140;
+  }
+  .mobile-close-btn { display: flex; align-items: center; justify-content: center; }
+  .mobile-hamburger { display: inline-flex; }
+
+  .app-topbar {
+    padding: 0.65rem 1rem;
+    gap: 0.65rem;
+  }
+  .topbar-search {
+    max-width: 170px;
+  }
 }
 
-@media (max-width: 640px) {
-  .topbar-search { display: none; }
-  .kpi-strip { grid-template-columns: repeat(2, 1fr); }
-  .ingress-panel { grid-template-columns: 1fr; }
+/* Mobile Screens (<= 768px) */
+@media (max-width: 768px) {
+  html { font-size: 13.5px; }
+
+  .app-topbar {
+    padding: 0.55rem 0.75rem;
+  }
+  .topbar-search {
+    display: none;
+  }
+  .crumb-root, .crumb-sep {
+    display: none;
+  }
+  .btn-label-desktop {
+    display: none;
+  }
+  .topbar-theme-btn {
+    padding: 0.35rem 0.55rem;
+  }
+  .mobile-only { display: block !important; }
+
+  .kpi-strip {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+  .kpi-tile {
+    padding: 0.65rem 0.8rem;
+  }
+  .kpi-val {
+    font-size: 1.25rem;
+  }
+
+  /* Force multi-column grids to 1 column on mobile */
+  [style*="grid-template-columns:repeat(auto-fit, minmax(400px"],
+  [style*="grid-template-columns:repeat(auto-fit, minmax(320px"],
+  [style*="grid-template-columns:repeat(auto-fit, minmax(280px"],
+  [style*="grid-template-columns: repeat(auto-fit, minmax(320px"],
+  [style*="grid-template-columns: repeat(auto-fit, minmax(400px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  .view-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .view-header-left {
+    width: 100%;
+  }
+  .view-header > div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: 100%;
+  }
+  .view-header > div:last-child > .btn {
+    flex: 1 1 auto;
+    min-width: 110px;
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.65rem;
+  }
+  .card-header > div:last-child {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    width: 100%;
+  }
+
+  /* Modals & Dialogs */
+  .modal-overlay {
+    padding: 0.5rem;
+  }
+  .modal {
+    padding: 1.15rem 1rem;
+    max-width: calc(100vw - 1rem);
+    max-height: 94vh;
+    border-radius: var(--radius-md);
+  }
+  .modal-lg, .modal-xl {
+    max-width: calc(100vw - 1rem);
+  }
+  .form-grid {
+    grid-template-columns: 1fr !important;
+    gap: 0.75rem;
+  }
+  .form-actions {
+    flex-direction: column-reverse;
+    width: 100%;
+    gap: 0.5rem;
+  }
+  .form-actions .btn {
+    width: 100%;
+  }
+
+  /* Tables Fluid Scroll */
+  .table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+  table th, table td {
+    padding: 0.55rem 0.65rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+
+  /* Console & Logs Panel */
+  .console-panel {
+    height: 480px;
+  }
+  .console-toolbar {
+    padding: 0.5rem 0.75rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .console-actions {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.2rem;
+  }
+  .log-row {
+    flex-wrap: wrap;
+  }
+}
+
+/* Extra Small Phones (<= 480px) */
+@media (max-width: 480px) {
+  .app-content-body {
+    padding: 0.75rem 0.5rem;
+  }
+  .topbar-theme-btn .theme-mode-text {
+    display: none;
+  }
+  .topbar-theme-btn {
+    padding: 0.35rem 0.5rem;
+  }
+  .topbar-left {
+    gap: 0.45rem;
+  }
+  .kpi-strip {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.4rem;
+  }
+  .kpi-tile {
+    padding: 0.55rem 0.65rem;
+  }
+  .kpi-val {
+    font-size: 1.15rem;
+  }
+  .tab-strip {
+    gap: 0.25rem;
+    padding-bottom: 0.3rem;
+  }
+  .tab-btn {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.74rem;
+  }
 }
 
 </style>
@@ -1395,8 +1643,13 @@ input:focus, select:focus, textarea:focus {
       <div class="footer-actions-row">
         <!-- Dual Theme Toggle Button -->
         <button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Switch Light / Dark Theme">
-          <span id="themeToggleIcon">??</span>
-          <span id="themeLabel">Dark Mode</span>
+          <div style="display:flex;align-items:center;gap:0.45rem;">
+            <span id="themeToggleIcon" class="theme-icon-slot"></span>
+            <span id="themeLabel">Dark Mode</span>
+          </div>
+          <div class="theme-switch-pill" id="themeSwitchPill">
+            <span class="theme-switch-dot"></span>
+          </div>
         </button>
 
         <!-- Logout Button -->
@@ -1429,18 +1682,20 @@ input:focus, select:focus, textarea:focus {
 
       <div class="topbar-right">
         <button class="btn btn-sm btn-primary" onclick="showQuickSetup()" title="Quick setup a new provider">
-          ? Quick Setup
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span class="btn-label-desktop">Quick Setup</span>
         </button>
         <button class="btn btn-sm" onclick="fetchAll()" title="Refresh live statistics">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6M23 20v-6h-6M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
-          Refresh
+          <span class="btn-label-desktop">Refresh</span>
         </button>
         <button class="btn btn-sm" onclick="reloadConfig()" title="Hot reload configuration">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
-          Reload
+          <span class="btn-label-desktop">Reload</span>
         </button>
-        <button class="topbar-theme-btn" onclick="toggleTheme()" title="Toggle Theme">
-          <span id="topbarThemeIcon">??</span>
+        <button class="topbar-theme-btn" id="topbarThemeBtn" onclick="toggleTheme()" title="Switch Light / Dark Theme" aria-label="Toggle Theme">
+          <span class="theme-icon-slot" id="topbarThemeIcon"></span>
+          <span class="theme-mode-text" id="topbarThemeText">Dark</span>
         </button>
       </div>
     </header>
@@ -1595,7 +1850,8 @@ input:focus, select:focus, textarea:focus {
               Add Provider
             </button>
             <button class="btn" onclick="showQuickSetup()">
-              ? Quick Setup
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+              Quick Setup
             </button>
           </div>
         </div>
@@ -1812,7 +2068,7 @@ input:focus, select:focus, textarea:focus {
               </div>
               <div style="display:flex; align-items:flex-start; gap:0.6rem;">
                 <span class="tag tag-green">Dir Tree</span>
-                <span style="color:var(--text2);">Detects tree symbols (???, ???) and limits to 40 representative lines.</span>
+                <span style="color:var(--text2);">Detects tree characters (&#9500;&#9472;&#9472;, &#9492;&#9472;&#9472;) and limits to 40 representative lines.</span>
               </div>
               <div style="display:flex; align-items:flex-start; gap:0.6rem;">
                 <span class="tag tag-orange">Stack Trace</span>
@@ -1824,7 +2080,7 @@ input:focus, select:focus, textarea:focus {
               </div>
               <div style="display:flex; align-items:flex-start; gap:0.6rem;">
                 <span class="tag tag-cyan">Log Lines</span>
-                <span style="color:var(--text2);">Deduplicates repetitive timestamped log lines with [?N] counters.</span>
+                <span style="color:var(--text2);">Deduplicates repetitive timestamped log lines with [&times;N] counters.</span>
               </div>
               <div style="display:flex; align-items:flex-start; gap:0.6rem;">
                 <span class="tag tag-red">Compiler &amp; Test</span>
@@ -1845,7 +2101,8 @@ input:focus, select:focus, textarea:focus {
           </div>
           <div style="display:flex; align-items:center; gap:0.5rem;">
             <button class="btn btn-primary" onclick="refreshProxyPool()">
-              ?? Scrape &amp; Refresh
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Scrape &amp; Refresh
             </button>
             <button class="btn" onclick="showWorkerScriptModal()">
               Cloudflare Worker Relay
@@ -2262,9 +2519,16 @@ function doLogout(){
 }
 
 /* ===== Dual Theme Logic ===== */
+const THEME_SUN_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
+
+const THEME_MOON_SVG = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+
 function initTheme(){
-  const saved = localStorage.getItem('gogate_theme') || 
-    (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  let saved = 'dark';
+  try {
+    saved = localStorage.getItem('gogate_theme') || 
+      (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+  } catch(e){}
   setTheme(saved);
 }
 
@@ -2276,7 +2540,9 @@ function toggleTheme(){
 
 function setTheme(theme){
   document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('gogate_theme', theme);
+  try {
+    localStorage.setItem('gogate_theme', theme);
+  } catch(e){}
   updateThemeUI(theme);
 }
 
@@ -2284,14 +2550,24 @@ function updateThemeUI(theme){
   const icon = document.getElementById('themeToggleIcon');
   const label = document.getElementById('themeLabel');
   const topIcon = document.getElementById('topbarThemeIcon');
+  const topText = document.getElementById('topbarThemeText');
+  const topBtn = document.getElementById('topbarThemeBtn');
+  const sideBtn = document.getElementById('themeToggleBtn');
+  
   if(theme === 'light'){
-    if(icon) icon.textContent = '??';
+    if(icon) icon.innerHTML = THEME_SUN_SVG;
     if(label) label.textContent = 'Light Mode';
-    if(topIcon) topIcon.textContent = '??';
+    if(topIcon) topIcon.innerHTML = THEME_SUN_SVG;
+    if(topText) topText.textContent = 'Light';
+    if(topBtn) topBtn.title = 'Switch to Dark Mode';
+    if(sideBtn) sideBtn.title = 'Switch to Dark Mode';
   } else {
-    if(icon) icon.textContent = '??';
+    if(icon) icon.innerHTML = THEME_MOON_SVG;
     if(label) label.textContent = 'Dark Mode';
-    if(topIcon) topIcon.textContent = '??';
+    if(topIcon) topIcon.innerHTML = THEME_MOON_SVG;
+    if(topText) topText.textContent = 'Dark';
+    if(topBtn) topBtn.title = 'Switch to Light Mode';
+    if(sideBtn) sideBtn.title = 'Switch to Light Mode';
   }
 }
 
