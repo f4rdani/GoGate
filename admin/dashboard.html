@@ -35,10 +35,10 @@
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --text1: #f8fafc;
-  --text2: #94a3b8;
-  --text3: #64748b;
-  --text4: #475569;
+  --text1: #ffffff;
+  --text2: #e2e8f0;
+  --text3: #cbd5e1;
+  --text4: #64748b;
 
   --accent: #6366f1;
   --accent-hover: #4f46e5;
@@ -87,10 +87,10 @@
   --border-subtle: #f1f5f9;
   --border-hover: #cbd5e1;
 
-  --text1: #0f172a;
-  --text2: #334155;
-  --text3: #64748b;
-  --text4: #94a3b8;
+  --text1: #090d16;
+  --text2: #1e293b;
+  --text3: #cbd5e1;
+  --text4: #64748b;
 
   --accent: #4f46e5;
   --accent-hover: #4338ca;
@@ -557,8 +557,8 @@ a:hover { color: var(--accent-hover); }
   letter-spacing: -0.015em;
 }
 .view-header-desc {
-  font-size: 0.82rem;
-  color: var(--text3);
+  font-size: 0.84rem;
+  color: var(--text2);
   margin-top: 0.15rem;
 }
 
@@ -615,11 +615,11 @@ a:hover { color: var(--accent-hover); }
   transform: translateY(-1px);
 }
 .kpi-label {
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: 0.72rem;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--text3);
+  color: var(--text2);
 }
 .kpi-val {
   font-size: 1.45rem;
@@ -760,8 +760,8 @@ table {
 thead th {
   background: var(--surface-subtle);
   padding: 0.65rem 0.95rem;
-  font-weight: 600;
-  color: var(--text2);
+  font-weight: 700;
+  color: var(--text1);
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1046,8 +1046,8 @@ input:focus, select:focus, textarea:focus {
   color: var(--text1);
 }
 .ingress-desc {
-  font-size: 0.78rem;
-  color: var(--text3);
+  font-size: 0.82rem;
+  color: var(--text2);
 }
 
 /* Console Logs Terminal */
@@ -1250,15 +1250,32 @@ input:focus, select:focus, textarea:focus {
 
 <!-- Auth Modal -->
 <div id="authModal" class="modal-overlay">
-  <div class="modal">
-    <h2>Control Center Access</h2>
-    <p>Enter the administrator secret to manage the AI Gateway.</p>
+  <div class="modal" style="max-width:440px;padding:2rem;">
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+      <div class="brand-logo" style="width:38px;height:38px;flex-shrink:0;">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <div>
+        <h2 style="font-size:1.25rem;font-weight:700;color:var(--text1);margin:0;">GoGate AI Gateway</h2>
+        <div style="font-size:0.78rem;color:var(--accent);font-weight:600;">Control Center Authentication</div>
+      </div>
+    </div>
+    <p style="color:var(--text2);font-size:0.85rem;margin-bottom:1.15rem;line-height:1.5;">
+      Enter the administrator secret configured in your server to access the gateway management panel.
+    </p>
     {{DEFAULT_PASS_BOX}}
-    <input type="password" id="secretInput" placeholder="Admin Secret..." autofocus>
-    <div class="error-msg" id="authError" style="color:var(--red);font-size:0.78rem;margin:0.5rem 0;"></div>
-    <button class="btn btn-primary" style="width:100%" onclick="doLogin()">Authorize Session</button>
-    <div style="text-align:center;margin-top:0.85rem">
-      <a href="#" style="font-size:0.75rem;color:var(--text3)" onclick="showChangePassword();return false;">Change admin password</a>
+    <div style="position:relative;margin-bottom:0.85rem;">
+      <input type="password" id="secretInput" placeholder="Admin Secret..." autofocus style="width:100%;padding:0.65rem 2.5rem 0.65rem 0.85rem;font-size:0.88rem;border-radius:var(--radius);" onkeydown="if(event.key==='Enter'){event.preventDefault();doLogin();}">
+      <button type="button" id="btnTogglePassEye" onclick="togglePasswordVisibility()" style="position:absolute;right:0.6rem;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text3);cursor:pointer;padding:0.25rem;" title="Show/Hide Password">
+        <svg id="passEyeIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    <div class="error-msg" id="authError" style="display:none;padding:0.6rem 0.85rem;border-radius:var(--radius);margin-bottom:0.85rem;font-size:0.8rem;background:var(--red-soft);border:1px solid var(--red-border);color:var(--red);"></div>
+    <button id="btnLoginSubmit" class="btn btn-primary" style="width:100%;padding:0.65rem 1rem;font-size:0.88rem;font-weight:700;" onclick="doLogin()">Authorize Session &rarr;</button>
+    <div style="text-align:center;margin-top:1rem;">
+      <a href="#" style="font-size:0.78rem;color:var(--text3);" onclick="showChangePassword();return false;">Change admin password</a>
     </div>
   </div>
 </div>
@@ -2080,7 +2097,8 @@ input:focus, select:focus, textarea:focus {
 
 <script>
 
-let secret = localStorage.getItem('adminSecret') || '';
+
+let secret = localStorage.getItem('admin_secret') || sessionStorage.getItem('admin_secret') || localStorage.getItem('adminSecret') || '';
 let _currentProviders = [];
 let _currentModels = [];
 let _currentConfig = {};
@@ -2110,8 +2128,7 @@ function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).t
 function maskKey(k){if(!k)return'&mdash;';return k.substring(0,10)+'&bull;&bull;&bull;'+k.substring(k.length-4)}
 
 function parseBackendLines(text) {
-  return (text || '').split('
-').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => {
+  return (text || '').split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => {
     const parts = l.split(',');
     const prov = parts[0].trim();
     const upModel = (parts[1] || '').trim();
@@ -2121,12 +2138,29 @@ function parseBackendLines(text) {
   });
 }
 
-async function api(path,opts={}){
-  const headers={'Content-Type':'application/json',...(opts.headers||{})};
-  if(secret)headers['Authorization']='Bearer '+secret;
-  const res=await fetch(path,{...opts,headers});
-  if(res.status===401){showAuth();throw new Error('Unauthorized');}
-  if(!res.ok){const err=await res.json().catch(()=>({error:res.statusText}));throw new Error(err.error||res.statusText);}
+async function api(path, opts = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(opts.headers || {})
+  };
+  if (secret) {
+    headers['X-Admin-Secret'] = secret;
+    headers['Authorization'] = 'Bearer ' + secret;
+  }
+  const res = await fetch(path, { ...opts, headers });
+  if (res.status === 401) {
+    secret = '';
+    localStorage.removeItem('admin_secret');
+    sessionStorage.removeItem('admin_secret');
+    localStorage.removeItem('adminSecret');
+    showAuth();
+    throw new Error('Unauthorized: Incorrect admin secret');
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -2159,25 +2193,65 @@ function hideAuth(){
   document.getElementById('authModal').classList.add('hidden');
 }
 
-async function doLogin(){
-  const input=document.getElementById('secretInput');
-  const err=document.getElementById('authError');
-  const val=input.value.trim();
-  if(!val){err.textContent='Please enter the admin secret';return;}
-  err.textContent='';
-  secret=val;
-  try{
+async function doLogin() {
+  const input = document.getElementById('secretInput');
+  const err = document.getElementById('authError');
+  const btn = document.getElementById('btnLoginSubmit');
+  const val = (input.value || '').trim();
+  if (!val) {
+    if (err) {
+      err.style.display = 'block';
+      err.textContent = 'Please enter the admin secret';
+    }
+    input.focus();
+    return;
+  }
+  if (err) {
+    err.style.display = 'none';
+    err.textContent = '';
+  }
+  secret = val;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Verifying Secret...';
+  }
+  try {
     await api('/admin/stats');
-    localStorage.setItem('adminSecret',secret);
+    localStorage.setItem('admin_secret', secret);
+    sessionStorage.setItem('admin_secret', secret);
+    localStorage.setItem('adminSecret', secret);
     hideAuth();
-    toast('Session authorized','success');
+    toast('Session authorized successfully!', 'success');
     fetchAll();
     initConsole();
-  }catch(e){
-    err.textContent=e.message||'Authentication failed';
-    secret='';
+  } catch (e) {
+    secret = '';
+    if (err) {
+      err.style.display = 'block';
+      err.textContent = e.message || 'Authentication failed: invalid secret';
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Authorize Session';
+    }
   }
 }
+window.doLogin = doLogin;
+
+function togglePasswordVisibility() {
+  const input = document.getElementById('secretInput');
+  const icon = document.getElementById('passEyeIcon');
+  if (!input) return;
+  if (input.type === 'password') {
+    input.type = 'text';
+    if (icon) icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+  } else {
+    input.type = 'password';
+    if (icon) icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  }
+}
+window.togglePasswordVisibility = togglePasswordVisibility;
 
 function doLogout(){
   secret='';
@@ -2955,10 +3029,8 @@ async function submitAddProvider(){
   const base_url=document.getElementById('mp_base').value.trim();
   const tier=parseInt(document.getElementById('mp_tier').value)||1;
   const cf_acc=document.getElementById('mp_cf_acc')?document.getElementById('mp_cf_acc').value.trim():'';
-  const api_keys=document.getElementById('mp_keys').value.split('
-').map(k=>k.trim()).filter(Boolean);
-  const modelLines=document.getElementById('mp_models').value.split('
-').map(m=>m.trim()).filter(Boolean);
+  const api_keys=document.getElementById('mp_keys').value.split('\n').map(k=>k.trim()).filter(Boolean);
+  const modelLines=document.getElementById('mp_models').value.split('\n').map(m=>m.trim()).filter(Boolean);
   const models=modelLines.map(line=>{
     const parts=line.split(',');
     return {name:parts[0].trim(),model:(parts[1]||parts[0]).trim()};
@@ -3914,8 +3986,7 @@ function clearConsole(){
 }
 
 function downloadConsoleLogs(){
-  const lines = _consoleLogs.map(e => `[${e.t}] [${e.l}] ${e.m}${e.a ? ' | ' + e.a : ''}`).join('
-');
+  const lines = _consoleLogs.map(e => `[${e.t}] [${e.l}] ${e.m}${e.a ? ' | ' + e.a : ''}`).join('\n');
   const blob = new Blob([lines], {type:'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -3942,6 +4013,26 @@ function downloadConsoleLogs(){
     if(h && viewTitles[h]) switchView(h, false);
   });
 
+    // Setup login keyboard Enter listener
+  const sInput = document.getElementById('secretInput');
+  if (sInput) {
+    sInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doLogin();
+      }
+    });
+    if (secret) sInput.value = secret;
+  }
+
+  const sBtn = document.getElementById('btnLoginSubmit');
+  if (sBtn) {
+    sBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      doLogin();
+    });
+  }
+
   const baseEl = document.getElementById('overviewBaseUrl');
   if(baseEl) baseEl.textContent = window.location.origin + '/v1';
 
@@ -3966,6 +4057,7 @@ function downloadConsoleLogs(){
     if(secret) fetchAll();
   }, 10000);
 })();
+
 
 </script>
 </body>

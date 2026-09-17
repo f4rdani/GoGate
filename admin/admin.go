@@ -89,6 +89,12 @@ func (a *AdminHandler) CheckAuth(r *http.Request) bool {
 		return false
 	}
 	provided := r.Header.Get("X-Admin-Secret")
+	if provided == "" {
+		authHdr := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHdr, "Bearer ") {
+			provided = strings.TrimPrefix(authHdr, "Bearer ")
+		}
+	}
 	ok := subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) == 1
 	if !ok {
 		// Brute-force protection: delay failed attempts
