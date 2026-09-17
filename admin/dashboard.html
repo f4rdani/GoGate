@@ -3746,6 +3746,19 @@ function openProviderHub(provName){
       </div>
       <div id="hubKeysList">${renderHubKeys(p)}</div>
     </div>
+
+    <!-- 3. Models List -->
+    <div class="hub-section">
+      <div class="hub-header">
+        <div class="hub-title" id="hubModelsCountTitle">Upstream Models &amp; Routes (${getProviderModelEntries(p).length})</div>
+        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+          <button class="btn btn-sm btn-primary" onclick="showAddHubModelModal('${esc(p.name)}')">+ Add Model</button>
+          <button class="btn btn-sm" onclick="showSyncModelsModal('${esc(p.name)}')">Sync from API</button>
+          <button class="btn btn-sm" onclick="testAllProviderModels('${esc(p.name)}')">Test All Models</button>
+        </div>
+      </div>
+      <div id="hubModelsList">${renderHubModels(p)}</div>
+    </div>
   `;
 
   openModal(`Provider Hub: ${p.name}`, html, null, 'modal-xl');
