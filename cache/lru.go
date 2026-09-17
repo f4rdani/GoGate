@@ -32,7 +32,11 @@ type LRUCache struct {
 }
 
 // New creates a new LRU cache with the given capacity and TTL.
+// A non-positive capacity is clamped to 1 to keep eviction well-defined.
 func New(capacity int, ttl time.Duration) *LRUCache {
+	if capacity <= 0 {
+		capacity = 1
+	}
 	return &LRUCache{
 		capacity:  capacity,
 		ttl:       ttl,
@@ -42,28 +46,16 @@ func New(capacity int, ttl time.Duration) *LRUCache {
 }
 
 // HashRequest creates a deterministic cache key from a chat completion request.
+// The ENTIRE request is hashed (model, messages, tools, stop, seed,
+// response_format, penalties, ...) so requests that differ in any parameter
+// never share a cache entry. Returns "" for streaming requests (never cached).
 func HashRequest(req *models.ChatCompletionRequest) string {
 	// Only cache if not streaming
 	if req.Stream {
 		return ""
 	}
 
-	// Create a canonical representation
-	key := struct {
-		Model    string                `json:"model"`
-		Messages []models.Message      `json:"messages"`
-		Temp     *float64              `json:"temperature,omitempty"`
-		MaxTok   *int                  `json:"max_tokens,omitempty"`
-		TopP     *float64              `json:"top_p,omitempty"`
-	}{
-		Model:    req.Model,
-		Messages: req.Messages,
-		Temp:     req.Temperature,
-		MaxTok:   req.MaxTokens,
-		TopP:     req.TopP,
-	}
-
-	data, err := json.Marshal(key)
+	data, err := json.Marshal(req)
 	if err != nil {
 		return ""
 	}

@@ -182,7 +182,18 @@ a:hover { color: var(--accent-hover); }
   position: sticky;
   top: 0;
   z-index: 90;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Desktop: sidebar can be collapsed via the topbar toggle (state kept in localStorage).
+   Mobile (<=900px) keeps drawer behavior below and is unaffected by this rule. */
+@media (min-width: 901px) {
+  .app-sidebar {
+    margin-left: 0;
+  }
+  body.sidebar-collapsed .app-sidebar {
+    margin-left: -261px;
+  }
 }
 
 .sidebar-brand {
@@ -480,7 +491,7 @@ a:hover { color: var(--accent-hover); }
 }
 
 .mobile-hamburger {
-  display: none;
+  display: inline-flex;
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text2);
@@ -489,6 +500,7 @@ a:hover { color: var(--accent-hover); }
   border-radius: var(--radius);
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 .mobile-hamburger:hover {
   background: var(--surface-hover);
@@ -1362,6 +1374,8 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-bottom: 0.75rem;
 }
 .hub-title {
@@ -1371,6 +1385,34 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  min-width: 0;
+}
+
+/* Success meta grid (test-model responses) — stacks on phones */
+.test-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+  background: rgba(16, 185, 129, 0.06);
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  margin: 0.6rem 0;
+  font-size: 0.78rem;
+}
+
+/* Shared search input used by hub key/model filters */
+.form-control {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text1);
+  outline: none;
+}
+.form-control:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 /* Metric Strip (System) */
@@ -1575,6 +1617,43 @@ input:focus, select:focus, textarea:focus {
   .log-row {
     flex-wrap: wrap;
   }
+
+  /* Stack label/value diagnostic grids so long URLs don't squeeze on phones */
+  .test-diag-grid,
+  .test-meta-grid {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
+  }
+
+  /* Error detail rows span all columns — allow them to wrap instead of forcing sideways scroll */
+  table td[colspan] {
+    white-space: normal;
+  }
+
+  /* Prevent iOS auto-zoom on focus and keep tap targets comfortable */
+  input[type="text"],
+  input[type="password"],
+  input[type="number"],
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* Keep long provider/model names from pushing the topbar off-screen */
+  .topbar-left {
+    min-width: 0;
+    flex: 1;
+  }
+  .view-breadcrumb {
+    min-width: 0;
+    overflow: hidden;
+  }
+  .crumb-current {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 38vw;
+  }
 }
 
 /* Extra Small Phones (<= 480px) */
@@ -1608,6 +1687,35 @@ input:focus, select:focus, textarea:focus {
   .tab-btn {
     padding: 0.35rem 0.55rem;
     font-size: 0.74rem;
+  }
+
+  /* Toasts become a full-width bottom sheet strip on phones */
+  .toast-container {
+    left: 0.5rem;
+    right: 0.5rem;
+    bottom: 0.75rem;
+  }
+  .toast {
+    max-width: none;
+    width: 100%;
+  }
+
+  /* Tighten the topbar so hamburger + actions fit in 360px */
+  .app-topbar {
+    gap: 0.5rem;
+  }
+  .topbar-right {
+    gap: 0.3rem;
+  }
+  .topbar-right .btn-sm {
+    padding: 0.32rem 0.5rem;
+  }
+
+  .card-body {
+    padding: 1rem;
+  }
+  .hub-section {
+    padding: 0.8rem;
   }
 }
 
@@ -1682,7 +1790,7 @@ input:focus, select:focus, textarea:focus {
       </div>
       <div class="brand-text">
         <span class="brand-title">GoGate</span>
-        <span class="brand-badge">v1.2</span>
+        <span class="brand-badge">{{APP_VERSION}}</span>
       </div>
       <button class="mobile-close-btn" onclick="toggleMobileSidebar()" title="Close menu">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -1762,6 +1870,7 @@ input:focus, select:focus, textarea:focus {
         </div>
         <div class="server-meta" id="uptime">Uptime: &mdash;</div>
         <div class="server-meta" id="lastRefresh" style="opacity:0.8;">Synced: &mdash;</div>
+        <div class="server-meta" style="opacity:0.8;">GoGate {{APP_VERSION}}</div>
       </div>
 
       <div class="footer-actions-row">
@@ -1789,7 +1898,7 @@ input:focus, select:focus, textarea:focus {
     <!-- Topbar Header -->
     <header class="app-topbar">
       <div class="topbar-left">
-        <button class="mobile-hamburger" onclick="toggleMobileSidebar()" title="Toggle Menu">
+        <button class="mobile-hamburger" onclick="toggleSidebar()" title="Tutup/buka menu sidebar">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div class="view-breadcrumb">
@@ -2162,6 +2271,17 @@ input:focus, select:focus, textarea:focus {
                     <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Enforces ultra-terse code-focused outputs to save output tokens</div>
                   </div>
                   <input type="checkbox" id="ts_caveman" style="width:18px;height:18px;">
+                </label>
+
+                <label class="full">
+                  <span style="font-weight:700; color:var(--text1);">Ponytail Style (lazy senior dev)</span>
+                  <span style="font-size:0.75rem; color:var(--text2); font-weight:500;">Minimal YAGNI-first code outputs. Ignored while Caveman Mode is on.</span>
+                  <select id="ts_ponytail">
+                    <option value="">Off</option>
+                    <option value="lite">Lite — build what's asked</option>
+                    <option value="full">Full — YAGNI ladder enforced</option>
+                    <option value="ultra">Ultra — YAGNI extremist</option>
+                  </select>
                 </label>
 
                 <label class="full">
@@ -2728,9 +2848,11 @@ function renderTestSuccessHTML(title, meta = {}, content = '') {
       <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--green);font-weight:700;">Latensi: ${esc(meta.latency||'--')}</span>
     </div>
 
-    <div style="display:grid;grid-template-columns:auto 1fr;gap:0.35rem 0.75rem;background:rgba(16,185,129,0.06);padding:0.6rem 0.75rem;border-radius:6px;border:1px solid rgba(16,185,129,0.2);margin:0.6rem 0;font-size:0.78rem;">
+    <div class="test-meta-grid">
       ${meta.provider ? `<span style="color:var(--text3);font-weight:600;">📡 Provider:</span><span style="color:var(--text1);font-weight:700;">${esc(meta.provider)}</span>` : ''}
       ${meta.model ? `<span style="color:var(--text3);font-weight:600;">🤖 Model:</span><span style="color:var(--text1);font-family:var(--font-mono);font-weight:700;">${esc(meta.model)}</span>` : ''}
+      ${meta.keyLabel || meta.key_number ? `<span style="color:var(--text3);font-weight:600;">🔑 Key Sukses:</span><span style="color:var(--text1);font-weight:700;">${esc(meta.keyLabel || ('Key #' + meta.key_number))}${meta.key_masked ? `<span style="color:var(--text2);font-family:var(--font-mono);font-weight:400;"> (` + esc(meta.key_masked) + `)</span>` : ''}${meta.fallback_used ? `<span class="tag tag-purple" style="margin-left:0.35rem;">fallback</span>` : ''}</span>` : ''}
+      ${meta.attempts > 1 ? `<span style="color:var(--text3);font-weight:600;">🔁 Percobaan:</span><span style="color:var(--text1);font-weight:700;">${esc(String(meta.attempts))}x (dari ${esc(String(meta.key_count || meta.attempts))} key)</span>` : ''}
       ${meta.modelCount !== undefined ? `<span style="color:var(--text3);font-weight:600;">📦 Model Ditemukan:</span><span style="color:var(--text1);font-weight:700;">${esc(meta.modelCount)} model</span>` : ''}
       ${meta.target ? `<span style="color:var(--text3);font-weight:600;">🌐 Target URL:</span><span style="color:var(--text2);font-family:var(--font-mono);font-size:0.73rem;">${esc(meta.target)}</span>` : ''}
     </div>
@@ -2973,6 +3095,26 @@ function toggleMobileSidebar(force){
     sidebar.classList.remove('open');
     backdrop.classList.remove('show');
   }
+}
+
+/* Unified sidebar toggle: drawer on phones (<=900px), collapsible rail on desktop.
+   Desktop state persists in localStorage so it survives reloads. */
+function toggleSidebar(){
+  if(window.matchMedia && window.matchMedia('(max-width: 900px)').matches){
+    toggleMobileSidebar();
+    return;
+  }
+  const collapsed = document.body.classList.toggle('sidebar-collapsed');
+  try{ localStorage.setItem('gogate_sidebar_collapsed', collapsed ? '1' : '0'); }catch(e){}
+}
+
+function applySidebarState(){
+  try{
+    if(localStorage.getItem('gogate_sidebar_collapsed') === '1' &&
+       window.matchMedia && !window.matchMedia('(max-width: 900px)').matches){
+      document.body.classList.add('sidebar-collapsed');
+    }
+  }catch(e){}
 }
 
 function handleGlobalSearch(query){
@@ -3351,6 +3493,7 @@ function renderTokenSaver(cfg){
   if(!cfg) return;
   const en = document.getElementById('ts_enabled'); if(en) en.checked = !!cfg.enabled;
   const cm = document.getElementById('ts_caveman'); if(cm) cm.checked = !!cfg.caveman_mode;
+  const pt = document.getElementById('ts_ponytail'); if(pt) pt.value = cfg.ponytail || '';
   const mb = document.getElementById('ts_max_bytes'); if(mb) mb.value = cfg.max_input_bytes || 4096;
   const cu = document.getElementById('ts_user'); if(cu) cu.checked = !!cfg.compress_user;
   const mj = document.getElementById('ts_json'); if(mj) mj.checked = !!cfg.minify_json;
@@ -3367,6 +3510,7 @@ async function saveTokenSaverConfig(){
     const payload = {
       enabled: document.getElementById('ts_enabled').checked,
       caveman_mode: document.getElementById('ts_caveman').checked,
+      ponytail: document.getElementById('ts_ponytail').value || '',
       max_input_bytes: parseInt(document.getElementById('ts_max_bytes').value) || 4096,
       compress_user: document.getElementById('ts_user').checked,
       minify_json: document.getElementById('ts_json').checked,
@@ -3638,7 +3782,7 @@ function showAddProvider(){
   openModal('Add Provider',`
     <div class="form-grid">
       <label>Name<input id="mp_name" placeholder="my-provider"></label>
-      <label>Type<select id="mp_type"><option>openai</option><option>anthropic</option><option>deepseek</option><option>openrouter</option><option>groq</option><option>mistral</option><option>gemini</option><option>cohere</option><option>cloudflare</option><option>custom</option></select></label>
+      <label>Type<select id="mp_type"><option>openai</option><option>anthropic</option><option>deepseek</option><option>openrouter</option><option>groq</option><option>mistral</option><option>gemini</option><option>cohere</option><option>cerebras</option><option>mimo</option><option>opencode</option><option>cloudflare</option><option>kiro</option><option>oauth</option><option>custom</option></select></label>
       <label class="full">Base URL<input id="mp_base" placeholder="https://api.openai.com/v1"></label>
       <label>Tier<select id="mp_tier"><option value="1">1 &mdash; Subscription</option><option value="2">2 &mdash; Cheap</option><option value="3">3 &mdash; Free</option></select></label>
       <label>Cloudflare Account ID (optional)<input id="mp_cf_acc" placeholder="Hex string for Workers AI"></label>
@@ -3727,6 +3871,26 @@ function openProviderHub(provName, updateHash = true){
   }
 }
 
+function fmtQuotaNum(n){
+  if(n === null || n === undefined || isNaN(n)) return '?';
+  if(Math.abs(n) >= 1000) return (n/1000).toFixed(1) + 'k';
+  return String(Math.round(n));
+}
+
+function renderKiroQuota(p){
+  if(!p || !p.quota || !p.quota.quotas) return '';
+  const entries = Object.entries(p.quota.quotas).slice(0, 4);
+  if(!entries.length) return '';
+  return `<span style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">` +
+    `<span style="font-size:0.72rem;color:var(--text3);font-weight:700;">💳 ${esc(p.quota.plan || 'Quota')}:</span>` +
+    entries.map(([k, q]) => {
+      const pct = q.total > 0 ? Math.min(100, Math.round(q.used / q.total * 100)) : 0;
+      const cls = pct >= 100 ? 'tag-red' : pct >= 80 ? 'tag-orange' : 'tag-green';
+      return `<span class="tag ${cls}" title="Reset: ${esc(q.reset_at || '-')}">${esc(k)}: ${esc(fmtQuotaNum(q.remaining))} sisa</span>`;
+    }).join('') +
+  `</span>`;
+}
+
 function renderProviderHubPage(provName){
   const container = document.getElementById('manageHubPageContainer');
   if(!container) return;
@@ -3792,6 +3956,7 @@ function renderProviderHubPage(provName){
         <span class="tag tag-blue">${esc(p.type)}</span>
         <span class="tag ${p.tier===1?'tag-green':p.tier===2?'tag-orange':'tag-purple'}">Tier ${p.tier}</span>
         ${p.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}
+        ${renderKiroQuota(p)}
       </div>
       <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
         <button class="toggle-btn ${p.disabled ? 'off' : 'on'}" onclick="toggleProviderStatus('${esc(p.name)}', ${!p.disabled})">
@@ -4316,7 +4481,9 @@ function renderHubModelsTable(p, filtered){
                 `;
               } else if (testRes.status === 'success') {
                 rowStyle = isChecked ? 'background: rgba(99, 102, 241, 0.08);' : 'background: rgba(16, 185, 129, 0.06);';
-                testResultCol = `<span class="test-succ-badge">✅ OK (${testRes.latency}ms)</span>`;
+                const keyTag = testRes.key_label || (testRes.key_number ? ('Key #' + testRes.key_number) : '');
+                const fbTag = testRes.fallback_used ? ' • fallback' : '';
+                testResultCol = `<span class="test-succ-badge" title="${esc(keyTag ? ('Sukses dengan ' + keyTag + (testRes.key_masked ? ' (' + testRes.key_masked + ')' : '') + fbTag) : 'Sukses')}">✅ OK (${testRes.latency}ms${keyTag ? ' • ' + esc(keyTag) : ''}${esc(fbTag)})</span>`;
               }
             }
 
@@ -5095,17 +5262,30 @@ async function testHubSingleModel(provName, upstreamTarget, routeName){
       method: 'POST',
       body: JSON.stringify({ provider: provName, model: upstreamTarget })
     });
+    const keyLabel = r.key_label || (r.key_number ? ('Key #' + r.key_number) : '');
+    const keyDetail = keyLabel ? (' sukses dengan ' + keyLabel) : '';
+    const fallbackDetail = r.fallback_used ? (` (fallback setelah ${r.attempts}x percobaan)`) : '';
     _hubModelTestResults[testKey] = {
       status: 'success',
       latency: r.latency_ms || 0,
-      time: Date.now()
+      time: Date.now(),
+      key_label: keyLabel || undefined,
+      key_number: r.key_number,
+      key_masked: r.key_masked,
+      attempts: r.attempts,
+      fallback_used: !!r.fallback_used
     };
     if(routeName && routeName !== upstreamTarget){
       _hubModelTestResults[provName + '_' + routeName] = _hubModelTestResults[testKey];
     }
-    toast(`${upstreamTarget}: ${r.latency_ms}ms [BERFUNGSI]`, 'success');
+    toast(`${upstreamTarget}: ${r.latency_ms}ms [BERFUNGSI]${keyDetail}${fallbackDetail}`, 'success');
   }catch(e){
     const parsed = parseTestErrorDetails(e, { provider: provName, model: upstreamTarget, targetURL: e.data?.target });
+    // If backend tried multiple keys and all failed, surface that info.
+    if(e.data && e.data.attempts > 1){
+      parsed.title += ` (sudah coba ${e.data.attempts} key)`;
+      parsed.suggestion += ` Semua ${e.data.attempts} key dicoba dan gagal — kemungkinan limit kuota di semua key atau gangguan upstream.`;
+    }
     _hubModelTestResults[testKey] = {
       status: 'failed',
       error: e.message,
@@ -5499,6 +5679,7 @@ function showQuickSetup(){
       <div class="form-grid">
         <label class="full">Provider Template<select id="qs_tmpl">${opts}</select></label>
         <label class="full">API Key<input id="qs_key" placeholder="sk-..." type="password"></label>
+        <label class="full">Models (optional, comma-separated)<textarea id="qs_models" rows="2" placeholder="Leave blank to auto-fetch from provider catalog. Required for providers without a catalog endpoint (e.g. Anthropic)."></textarea></label>
         <div class="form-section full" id="qs_info" style="font-size:0.78rem;color:var(--text3);padding:0.5rem 0;">Select a template to view details.</div>
       </div>
       <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="runQuickSetup()">Setup Provider</button></div>
@@ -5517,12 +5698,17 @@ function showQuickSetup(){
 async function runQuickSetup(){
   const tmpl = document.getElementById('qs_tmpl').value;
   const key = document.getElementById('qs_key').value.trim();
+  const modelsRaw = (document.getElementById('qs_models')?.value || '').trim();
   if(!key){toast('API key is required','error');return;}
+  const body = {template_name: tmpl, api_key: key};
+  if(modelsRaw){
+    body.models = modelsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  }
   toast('Setting up '+tmpl+' and fetching models...','info');
   try{
-    const r = await api('/admin/templates/setup',{method:'POST',body:JSON.stringify({template:tmpl,api_key:key})});
+    const r = await api('/admin/templates/setup',{method:'POST',body:JSON.stringify(body)});
     closeModal();
-    toast(`Setup complete! Added ${r.models_added} models`,'success');
+    toast(`Setup complete! Added ${r.models_count} models`,'success');
     fetchAll();
   }catch(e){toast('Error: '+e.message,'error');}
 }
@@ -5612,10 +5798,16 @@ async function runTestModel(){
       provider: r.provider || prov || 'Auto-route',
       model: model,
       latency: (r.latency_ms || 0) + 'ms',
-      target: r.target
+      target: r.target,
+      keyLabel: r.key_label,
+      key_number: r.key_number,
+      key_masked: r.key_masked,
+      attempts: r.attempts,
+      key_count: r.key_count,
+      fallback_used: r.fallback_used
     }, r.response);
     if (prov) {
-      _hubModelTestResults[prov + '_' + model] = { status: 'success', latency: r.latency_ms };
+      _hubModelTestResults[prov + '_' + model] = { status: 'success', latency: r.latency_ms, key_label: r.key_label, key_number: r.key_number, key_masked: r.key_masked, attempts: r.attempts, fallback_used: !!r.fallback_used };
     }
   }catch(e){
     resBox.className = 'full test-res-box test-result-failed';
@@ -5916,6 +6108,7 @@ function downloadConsoleLogs(){
 /* ===== Bootstrapping & Routing ===== */
 (async function init(){
   initTheme();
+  applySidebarState();
 
   function resolveHashRoute(hashStr){
     const h = (hashStr || '').replace('#','').trim();

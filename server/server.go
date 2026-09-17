@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/aigateway/admin"
@@ -32,6 +34,7 @@ var healthCheckClient = &http.Client{Timeout: 10 * time.Second}
 // Server is the main AI Gateway HTTP server.
 type Server struct {
 	configPath string
+	cfgMu      sync.RWMutex // guards cfg (read by health checks/wrappers, written by ReloadConfig)
 	cfg        *config.Config
 	handler    *proxy.Handler
 	admin      *admin.AdminHandler
@@ -40,6 +43,69 @@ type Server struct {
 	cancelFunc context.CancelFunc // for stopping background goroutines
 	tunnelMgr  *tunnel.TunnelManager
 	proxyPool  *relay.ProxyPool
+}
+
+// getConfig returns the active config (thread-safe).
+func (s *Server) getConfig() *config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return s.cfg
+}
+
+// wireEgressPool routes a provider through the rotating egress proxy pool and
+// attaches the pool for per-attempt checkout + failure reporting, so dead
+// proxies are evicted after 3 consecutive transport failures instead of
+// lingering until the next periodic refresh.
+func wireEgressPool(p provider.Provider, pCfg config.ProviderConfig, proxyPool *relay.ProxyPool) {
+	if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && proxyPool != nil {
+		if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+			if tr, ok := up.Client().Transport.(*http.Transport); ok {
+				tr.Proxy = proxyPool.ContextProxyFunc()
+				slog.Info("provider routed through dynamic proxy pool", "name", pCfg.Name)
+			}
+		}
+		if ep, ok := p.(interface{ SetEgressPool(provider.EgressPool) }); ok {
+			ep.SetEgressPool(proxyPool)
+		}
+	}
+}
+
+// prefetchDynamicCatalogs warms the in-memory model catalog used by virtual
+// auto routes (oc/auto, mimo/auto) so the first request never cold-fetches.
+// Catalogs always come from the live upstream /models endpoint — never hardcoded.
+func prefetchDynamicCatalogs(ctx context.Context, registry *provider.Registry) {
+	for _, p := range registry.All() {
+		up, ok := p.(provider.UpstreamConfigProvider)
+		if !ok {
+			continue
+		}
+		if up.ProviderType() != "opencode" && up.ProviderType() != "mimo" {
+			continue
+		}
+		if len(provider.GetCachedDynamicModels(p.Name())) > 0 {
+			continue
+		}
+		go func(prov provider.Provider, up provider.UpstreamConfigProvider) {
+			fetchCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
+			defer cancel()
+			var keys []string
+			for _, k := range up.APIKeys() {
+				if strings.TrimSpace(k.Key) != "" {
+					keys = append(keys, k.Key)
+				}
+			}
+			keys = append(keys, "") // keyless public catalog attempt
+			for _, k := range keys {
+				list, err := provider.FetchUpstreamModels(fetchCtx, up.Client(), up.BaseURL(), k, up.ProviderType())
+				if err == nil {
+					provider.SetCachedDynamicModels(prov.Name(), list)
+					slog.Info("prefetched dynamic model catalog", "provider", prov.Name(), "models", len(list))
+					return
+				}
+			}
+			slog.Warn("could not prefetch dynamic model catalog (will lazy-fetch on first request)", "provider", prov.Name())
+		}(p, up)
+	}
 }
 
 // New creates and initializes a new Server from configuration.
@@ -51,7 +117,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	registry := provider.NewRegistry()
 	for _, pCfg := range cfg.Providers {
 		// Skip providers with no API keys — unless they are keyless type opencode or mimo
-		if len(pCfg.APIKeys) == 0 && pCfg.Type != "opencode" && pCfg.Type != "mimo" {
+		if !pCfg.HasCredentials() {
 			slog.Warn("skipping provider with no API keys", "name", pCfg.Name)
 			continue
 		}
@@ -61,14 +127,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 		}
 
 		// Wire dynamic proxy pool if configured or specifically for opencode
-		if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && proxyPool != nil {
-			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
-				if tr, ok := up.Client().Transport.(*http.Transport); ok {
-					tr.Proxy = proxyPool.DynamicProxyFunc()
-					slog.Info("provider routed through dynamic proxy pool", "name", pCfg.Name)
-				}
-			}
-		}
+		wireEgressPool(p, pCfg, proxyPool)
 
 		if pCfg.Disabled {
 			p.SetHealthy(false)
@@ -96,11 +155,16 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	limiter := midware.NewConcurrencyLimiterWithQueue(
 		cfg.Concurrency.MaxConcurrent,
 		cfg.Concurrency.QueueDepth,
+		cfg.Concurrency.PerProvider,
+		cfg.Concurrency.PerModel,
 		cfg.Concurrency.QueueTimeout,
 	)
 
 	// 5. Create handlers
 	proxyHandler := proxy.NewHandler(r, keyStore, limiter, cfg.TokenSaver)
+
+	// Wire the limiter into the router for per-provider slots
+	r.SetLimiter(limiter)
 
 	// 6. Initialize response cache
 	responseCache := cache.New(cfg.Cache.MaxSize, time.Duration(cfg.Cache.TTL)*time.Second)
@@ -111,6 +175,15 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 
 	// 7. Initialize usage tracker
 	tracker := usage.NewTracker()
+	tracker.SetPrices(cfg.Prices)
+	tracker.SetBudgets(cfg.Budgets)
+	if cfg.Server.UsageFile != "" && cfg.Server.UsageFile != "-" {
+		if err := tracker.LoadUsage(cfg.Server.UsageFile); err != nil {
+			slog.Warn("could not restore usage stats", "file", cfg.Server.UsageFile, "error", err)
+		} else {
+			slog.Info("usage stats restored", "file", cfg.Server.UsageFile)
+		}
+	}
 	proxyHandler.SetTracker(tracker)
 	slog.Info("usage tracker initialized")
 
@@ -131,6 +204,9 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 
 	// OpenAI-compatible API endpoints
 	mux.HandleFunc("POST /v1/chat/completions", proxyHandler.HandleChatCompletion)
+	mux.HandleFunc("POST /v1/responses", proxyHandler.HandleResponses)
+	mux.HandleFunc("POST /v1/audio/transcriptions", proxyHandler.HandleAudioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/speech", proxyHandler.HandleAudioSpeech)
 	mux.HandleFunc("POST /v1/embeddings", proxyHandler.HandleEmbeddings)
 	mux.HandleFunc("GET /v1/models", proxyHandler.HandleListModels)
 	mux.HandleFunc("GET /health", proxyHandler.HandleHealth)
@@ -140,7 +216,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			targetCfg := cfg
 			if srv != nil {
-				targetCfg = srv.cfg
+				targetCfg = srv.getConfig()
 			}
 			if !targetCfg.Server.IsDashboardEnabled() && pattern != "POST /admin/config/reload" {
 				http.Error(w, "Web dashboard & admin API are disabled in configuration", http.StatusForbidden)
@@ -272,8 +348,14 @@ func (s *Server) Start() error {
 	s.cancelFunc = cancel
 	defer s.tunnelMgr.Stop()
 
+	// Snapshot config (ReloadConfig may swap it concurrently)
+	cfg := s.getConfig()
+
 	// Start background health checks
 	s.startHealthChecks(ctx)
+
+	// Warm dynamic model catalogs for virtual auto routes (non-blocking)
+	prefetchDynamicCatalogs(ctx, s.registry)
 
 	// Start background proxy pool rotator if enabled
 	if s.proxyPool != nil && s.proxyPool.IsEnabled() {
@@ -281,10 +363,10 @@ func (s *Server) Start() error {
 	}
 
 	// Start Cloudflare Quick Tunnel if enabled in configuration
-	if s.cfg.Server.QuickTunnel {
+	if cfg.Server.QuickTunnel {
 		go func() {
 			slog.Info("starting Cloudflare Quick Tunnel as requested by config...")
-			url, err := s.tunnelMgr.Start(ctx, s.cfg.Server.Port)
+			url, err := s.tunnelMgr.Start(ctx, cfg.Server.Port)
 			if err != nil {
 				slog.Error("failed to start Cloudflare Quick Tunnel", "error", err)
 				if !DisableStdoutTunnelPrint {
@@ -299,25 +381,48 @@ func (s *Server) Start() error {
 	}
 
 	// Start background cache cleanup
-	if s.cfg.Cache.Enabled {
+	if cfg.Cache.Enabled {
 		if c := s.handler.GetCache(); c != nil {
 			c.StartCleanup(ctx, 60*time.Second)
 			slog.Info("cache cleanup goroutine started", "interval", "60s")
 		}
 	}
 
-	addr := fmt.Sprintf("%s:%d", s.cfg.Server.Host, s.cfg.Server.Port)
+	// Periodically persist usage stats so they survive restarts/crashes
+	if usageFile := cfg.Server.UsageFile; usageFile != "" && usageFile != "-" {
+		if tr := s.handler.GetTracker(); tr != nil {
+			go func() {
+				ticker := time.NewTicker(60 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						// Best-effort final save on shutdown
+						_ = tr.PersistUsage(usageFile)
+						return
+					case <-ticker.C:
+						if err := tr.PersistUsage(usageFile); err != nil {
+							slog.Warn("could not persist usage stats", "file", usageFile, "error", err)
+						}
+					}
+				}
+			}()
+			slog.Info("usage persistence enabled", "file", usageFile, "interval", "60s")
+		}
+	}
+
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
 	// Wrap with CORS + logging + body limit middleware
-	handler := midware.CORSMiddleware(midware.LoggingMiddleware(midware.BodyLimitMiddleware(s.mux)))
+	handler := midware.CORSMiddleware(midware.LoggingMiddlewareWithBodies(midware.BodyLimitMiddleware(s.mux), cfg.Server.LogBodies))
 
 	// Print startup info
 	slog.Info("========================================")
 	slog.Info("  AI Gateway starting", "address", addr)
 	slog.Info("========================================")
 
-	slog.Info("providers loaded", "count", len(s.cfg.Providers))
-	for _, p := range s.cfg.Providers {
+	slog.Info("providers loaded", "count", len(cfg.Providers))
+	for _, p := range cfg.Providers {
 		slog.Info("  provider",
 			"name", p.Name,
 			"type", p.Type,
@@ -325,8 +430,8 @@ func (s *Server) Start() error {
 			"health_check", p.HealthCheckInterval.String(),
 		)
 	}
-	slog.Info("models configured", "count", len(s.cfg.Models))
-	for _, m := range s.cfg.Models {
+	slog.Info("models configured", "count", len(cfg.Models))
+	for _, m := range cfg.Models {
 		if m.Strategy != "" {
 			slog.Info("  model (combo)",
 				"name", m.Name,
@@ -341,12 +446,12 @@ func (s *Server) Start() error {
 			)
 		}
 	}
-	slog.Info("API keys loaded", "count", len(s.cfg.APIKeys))
+	slog.Info("API keys loaded", "count", len(cfg.APIKeys))
 
 	slog.Info("features enabled",
-		"cache", s.cfg.Cache.Enabled,
-		"token_saver", s.cfg.TokenSaver.Enabled,
-		"caveman_mode", s.cfg.TokenSaver.CavemanMode,
+		"cache", cfg.Cache.Enabled,
+		"token_saver", cfg.TokenSaver.Enabled,
+		"caveman_mode", cfg.TokenSaver.CavemanMode,
 		"usage_tracking", true,
 		"request_queuing", true,
 		"retry_with_backoff", true,
@@ -382,7 +487,7 @@ func (s *Server) Start() error {
 // startHealthChecks starts background goroutines to periodically check provider health.
 func (s *Server) startHealthChecks(ctx context.Context) {
 	hasHealthChecks := false
-	for _, pCfg := range s.cfg.Providers {
+	for _, pCfg := range s.getConfig().Providers {
 		if pCfg.HealthCheckInterval > 0 {
 			hasHealthChecks = true
 			slog.Info("health check enabled",
@@ -397,7 +502,7 @@ func (s *Server) startHealthChecks(ctx context.Context) {
 	}
 
 	// Start goroutines per provider with configured intervals
-	for _, pCfg := range s.cfg.Providers {
+	for _, pCfg := range s.getConfig().Providers {
 		if pCfg.HealthCheckInterval <= 0 {
 			continue
 		}
@@ -419,9 +524,12 @@ func (s *Server) startHealthChecks(ctx context.Context) {
 }
 
 // checkProvider checks the health of a single provider by name.
+// Tries each API key in turn: the provider is healthy when ANY key answers
+// the catalog endpoint, so one dead key no longer takes the whole provider
+// offline while sibling keys still serve traffic.
 func (s *Server) checkProvider(name string) {
 	var pCfg config.ProviderConfig
-	for _, p := range s.cfg.Providers {
+	for _, p := range s.getConfig().Providers {
 		if p.Name == name {
 			pCfg = p
 			break
@@ -431,42 +539,88 @@ func (s *Server) checkProvider(name string) {
 		return
 	}
 
+	// Kiro has no GET /models endpoint — validate via its live catalog instead.
+	if pCfg.Type == "kiro" && pCfg.HealthCheckURL == "" {
+		s.checkKiroProvider(pCfg)
+		return
+	}
+
 	checkURL := pCfg.HealthCheckURL
 	if checkURL == "" {
 		checkURL = pCfg.BaseURL + "/models"
 	}
 
-	client := healthCheckClient
-	req, err := http.NewRequest("GET", checkURL, nil)
-	if err != nil {
-		return
+	keys := pCfg.APIKeys
+	if len(keys) == 0 {
+		keys = []string{""} // keyless providers are probed without auth
 	}
-	if len(pCfg.APIKeys) > 0 {
-		req.Header.Set("Authorization", "Bearer "+pCfg.APIKeys[0])
+	lastStatus := 0
+	for _, k := range keys {
+		req, err := http.NewRequest("GET", checkURL, nil)
+		if err != nil {
+			return
+		}
+		if k != "" {
+			req.Header.Set("Authorization", "Bearer "+k)
+		}
+
+		resp, err := healthCheckClient.Do(req)
+		if err != nil {
+			continue // try next key
+		}
+		lastStatus = resp.StatusCode
+		resp.Body.Close()
+
+		if lastStatus >= 200 && lastStatus < 400 {
+			s.setProviderHealth(name, true)
+			return
+		}
+		// Otherwise try the next key — a single bad key must not
+		// take the whole provider offline.
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		slog.Warn("health check failed", "provider", name, "error", err)
-		s.setProviderHealth(name, false)
-		return
-	}
-	resp.Body.Close()
+	slog.Warn("health check failed", "provider", name, "reason", "no key answered the catalog endpoint", "last_status", lastStatus)
+	s.setProviderHealth(name, false)
+}
 
-	healthy := resp.StatusCode >= 200 && resp.StatusCode < 400
-	s.setProviderHealth(name, healthy)
+// checkKiroProvider validates Kiro credentials against the live model catalog:
+// any working API key or the refreshed OAuth token marks the provider healthy.
+func (s *Server) checkKiroProvider(pCfg config.ProviderConfig) {
+	name := pCfg.Name
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 
-	if !healthy {
-		slog.Warn("provider unhealthy", "provider", name, "status", resp.StatusCode)
+	for _, k := range pCfg.APIKeys {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		if _, err := provider.KiroListModels(ctx, healthCheckClient, provider.KiroCredentials{APIKey: k}); err == nil {
+			s.setProviderHealth(name, true)
+			return
+		}
 	}
+	if strings.TrimSpace(pCfg.RefreshToken) != "" {
+		if _, err := provider.KiroListModels(ctx, healthCheckClient, provider.KiroCredentials{
+			RefreshToken: pCfg.RefreshToken,
+			ProfileARN:   pCfg.ProfileARN,
+		}); err == nil {
+			s.setProviderHealth(name, true)
+			return
+		}
+	}
+	slog.Warn("health check failed", "provider", name, "reason", "kiro catalog unreachable")
+	s.setProviderHealth(name, false)
 }
 
 // setProviderHealth sets the health status of a provider by name.
 func (s *Server) setProviderHealth(name string, healthy bool) {
-	if s.registry == nil {
+	s.cfgMu.RLock()
+	reg := s.registry
+	s.cfgMu.RUnlock()
+	if reg == nil {
 		return
 	}
-	if p, ok := s.registry.Get(name); ok {
+	if p, ok := reg.Get(name); ok {
 		wasHealthy := p.IsHealthy()
 		p.SetHealthy(healthy)
 		if wasHealthy != healthy {
@@ -490,7 +644,7 @@ func (s *Server) ReloadConfig() error {
 
 	registry := provider.NewRegistry()
 	for _, pCfg := range newCfg.Providers {
-		if len(pCfg.APIKeys) == 0 && pCfg.Type != "opencode" && pCfg.Type != "mimo" {
+		if !pCfg.HasCredentials() {
 			slog.Warn("skipping provider with no API keys", "name", pCfg.Name)
 			continue
 		}
@@ -498,13 +652,7 @@ func (s *Server) ReloadConfig() error {
 		if err != nil {
 			return fmt.Errorf("init provider %s: %w", pCfg.Name, err)
 		}
-		if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && s.proxyPool != nil {
-			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
-				if tr, ok := up.Client().Transport.(*http.Transport); ok {
-					tr.Proxy = s.proxyPool.DynamicProxyFunc()
-				}
-			}
-		}
+		wireEgressPool(p, pCfg, s.proxyPool)
 		if pCfg.Disabled {
 			p.SetHealthy(false)
 		}
@@ -518,25 +666,47 @@ func (s *Server) ReloadConfig() error {
 
 	keyStore := auth.NewKeyStore(newCfg.APIKeys)
 
-	// Create new concurrency limiter if max changed
+	// Create new concurrency limiter if limits changed
+	oldCfg := s.getConfig()
 	var newLimiter *midware.ConcurrencyLimiter
-	if newCfg.Concurrency.MaxConcurrent != s.cfg.Concurrency.MaxConcurrent ||
-		newCfg.Concurrency.QueueDepth != s.cfg.Concurrency.QueueDepth ||
-		newCfg.Concurrency.QueueTimeout != s.cfg.Concurrency.QueueTimeout {
+	if newCfg.Concurrency.MaxConcurrent != oldCfg.Concurrency.MaxConcurrent ||
+		newCfg.Concurrency.QueueDepth != oldCfg.Concurrency.QueueDepth ||
+		newCfg.Concurrency.PerProvider != oldCfg.Concurrency.PerProvider ||
+		newCfg.Concurrency.PerModel != oldCfg.Concurrency.PerModel ||
+		newCfg.Concurrency.QueueTimeout != oldCfg.Concurrency.QueueTimeout {
 		newLimiter = midware.NewConcurrencyLimiterWithQueue(
 			newCfg.Concurrency.MaxConcurrent,
 			newCfg.Concurrency.QueueDepth,
+			newCfg.Concurrency.PerProvider,
+			newCfg.Concurrency.PerModel,
 			newCfg.Concurrency.QueueTimeout,
 		)
 		slog.Info("concurrency limiter updated",
 			"max_concurrent", newCfg.Concurrency.MaxConcurrent,
 			"queue_depth", newCfg.Concurrency.QueueDepth,
+			"per_provider", newCfg.Concurrency.PerProvider,
+			"per_model", newCfg.Concurrency.PerModel,
 			"queue_timeout", newCfg.Concurrency.QueueTimeout,
 		)
 	}
 
 	// Thread-safe update of proxy handler configs
 	s.handler.UpdateConfig(r, keyStore, newLimiter, &newCfg.TokenSaver)
+
+	// Swap the registry so health checks and lookups track the new providers.
+	// (Without this, post-reload health flips landed on orphaned objects.)
+	s.cfgMu.Lock()
+	s.registry = registry
+	s.cfgMu.Unlock()
+
+	// Re-wire the (possibly new) limiter into the fresh router
+	r.SetLimiter(s.handler.GetLimiter())
+
+	// Refresh cost/budget tables (usage history itself is preserved)
+	if tr := s.handler.GetTracker(); tr != nil {
+		tr.SetPrices(newCfg.Prices)
+		tr.SetBudgets(newCfg.Budgets)
+	}
 
 	// Thread-safe update of admin handler configs
 	s.admin.UpdateConfig(keyStore, newCfg.Server.AdminSecret, newCfg, registry)
@@ -552,7 +722,9 @@ func (s *Server) ReloadConfig() error {
 		}
 	}
 
+	s.cfgMu.Lock()
 	s.cfg = newCfg
+	s.cfgMu.Unlock()
 	slog.Info("configuration reloaded successfully")
 	return nil
 }

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/aigateway/provider"
 )
 
 // ProviderModel represents a model returned by a provider's API.
@@ -170,8 +173,11 @@ func isChatModel(modelID string) bool {
 }
 
 // testAPIKey verifies if an API key is valid by calling the /models endpoint AND performing a 1-token test completion call.
-// Returns (ok, modelCount, error).
-func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
+// candidates are the provider's configured model IDs, used when the provider
+// has no catalog endpoint (anthropic). Returns (ok, modelCount, error).
+// The tested model always comes from the live catalog or configuration —
+// never from a hardcoded model name.
+func testAPIKey(baseURL, apiKey, providerType string, candidates []string) (bool, int, error) {
 	if providerType == "cloudflare" && strings.Contains(apiKey, ":") {
 		parts := strings.SplitN(apiKey, ":", 2)
 		accountID := parts[0]
@@ -179,13 +185,44 @@ func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
 		baseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
 	}
 
-	// Anthropic special case (no /models endpoint)
+	// Anthropic special case (no /models endpoint): test the first
+	// configured model instead of a hardcoded one.
 	if providerType == "anthropic" {
-		err := testAPIKeyConnection(baseURL, apiKey, "claude-3-5-haiku-20241022", "anthropic")
+		if len(candidates) == 0 {
+			return false, 0, fmt.Errorf("anthropic tidak punya endpoint /models — tambah model ke konfigurasi dulu")
+		}
+		err := testAPIKeyConnection(baseURL, apiKey, candidates[0], "anthropic")
 		if err != nil {
 			return false, 0, err
 		}
-		return true, 1, nil
+		return true, len(candidates), nil
+	}
+
+	// Kiro speaks CodeWhisperer EventStream: list the live catalog, then run
+	// a minimal completion against the first chat model.
+	if providerType == "kiro" {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		live, err := provider.KiroListModels(ctx, nil, provider.KiroCredentials{APIKey: apiKey})
+		if err != nil {
+			return false, 0, err
+		}
+		modelToTest := ""
+		for _, m := range live {
+			if isChatModel(m) {
+				modelToTest = m
+				break
+			}
+		}
+		if modelToTest == "" {
+			return false, 0, fmt.Errorf("kiro tidak mengembalikan model chat apa pun")
+		}
+		text, err := provider.KiroTestCompletion(ctx, nil, provider.KiroCredentials{APIKey: apiKey}, modelToTest)
+		if err != nil {
+			return false, 0, fmt.Errorf("kunci API salah / tidak memiliki akses (chat test model '%s' failed: %v)", modelToTest, err)
+		}
+		_ = text
+		return true, len(live), nil
 	}
 
 	models, err := fetchModels(baseURL, apiKey, providerType)
@@ -197,38 +234,35 @@ func testAPIKey(baseURL, apiKey, providerType string) (bool, int, error) {
 		return false, 0, fmt.Errorf("provider tidak mengembalikan model apa pun")
 	}
 
+	// Pick the test target from the LIVE catalog: prefer widely compatible
+	// chat models, then any chat model, finally the first listed model.
 	var modelToTest string
-	if providerType == "cloudflare" {
-		modelToTest = "@cf/meta/llama-3.2-1b-instruct"
-	} else {
-		// Try to find a preferred chat model first (widely compatible chat models)
-		preferredPrefixes := []string{"llama", "qwen", "gpt", "claude", "gemini", "mistral", "deepseek", "command-r", "phi", "gemma"}
-		for _, pref := range preferredPrefixes {
-			for _, m := range models {
-				if strings.Contains(strings.ToLower(m), pref) && isChatModel(m) {
-					modelToTest = m
-					break
-				}
-			}
-			if modelToTest != "" {
+	preferredPrefixes := []string{"llama", "qwen", "gpt", "claude", "gemini", "mistral", "deepseek", "command-r", "phi", "gemma"}
+	for _, pref := range preferredPrefixes {
+		for _, m := range models {
+			if strings.Contains(strings.ToLower(m), pref) && isChatModel(m) {
+				modelToTest = m
 				break
 			}
 		}
+		if modelToTest != "" {
+			break
+		}
+	}
 
-		// If no preferred chat model found, fallback to any chat model
-		if modelToTest == "" {
-			for _, m := range models {
-				if isChatModel(m) {
-					modelToTest = m
-					break
-				}
+	// If no preferred chat model found, fallback to any chat model
+	if modelToTest == "" {
+		for _, m := range models {
+			if isChatModel(m) {
+				modelToTest = m
+				break
 			}
 		}
+	}
 
-		// Ultimately fallback to the first model if all else fails
-		if modelToTest == "" {
-			modelToTest = models[0]
-		}
+	// Ultimately fallback to the first model if all else fails
+	if modelToTest == "" {
+		modelToTest = models[0]
 	}
 
 	testErr := testAPIKeyConnection(baseURL, apiKey, modelToTest, providerType)

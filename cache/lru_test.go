@@ -254,3 +254,33 @@ func TestHashRequest(t *testing.T) {
 		t.Error("different models should produce different hashes")
 	}
 }
+
+func TestHashRequestDistinguishesTools(t *testing.T) {
+	base := &models.ChatCompletionRequest{
+		Model:    "gpt-4o",
+		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+	withTools := &models.ChatCompletionRequest{
+		Model:    "gpt-4o",
+		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Tools:    json.RawMessage(`[{"type":"function"}]`),
+	}
+	if HashRequest(base) == HashRequest(withTools) {
+		t.Error("requests differing in tools must not share a cache entry")
+	}
+
+	seed1, seed2 := 1, 2
+	a := &models.ChatCompletionRequest{
+		Model:    "gpt-4o",
+		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Seed:     &seed1,
+	}
+	b := &models.ChatCompletionRequest{
+		Model:    "gpt-4o",
+		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+		Seed:     &seed2,
+	}
+	if HashRequest(a) == HashRequest(b) {
+		t.Error("requests differing in seed must not share a cache entry")
+	}
+}

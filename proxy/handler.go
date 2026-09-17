@@ -67,6 +67,16 @@ func (h *Handler) SetTracker(t *usage.Tracker) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.tracker = t
+	h.wireBudgetCheckerLocked()
+}
+
+// wireBudgetCheckerLocked connects the router's budget predicate to the tracker.
+// Caller must hold h.mu.
+func (h *Handler) wireBudgetCheckerLocked() {
+	if h.router == nil || h.tracker == nil {
+		return
+	}
+	h.router.SetBudgetChecker(h.tracker.OverBudget)
 }
 
 // GetTracker returns the usage tracker.
@@ -83,6 +93,13 @@ func (h *Handler) GetCache() *cache.LRUCache {
 	return h.cache
 }
 
+// GetLimiter returns the concurrency limiter.
+func (h *Handler) GetLimiter() *middleware.ConcurrencyLimiter {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.limiter
+}
+
 // UpdateConfig updates the router, keyStore, limiter, and tokenSaverCfg pointer thread-safely.
 func (h *Handler) UpdateConfig(r *router.Router, ks *auth.KeyStore, limiter *middleware.ConcurrencyLimiter, tsCfg *config.TokenSaverConfig) {
 	h.mu.Lock()
@@ -95,6 +112,18 @@ func (h *Handler) UpdateConfig(r *router.Router, ks *auth.KeyStore, limiter *mid
 	if tsCfg != nil {
 		h.tokenSaverCfg = *tsCfg
 	}
+	h.wireBudgetCheckerLocked()
+}
+
+// isTokenSaverBypassed reports whether the client opted out of all token
+// saver transforms for this request via `X-Token-Saver: off` (also accepts
+// 0/false/disabled, case-insensitive).
+func isTokenSaverBypassed(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Token-Saver"))) {
+	case "off", "0", "false", "no", "disabled":
+		return true
+	}
+	return false
 }
 
 // extractAPIKey extracts the Bearer token from the Authorization header.
@@ -202,6 +231,13 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Newer clients (Codex et al.) send max_completion_tokens instead of
+	// max_tokens — normalize to the widely-supported field.
+	if req.MaxTokens == nil && req.MaxCompletionTokens != nil {
+		req.MaxTokens = req.MaxCompletionTokens
+	}
+	req.MaxCompletionTokens = nil
+
 	slog.Info(fmt.Sprintf("📥 POST /v1/chat/completions | %s | %d msgs", req.Model, len(req.Messages)))
 
 	// === Permission check ===
@@ -212,7 +248,9 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// === Token Saver — compress verbose tool outputs (per-key toggle) ===
-	if keyInfo.IsTokenSaverEnabled(tsCfg.Enabled) {
+	// Per-request opt-out (9Router-style): X-Token-Saver: off
+	tokenSaverBypassed := isTokenSaverBypassed(r)
+	if keyInfo.IsTokenSaverEnabled(tsCfg.Enabled) && !tokenSaverBypassed {
 		stats := middleware.CompressMessages(&req, tsCfg)
 		if stats != nil && stats.MessagesChanged > 0 {
 			savedPct := float64(0)
@@ -231,6 +269,8 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 		if tsCfg.CavemanMode {
 			middleware.InjectCavemanMode(&req)
+		} else if tsCfg.Ponytail != "" {
+			middleware.InjectPonytailMode(&req, tsCfg.Ponytail)
 		}
 	}
 
@@ -256,6 +296,13 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	}
 	defer limiter.ReleaseGlobal()
 
+	// === Per-model concurrency cap (virtual route name) ===
+	if !limiter.AcquireModel(req.Model) {
+		middleware.QueueFullResponse(w)
+		return
+	}
+	defer limiter.ReleaseModel(req.Model)
+
 	// === Route request ===
 	startTime := time.Now()
 
@@ -276,32 +323,46 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 				tracker.RecordError("stream", req.Model)
 			}
 			if !respTracker.headerWritten {
-				h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
+				if provider.IsLocalLimit(err) {
+					middleware.TooManyRequestsResponse(w)
+				} else {
+					h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
+				}
 			}
 		} else {
 			slog.Info(fmt.Sprintf("🌊 [STREAM] %s | %dms | complete", req.Model, durationMs))
 		}
 	} else {
 		// Non-streaming response
-		resp, err := routerInst.ChatCompletion(r.Context(), req.Model, &req)
+		resp, provName, err := routerInst.ChatCompletion(r.Context(), req.Model, &req)
 		durationMs := time.Since(startTime).Milliseconds()
 		if err != nil {
 			slog.Error(fmt.Sprintf("❌ [ERROR] completion error: %v | model=%s | duration=%dms", err, req.Model, durationMs))
 			if tracker != nil {
-				tracker.RecordError("unknown", req.Model)
+				if provName == "" {
+					provName = "unknown"
+				}
+				tracker.RecordError(provName, req.Model)
+			}
+			if provider.IsLocalLimit(err) {
+				middleware.TooManyRequestsResponse(w)
+				return
 			}
 			h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
 			return
 		}
+		if provName == "" && resp != nil {
+			provName = resp.Model
+		}
 
-		// Record usage — extract provider name from model if possible
+		// Record usage under the real serving provider (not the virtual route)
 		inTokens := 0
 		outTokens := 0
 		if resp.Usage != nil {
 			inTokens = resp.Usage.PromptTokens
 			outTokens = resp.Usage.CompletionTokens
 			if tracker != nil {
-				tracker.RecordUsage(apiKey, resp.Model, resp.Model,
+				tracker.RecordUsage(apiKey, provName, resp.Model,
 					resp.Usage.PromptTokens, resp.Usage.CompletionTokens, false)
 			}
 		}
@@ -573,6 +634,12 @@ func (h *Handler) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	defer limiter.ReleaseGlobal()
 
+	if !limiter.AcquireModel(req.Model) {
+		middleware.QueueFullResponse(w)
+		return
+	}
+	defer limiter.ReleaseModel(req.Model)
+
 	// === Route Request ===
 	startTime := time.Now()
 	resp, err := routerInst.Embeddings(r.Context(), req.Model, &req)
@@ -582,6 +649,10 @@ func (h *Handler) HandleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		slog.Error(fmt.Sprintf("❌ [EMBEDDING] %s | %dms | error: %v", req.Model, durationMs, err))
 		if tracker != nil {
 			tracker.RecordError("embeddings", req.Model)
+		}
+		if provider.IsLocalLimit(err) {
+			middleware.TooManyRequestsResponse(w)
+			return
 		}
 		h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
 		return

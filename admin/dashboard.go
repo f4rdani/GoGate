@@ -9,6 +9,10 @@ import (
 //go:embed dashboard.html
 var dashboardHTML string
 
+// AppVersion is the single source of truth for the dashboard version badge.
+// Bump this on every release so the sidebar/footer always show the current version.
+const AppVersion = "v1.5.7"
+
 // ServeDashboard serves the admin dashboard. Injects the warning box on the login screen
 // and warning banner inside the dashboard only if the password is still the default "123456"
 // or "change-me-to-a-strong-secret".
@@ -36,6 +40,7 @@ func (a *AdminHandler) ServeDashboard(w http.ResponseWriter, r *http.Request) {
 
 	html := strings.ReplaceAll(dashboardHTML, "{{DEFAULT_PASS_BOX}}", passBox)
 	html = strings.ReplaceAll(html, "{{DEFAULT_PASSWORD_BANNER}}", banner)
+	html = strings.ReplaceAll(html, "{{APP_VERSION}}", AppVersion)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))

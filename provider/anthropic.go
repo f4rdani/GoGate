@@ -94,13 +94,19 @@ func translateMessageContent(raw json.RawMessage) (json.RawMessage, error) {
 				}
 
 				// Public URL: download and convert to base64
+				downloaded := false
 				client := &http.Client{Timeout: 10 * time.Second}
-				resp, err := client.Get(imgURL)
-				if err == nil {
-					defer resp.Body.Close()
-					// Limit reading to 5MB to prevent memory exhaustion (OOM)
-					data, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
-					if err == nil {
+				if resp, err := client.Get(imgURL); err == nil {
+					func() {
+						defer resp.Body.Close()
+						if resp.StatusCode != http.StatusOK {
+							return // never encode error pages as images
+						}
+						// Limit reading to 5MB to prevent memory exhaustion (OOM)
+						data, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+						if err != nil {
+							return
+						}
 						mediaType := resp.Header.Get("Content-Type")
 						if mediaType == "" {
 							mediaType = "image/jpeg"
@@ -119,10 +125,15 @@ func translateMessageContent(raw json.RawMessage) (json.RawMessage, error) {
 								"data":       base64Data,
 							},
 						})
-						continue
+						downloaded = true
+					}()
+					if !downloaded {
+						slog.Warn("image URL skipped for Anthropic vision translation (non-200 or unreadable)", "url", imgURL)
 					}
+					continue
+				} else {
+					slog.Warn("failed to download image URL for Anthropic vision translation", "url", imgURL, "error", err)
 				}
-				slog.Warn("failed to download image URL for Anthropic vision translation", "url", imgURL, "error", err)
 			}
 		}
 
@@ -319,59 +330,89 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *models.Chat
 	}
 
 	url := strings.TrimRight(a.baseURL, "/") + "/v1/messages"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
 
-	keyObj, err := a.NextAPIKey()
-	if err != nil {
-		return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: a.name}
-	}
-	apiKey := keyObj.Key
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
-
-	keyMasked := "-"
-	if len(apiKey) > 8 {
-		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	} else if len(apiKey) > 0 {
-		keyMasked = "****"
-	}
-	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
-	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
-
-	resp, err := a.client.Do(httpReq)
-	slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		provErr := &ProviderError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-			Provider:   a.name,
+	var lastErr error
+	for attempt := 0; attempt < a.keyAttempts(); attempt++ {
+		egressProxy := a.checkoutEgress()
+		attemptCtx := ctx
+		if egressProxy != "" {
+			attemptCtx = WithEgressProxy(ctx, egressProxy)
 		}
-		if provErr.IsRetryable() {
-			keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
 		}
-		return nil, provErr
+
+		keyObj, err := a.NextAPIKey()
+		if err != nil {
+			if lastErr != nil {
+				return nil, markKeyExhausted(lastErr)
+			}
+			return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: a.name}
+		}
+		apiKey := keyObj.Key
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-api-key", apiKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+		if tok, err := a.oauthBearer(ctx, ""); err != nil {
+			return nil, fmt.Errorf("oauth token: %w", err)
+		} else if tok != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tok)
+		}
+
+		keyMasked := "-"
+		if len(apiKey) > 8 {
+			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+		} else if len(apiKey) > 0 {
+			keyMasked = "****"
+		}
+		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", a.name, keyMasked, attempt+1))
+		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
+
+		resp, err := a.client.Do(httpReq)
+		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
+		if err != nil {
+			a.reportEgress(egressProxy, true)
+			if egressProxy != "" && ctx.Err() == nil {
+				lastErr = fmt.Errorf("do request: %w", err)
+				continue
+			}
+			return nil, fmt.Errorf("do request: %w", err)
+		}
+		a.reportEgress(egressProxy, false)
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			provErr := &ProviderError{
+				StatusCode: resp.StatusCode,
+				Body:       string(respBody),
+				Provider:   a.name,
+			}
+			if provErr.IsRetryable() {
+				keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+				lastErr = provErr
+				continue
+			}
+			return nil, provErr
+		}
+
+		var anthResp models.AnthropicResponse
+		if err := json.Unmarshal(respBody, &anthResp); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+
+		return a.translateResponse(&anthResp), nil
 	}
 
-	var anthResp models.AnthropicResponse
-	if err := json.Unmarshal(respBody, &anthResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	if lastErr != nil {
+		return nil, markKeyExhausted(lastErr)
 	}
-
-	return a.translateResponse(&anthResp), nil
+	return nil, &ProviderError{StatusCode: 503, Body: "no API keys available for provider " + a.name, Provider: a.name}
 }
 
 // ChatCompletionStream sends a streaming request to Anthropic and translates
@@ -389,49 +430,86 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 	}
 
 	url := strings.TrimRight(a.baseURL, "/") + "/v1/messages"
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
 
-	keyObj, err := a.NextAPIKey()
-	if err != nil {
-		return &ProviderError{StatusCode: 503, Body: err.Error(), Provider: a.name}
-	}
-	apiKey := keyObj.Key
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", apiKey)
-	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	var lastErr error
+	var resp *http.Response
+	for attempt := 0; attempt < a.keyAttempts(); attempt++ {
+		egressProxy := a.checkoutEgress()
+		attemptCtx := ctx
+		if egressProxy != "" {
+			attemptCtx = WithEgressProxy(ctx, egressProxy)
+		}
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
 
-	keyMasked := "-"
-	if len(apiKey) > 8 {
-		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	} else if len(apiKey) > 0 {
-		keyMasked = "****"
-	}
-	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", a.name, keyMasked))
-	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
+		keyObj, err := a.NextAPIKey()
+		if err != nil {
+			if lastErr != nil {
+				return markKeyExhausted(lastErr)
+			}
+			return &ProviderError{StatusCode: 503, Body: err.Error(), Provider: a.name}
+		}
+		apiKey := keyObj.Key
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-api-key", apiKey)
+		httpReq.Header.Set("anthropic-version", "2023-06-01")
+		if tok, err := a.oauthBearer(ctx, ""); err != nil {
+			return fmt.Errorf("oauth token: %w", err)
+		} else if tok != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tok)
+		}
 
-	resp, err := a.client.Do(httpReq)
-	slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
+		keyMasked := "-"
+		if len(apiKey) > 8 {
+			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+		} else if len(apiKey) > 0 {
+			keyMasked = "****"
+		}
+		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", a.name, keyMasked, attempt+1))
+		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
+
+		resp, err = a.client.Do(httpReq)
+		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
+		if err != nil {
+			resp = nil
+			a.reportEgress(egressProxy, true)
+			if egressProxy != "" && ctx.Err() == nil {
+				lastErr = fmt.Errorf("do request: %w", err)
+				continue
+			}
+			return fmt.Errorf("do request: %w", err)
+		}
+		a.reportEgress(egressProxy, false)
+
+		// Check status BEFORE writing to ResponseWriter
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp = nil
+			provErr := &ProviderError{
+				StatusCode: status,
+				Body:       string(respBody),
+				Provider:   a.name,
+			}
+			if provErr.IsRetryable() {
+				keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+				lastErr = provErr
+				continue
+			}
+			return provErr
+		}
+		break
+	}
+	if resp == nil {
+		if lastErr != nil {
+			return markKeyExhausted(lastErr)
+		}
+		return &ProviderError{StatusCode: 503, Body: "no API keys available for provider " + a.name, Provider: a.name}
 	}
 	defer resp.Body.Close()
-
-	// Check status BEFORE writing to ResponseWriter
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		provErr := &ProviderError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-			Provider:   a.name,
-		}
-		if provErr.IsRetryable() {
-			keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
-		}
-		return provErr
-	}
 
 	// Set streaming headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -439,9 +517,11 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	// Translate Anthropic SSE → OpenAI SSE
+	// Translate Anthropic SSE → OpenAI SSE.
+	// 4MB max line guards against providers that emit very large deltas
+	// while keeping per-stream memory bounded.
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	var msgID string
 	var model string

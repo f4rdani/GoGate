@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aigateway/config"
+	"github.com/aigateway/provider"
 )
 
 // ProxyEntry represents a verified public proxy in the pool.
@@ -386,6 +387,44 @@ func (p *ProxyPool) Next() *ProxyEntry {
 	return p.proxies[idx%uint64(len(p.proxies))]
 }
 
+// Checkout returns a proxy URL for a single upstream attempt, or "" when the
+// pool is disabled or empty (caller must connect directly).
+func (p *ProxyPool) Checkout() string {
+	if !p.IsEnabled() {
+		return ""
+	}
+	if pe := p.Next(); pe != nil {
+		return pe.URL
+	}
+	return ""
+}
+
+// Report feeds a per-attempt outcome back to the pool. failed must be true
+// only for transport-level failures (the proxy never reached upstream); any
+// completed HTTP exchange — even an upstream 5xx — proves the proxy works
+// and resets its consecutive-failure counter.
+func (p *ProxyPool) Report(proxyURL string, failed bool) {
+	if proxyURL == "" {
+		return
+	}
+	if !failed {
+		p.mu.RLock()
+		var target *ProxyEntry
+		for _, pe := range p.proxies {
+			if pe.URL == proxyURL {
+				target = pe
+				break
+			}
+		}
+		p.mu.RUnlock()
+		if target != nil {
+			target.Failures.Store(0)
+		}
+		return
+	}
+	p.MarkFailure(proxyURL)
+}
+
 // MarkFailure records an upstream request failure for a proxy. Evicts proxy after 3 consecutive failures.
 func (p *ProxyPool) MarkFailure(proxyURL string) {
 	p.mu.Lock()
@@ -455,5 +494,19 @@ func (p *ProxyPool) DynamicProxyFunc() func(*http.Request) (*url.URL, error) {
 			return nil, nil // fall back to direct connection
 		}
 		return url.Parse(pe.URL)
+	}
+}
+
+// ContextProxyFunc returns a Proxy function that prefers the proxy checked
+// out for the specific attempt (carried in the request context by the
+// provider) so failures can be attributed to the right proxy entry.
+// Falls back to round-robin rotation when no checkout is present.
+func (p *ProxyPool) ContextProxyFunc() func(*http.Request) (*url.URL, error) {
+	fallback := p.DynamicProxyFunc()
+	return func(req *http.Request) (*url.URL, error) {
+		if u := provider.EgressProxyFromContext(req.Context()); u != "" {
+			return url.Parse(u)
+		}
+		return fallback(req)
 	}
 }

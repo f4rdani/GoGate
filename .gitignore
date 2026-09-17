@@ -24,3 +24,8 @@ scratch/
 nohup.out
 .vscode/
 .idea/
+
+# Internal dev notes (kept locally, never pushed)
+planv1.md
+progress.md
+walkthrough.md

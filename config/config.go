@@ -16,10 +16,20 @@ type Config struct {
 	Cache       CacheConfig       `yaml:"cache" json:"cache"`
 	Retry       RetryConfig       `yaml:"retry" json:"retry"`
 	TokenSaver  TokenSaverConfig  `yaml:"token_saver" json:"token_saver"`
-	ProxyPool   ProxyPoolConfig   `yaml:"proxy_pool,omitempty" json:"proxy_pool,omitempty"`
-	Providers   []ProviderConfig  `yaml:"providers" json:"providers"`
-	Models      []ModelConfig     `yaml:"models" json:"models"`
-	APIKeys     []APIKeyConfig    `yaml:"api_keys" json:"api_keys"`
+	ProxyPool   ProxyPoolConfig        `yaml:"proxy_pool,omitempty" json:"proxy_pool,omitempty"`
+	Providers   []ProviderConfig       `yaml:"providers" json:"providers"`
+	Models      []ModelConfig          `yaml:"models" json:"models"`
+	APIKeys     []APIKeyConfig         `yaml:"api_keys" json:"api_keys"`
+	Prices      map[string]ModelPrice  `yaml:"prices,omitempty" json:"prices,omitempty"`
+	Budgets     []BudgetConfig         `yaml:"budgets,omitempty" json:"budgets,omitempty"`
+}
+
+// BudgetConfig caps monthly token spend per upstream provider. When a
+// provider exceeds its budget the router fails over to other backends;
+// with no backend left the request fails with 429 (budget exceeded).
+type BudgetConfig struct {
+	Provider      string `yaml:"provider" json:"provider"`
+	MonthlyTokens int64  `yaml:"monthly_tokens" json:"monthly_tokens"`
 }
 
 // ProxyPoolConfig holds settings for the free public proxy pool rotator.
@@ -34,12 +44,13 @@ type ProxyPoolConfig struct {
 
 // TokenSaverConfig holds settings for the RTK-style input token compression.
 type TokenSaverConfig struct {
-	Enabled       bool `yaml:"enabled" json:"enabled"`                // master toggle (default: true)
-	MaxInputBytes int  `yaml:"max_input_bytes" json:"max_input_bytes"` // per-message threshold in bytes (default: 4096)
-	CavemanMode   bool `yaml:"caveman_mode" json:"caveman_mode"`       // inject terse output prompt to save output tokens
-	CompressUser  bool `yaml:"compress_user" json:"compress_user"`     // also compress user messages (default: true)
-	MinifyJSON    bool `yaml:"minify_json" json:"minify_json"`         // minify JSON blobs in messages (default: true)
-	StripComments bool `yaml:"strip_comments" json:"strip_comments"`   // strip code comments (default: false)
+	Enabled       bool   `yaml:"enabled" json:"enabled"`                // master toggle (default: true)
+	MaxInputBytes int    `yaml:"max_input_bytes" json:"max_input_bytes"` // per-message threshold in bytes (default: 4096)
+	CavemanMode   bool   `yaml:"caveman_mode" json:"caveman_mode"`       // inject terse output prompt to save output tokens
+	Ponytail      string `yaml:"ponytail,omitempty" json:"ponytail,omitempty"` // lazy-senior-dev output style: "", "lite", "full", "ultra" (ignored when caveman_mode is on)
+	CompressUser  bool   `yaml:"compress_user" json:"compress_user"`     // also compress user messages (default: true)
+	MinifyJSON    bool   `yaml:"minify_json" json:"minify_json"`         // minify JSON blobs in messages (default: true)
+	StripComments bool   `yaml:"strip_comments" json:"strip_comments"`   // strip code comments (default: false)
 }
 
 // ServerConfig holds HTTP server settings.
@@ -51,6 +62,8 @@ type ServerConfig struct {
 	QuickTunnel      bool   `yaml:"quick_tunnel,omitempty" json:"quick_tunnel,omitempty"`
 	DashboardEnabled *bool  `yaml:"dashboard_enabled,omitempty" json:"dashboard_enabled,omitempty"` // enable or disable admin web dashboard (default: true)
 	Language         string `yaml:"language,omitempty" json:"language,omitempty"`                   // "id" or "en"
+	UsageFile        string `yaml:"usage_file,omitempty" json:"usage_file,omitempty"`               // persist usage stats here (default: "usage.json", "-" = disabled)
+	LogBodies        bool   `yaml:"log_bodies,omitempty" json:"log_bodies,omitempty"`               // debug: log truncated response bodies
 }
 
 // ConcurrencyConfig holds concurrency limit settings.
@@ -77,7 +90,22 @@ type ProviderConfig struct {
 	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"`               // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
 	RelayURL            string        `yaml:"relay_url,omitempty" json:"relay_url,omitempty"`               // Cloudflare Worker or reverse proxy relay URL (e.g. https://my-worker.workers.dev)
 	RelaySecret         string        `yaml:"relay_secret,omitempty" json:"relay_secret,omitempty"`         // optional secret passed in X-Relay-Secret header
+	TokenURL            string        `yaml:"token_url,omitempty" json:"token_url,omitempty"`               // OAuth2 token endpoint (type oauth)
+	ClientID            string        `yaml:"client_id,omitempty" json:"client_id,omitempty"`               // OAuth2 client id (type oauth)
+	ClientSecret        string        `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`       // OAuth2 client secret, optional (type oauth)
+	RefreshToken        string        `yaml:"refresh_token,omitempty" json:"refresh_token,omitempty"`       // OAuth2 refresh token (type oauth) / Kiro refresh token (type kiro)
+	ProfileARN          string        `yaml:"profile_arn,omitempty" json:"profile_arn,omitempty"`           // Kiro CodeWhisperer profile ARN (type kiro, optional)
+	Region              string        `yaml:"region,omitempty" json:"region,omitempty"`                       // AWS region for OIDC/Kiro endpoints (default us-east-1)
 	Disabled            bool          `yaml:"disabled,omitempty" json:"disabled,omitempty"`                 // true if provider is disabled / turned off
+}
+
+// HasCredentials reports whether the provider can authenticate requests:
+// static keys, an OAuth/Kiro refresh token, or a keyless type.
+func (p *ProviderConfig) HasCredentials() bool {
+	if len(p.APIKeys) > 0 || p.RefreshToken != "" {
+		return true
+	}
+	return p.Type == "opencode" || p.Type == "mimo"
 }
 
 // ModelConfig defines a model route (direct or combo).
@@ -111,6 +139,14 @@ type RetryConfig struct {
 	MaxRetries     int `yaml:"max_retries" json:"max_retries"`      // max retry attempts (default 2)
 	InitialBackoff int `yaml:"initial_backoff" json:"initial_backoff"`   // initial backoff in ms (default 500)
 	MaxBackoff     int `yaml:"max_backoff" json:"max_backoff"`       // max backoff in ms (default 10000)
+}
+
+// ModelPrice defines per-1M-token prices in USD for cost estimation.
+// Prices are user-configured (providers change them often); when a model has
+// no entry, its cost is simply reported as zero.
+type ModelPrice struct {
+	InputPer1M  float64 `yaml:"input_per_1m" json:"input_per_1m"`
+	OutputPer1M float64 `yaml:"output_per_1m" json:"output_per_1m"`
 }
 
 // APIKeyConfig defines a user-facing API key with permissions.
@@ -160,6 +196,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Server.LogLevel == "" {
 		cfg.Server.LogLevel = "info"
+	}
+	if cfg.Server.UsageFile == "" {
+		cfg.Server.UsageFile = "usage.json"
 	}
 	if cfg.Concurrency.MaxConcurrent == 0 {
 		cfg.Concurrency.MaxConcurrent = 50
@@ -282,9 +321,25 @@ func (c *Config) Validate() error {
 			"openai": true, "anthropic": true, "groq": true,
 			"mistral": true, "custom": true, "cohere": true,
 			"opencode": true, "cerebras": true, "cloudflare": true,
+			"oauth": true, "kiro": true,
 		}
 		if !validTypes[p.Type] {
-			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare)", p.Name, p.Type)
+			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare, oauth, kiro)", p.Name, p.Type)
+		}
+
+		if p.Type == "kiro" {
+			if len(p.APIKeys) == 0 && p.RefreshToken == "" {
+				return fmt.Errorf("provider %s: kiro type requires api_keys or refresh_token", p.Name)
+			}
+		}
+
+		if p.Type == "oauth" {
+			if p.TokenURL == "" {
+				return fmt.Errorf("provider %s: oauth type requires token_url", p.Name)
+			}
+			if p.RefreshToken == "" {
+				return fmt.Errorf("provider %s: oauth type requires refresh_token", p.Name)
+			}
 		}
 
 		if p.Type == "cloudflare" {
@@ -323,11 +378,14 @@ func (c *Config) Validate() error {
 		if m.Name == "" {
 			return fmt.Errorf("model entry missing name")
 		}
+		if allModelNames[m.Name] {
+			return fmt.Errorf("duplicate model name: %s", m.Name)
+		}
 		allModelNames[m.Name] = true
 		if m.Strategy != "" {
 			// Combo model
-			if m.Strategy != "round-robin" && m.Strategy != "fallback" {
-				return fmt.Errorf("model %s: invalid strategy %q (valid: round-robin, fallback)", m.Name, m.Strategy)
+			if m.Strategy != "round-robin" && m.Strategy != "fallback" && m.Strategy != "tiered" {
+				return fmt.Errorf("model %s: invalid strategy %q (valid: round-robin, fallback, tiered)", m.Name, m.Strategy)
 			}
 			if len(m.Backends) == 0 {
 				return fmt.Errorf("model %s: strategy set but no backends defined", m.Name)
@@ -360,7 +418,7 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("api_key entry missing key value")
 		}
 		if keySet[k.Key] {
-			return fmt.Errorf("duplicate api_key: %s", k.Key[:12]+"...")
+			return fmt.Errorf("duplicate api_key: %s", shortKey(k.Key))
 		}
 		keySet[k.Key] = true
 
@@ -385,6 +443,14 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
+}
+
+// shortKey safely truncates a key for display in error messages.
+func shortKey(k string) string {
+	if len(k) > 12 {
+		return k[:12] + "..."
+	}
+	return k
 }
 
 // IsDashboardEnabled checks if the admin web dashboard is enabled.

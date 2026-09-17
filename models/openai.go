@@ -14,6 +14,10 @@ type ChatCompletionRequest struct {
 	Stream           bool            `json:"stream,omitempty"`
 	Stop             json.RawMessage `json:"stop,omitempty"`
 	MaxTokens        *int            `json:"max_tokens,omitempty"`
+	// MaxCompletionTokens is accepted for newer-client compatibility (Codex
+	// and friends send this instead of max_tokens). Normalized to MaxTokens
+	// by the proxy handler before routing.
+	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
 	PresencePenalty  *float64        `json:"presence_penalty,omitempty"`
 	FrequencyPenalty *float64        `json:"frequency_penalty,omitempty"`
 	User             string          `json:"user,omitempty"`
@@ -21,6 +25,9 @@ type ChatCompletionRequest struct {
 	ToolChoice       json.RawMessage `json:"tool_choice,omitempty"`
 	ResponseFormat   json.RawMessage `json:"response_format,omitempty"`
 	Seed             *int            `json:"seed,omitempty"`
+	// StreamOptions is forwarded to OpenAI-compatible upstreams (e.g.
+	// {"include_usage":true} so streamed responses can report token usage).
+	StreamOptions json.RawMessage `json:"stream_options,omitempty"`
 }
 
 type Message struct {

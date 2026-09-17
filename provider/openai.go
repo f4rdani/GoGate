@@ -25,6 +25,8 @@ func NewOpenAIProvider(base *BaseProvider) *OpenAIProvider {
 }
 
 // ChatCompletion sends a non-streaming request to the OpenAI API.
+// Tries each available API key in turn: on a retryable error (e.g. 429) the
+// failed key is circuit-broken and the next key is attempted immediately.
 func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
 	req.Stream = false
 
@@ -40,78 +42,115 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	keyObj, err := o.NextAPIKey()
-	if err != nil {
-		return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
-	}
-
-	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	if o.RelaySecret() != "" {
-		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
-	}
-	if o.RelayURL() != "" && o.baseURL != "" {
-		httpReq.Header.Set("X-Target-URL", o.baseURL)
-	}
-	if o.providerType == "opencode" {
-		sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
-		httpReq.Header.Set("x-opencode-session", sessionID)
-		httpReq.Header.Set("X-Session-ID", sessionID)
-	}
-
-	keyMasked := "-"
-	if len(apiKey) > 8 {
-		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	} else if len(apiKey) > 0 {
-		keyMasked = "****"
-	}
-	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
-	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
-
-	resp, err := o.client.Do(httpReq)
-	slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		provErr := &ProviderError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-			Provider:   o.name,
+	var lastErr error
+	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
+		keyObj, err := o.NextAPIKey()
+		if err != nil {
+			// All keys are circuit-broken — surface the last real upstream
+			// error (flagged exhausted) instead of a generic 503.
+			if lastErr != nil {
+				return nil, markKeyExhausted(lastErr)
+			}
+			return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 		}
-		if provErr.IsRetryable() {
-			keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+
+		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+
+		egressProxy := o.checkoutEgress()
+		attemptCtx := ctx
+		if egressProxy != "" {
+			attemptCtx = WithEgressProxy(ctx, egressProxy)
 		}
-		return nil, provErr
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		if o.RelaySecret() != "" {
+			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+		}
+		if o.RelayURL() != "" && o.baseURL != "" {
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		}
+		if o.providerType == "opencode" {
+			sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			httpReq.Header.Set("x-opencode-session", sessionID)
+			httpReq.Header.Set("X-Session-ID", sessionID)
+		}
+		if o.providerType == "mimo" {
+			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
+		}
+		if tok, err := o.oauthBearer(ctx, ""); err != nil {
+			return nil, fmt.Errorf("oauth token: %w", err)
+		} else if tok != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tok)
+		}
+
+		keyMasked := "-"
+		if len(apiKey) > 8 {
+			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+		} else if len(apiKey) > 0 {
+			keyMasked = "****"
+		}
+		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
+		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+
+		resp, err := o.client.Do(httpReq)
+		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
+		if err != nil {
+			o.reportEgress(egressProxy, true)
+			// A dead egress proxy must not sink the request while other
+			// keys (likely via other proxies) are still untried.
+			if egressProxy != "" && ctx.Err() == nil {
+				lastErr = fmt.Errorf("do request: %w", err)
+				continue
+			}
+			return nil, fmt.Errorf("do request: %w", err)
+		}
+		o.reportEgress(egressProxy, false)
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			provErr := &ProviderError{
+				StatusCode: resp.StatusCode,
+				Body:       string(respBody),
+				Provider:   o.name,
+			}
+			if provErr.IsRetryable() {
+				keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+				lastErr = provErr
+				continue
+			}
+			return nil, provErr
+		}
+
+		var chatResp models.ChatCompletionResponse
+		if err := json.Unmarshal(respBody, &chatResp); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+
+		return &chatResp, nil
 	}
 
-	var chatResp models.ChatCompletionResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	if lastErr != nil {
+		return nil, markKeyExhausted(lastErr)
 	}
-
-	return &chatResp, nil
+	return nil, &ProviderError{StatusCode: 503, Body: "no API keys available for provider " + o.name, Provider: o.name}
 }
 
 // ChatCompletionStream sends a streaming request and pipes SSE to the client.
 // IMPORTANT: This checks upstream status BEFORE writing any headers,
 // so fallback can work if upstream returns an error.
+// Tries each available API key in turn on retryable errors.
 func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error {
 	req.Stream = true
 
@@ -127,62 +166,100 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		return fmt.Errorf("marshal request: %w", err)
 	}
 
-	keyObj, err := o.NextAPIKey()
-	if err != nil {
-		return &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
-	}
-
-	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	if o.RelaySecret() != "" {
-		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
-	}
-	if o.RelayURL() != "" && o.baseURL != "" {
-		httpReq.Header.Set("X-Target-URL", o.baseURL)
-	}
-	if o.providerType == "opencode" {
-		sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
-		httpReq.Header.Set("x-opencode-session", sessionID)
-		httpReq.Header.Set("X-Session-ID", sessionID)
-	}
-
-	keyMasked := "-"
-	if len(apiKey) > 8 {
-		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	} else if len(apiKey) > 0 {
-		keyMasked = "****"
-	}
-	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
-	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
-
-	resp, err := o.client.Do(httpReq)
-	slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
-	if err != nil {
-		return fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check status BEFORE writing to ResponseWriter (enables fallback)
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		provErr := &ProviderError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-			Provider:   o.name,
+	var lastErr error
+	var resp *http.Response
+	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
+		keyObj, keyErr := o.NextAPIKey()
+		if keyErr != nil {
+			if lastErr != nil {
+				return markKeyExhausted(lastErr)
+			}
+			return &ProviderError{StatusCode: 503, Body: keyErr.Error(), Provider: o.name}
 		}
-		if provErr.IsRetryable() {
-			keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+
+		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+
+		egressProxy := o.checkoutEgress()
+		attemptCtx := ctx
+		if egressProxy != "" {
+			attemptCtx = WithEgressProxy(ctx, egressProxy)
 		}
-		return provErr
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", targetURL, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("create request: %w", err)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		if o.RelaySecret() != "" {
+			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+		}
+		if o.RelayURL() != "" && o.baseURL != "" {
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		}
+		if o.providerType == "opencode" {
+			sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			httpReq.Header.Set("x-opencode-session", sessionID)
+			httpReq.Header.Set("X-Session-ID", sessionID)
+		}
+		if o.providerType == "mimo" {
+			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
+		}
+		if tok, err := o.oauthBearer(ctx, ""); err != nil {
+			return fmt.Errorf("oauth token: %w", err)
+		} else if tok != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tok)
+		}
+
+		keyMasked := "-"
+		if len(apiKey) > 8 {
+			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+		} else if len(apiKey) > 0 {
+			keyMasked = "****"
+		}
+		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
+		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+
+		resp, err = o.client.Do(httpReq)
+		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
+		if err != nil {
+			resp = nil
+			o.reportEgress(egressProxy, true)
+			if egressProxy != "" && ctx.Err() == nil {
+				lastErr = fmt.Errorf("do request: %w", err)
+				continue
+			}
+			return fmt.Errorf("do request: %w", err)
+		}
+		o.reportEgress(egressProxy, false)
+
+		// Check status BEFORE writing to ResponseWriter (enables fallback)
+		if resp.StatusCode != http.StatusOK {
+			status := resp.StatusCode
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			resp = nil
+			provErr := &ProviderError{
+				StatusCode: status,
+				Body:       string(respBody),
+				Provider:   o.name,
+			}
+			if provErr.IsRetryable() {
+				keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+				lastErr = provErr
+				continue
+			}
+			return provErr
+		}
+		break
+	}
+	if resp == nil {
+		if lastErr != nil {
+			return markKeyExhausted(lastErr)
+		}
+		return &ProviderError{StatusCode: 503, Body: "no API keys available for provider " + o.name, Provider: o.name}
 	}
 
 	// Set streaming headers and begin piping
@@ -190,6 +267,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
+	defer resp.Body.Close()
 
 	// Pipe upstream SSE directly to client (zero translation needed)
 	bufPtr := streamBufPool.Get().(*[]byte)
@@ -228,66 +306,98 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	keyObj, err := o.NextAPIKey()
-	if err != nil {
-		return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
-	}
-
-	apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/embeddings")
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-	if o.RelaySecret() != "" {
-		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
-	}
-	if o.RelayURL() != "" && o.baseURL != "" {
-		httpReq.Header.Set("X-Target-URL", o.baseURL)
-	}
-
-	keyMasked := "-"
-	if len(apiKey) > 8 {
-		keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-	} else if len(apiKey) > 0 {
-		keyMasked = "****"
-	}
-	slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s", o.name, keyMasked))
-	slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
-
-	resp, err := o.client.Do(httpReq)
-	slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
-	if err != nil {
-		return nil, fmt.Errorf("do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		provErr := &ProviderError{
-			StatusCode: resp.StatusCode,
-			Body:       string(respBody),
-			Provider:   o.name,
+	var lastErr error
+	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
+		keyObj, err := o.NextAPIKey()
+		if err != nil {
+			if lastErr != nil {
+				return nil, markKeyExhausted(lastErr)
+			}
+			return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 		}
-		if provErr.IsRetryable() {
-			keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+
+		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/embeddings")
+
+		egressProxy := o.checkoutEgress()
+		attemptCtx := ctx
+		if egressProxy != "" {
+			attemptCtx = WithEgressProxy(ctx, egressProxy)
 		}
-		return nil, provErr
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+
+		httpReq.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		if o.RelaySecret() != "" {
+			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+		}
+		if o.RelayURL() != "" && o.baseURL != "" {
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		}
+		if o.providerType == "mimo" {
+			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
+		}
+		if tok, err := o.oauthBearer(ctx, ""); err != nil {
+			return nil, fmt.Errorf("oauth token: %w", err)
+		} else if tok != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+tok)
+		}
+
+		keyMasked := "-"
+		if len(apiKey) > 8 {
+			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
+		} else if len(apiKey) > 0 {
+			keyMasked = "****"
+		}
+		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
+		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+
+		resp, err := o.client.Do(httpReq)
+		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
+		if err != nil {
+			o.reportEgress(egressProxy, true)
+			if egressProxy != "" && ctx.Err() == nil {
+				lastErr = fmt.Errorf("do request: %w", err)
+				continue
+			}
+			return nil, fmt.Errorf("do request: %w", err)
+		}
+		o.reportEgress(egressProxy, false)
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			provErr := &ProviderError{
+				StatusCode: resp.StatusCode,
+				Body:       string(respBody),
+				Provider:   o.name,
+			}
+			if provErr.IsRetryable() {
+				keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+				lastErr = provErr
+				continue
+			}
+			return nil, provErr
+		}
+
+		var embedResp models.EmbeddingsResponse
+		if err := json.Unmarshal(respBody, &embedResp); err != nil {
+			return nil, fmt.Errorf("unmarshal response: %w", err)
+		}
+
+		return &embedResp, nil
 	}
 
-	var embedResp models.EmbeddingsResponse
-	if err := json.Unmarshal(respBody, &embedResp); err != nil {
-		return nil, fmt.Errorf("unmarshal response: %w", err)
+	if lastErr != nil {
+		return nil, markKeyExhausted(lastErr)
 	}
-
-	return &embedResp, nil
+	return nil, &ProviderError{StatusCode: 503, Body: "no API keys available for provider " + o.name, Provider: o.name}
 }

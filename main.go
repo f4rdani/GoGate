@@ -17,7 +17,14 @@ import (
 	"github.com/aigateway/server"
 )
 
+// version is the gateway release version shown in help output.
+// Defaults to admin.AppVersion (single source of truth for the dashboard badge).
+// Overridden at release time via: go build -ldflags "-X main.version=vX.Y.Z".
+var version = admin.AppVersion
+
 func main() {
+	cli.Version = version
+
 	// Optimize Go runtime for low-spec VPS (1 vCPU / 1GB RAM)
 	// GOGC=50 triggers GC more aggressively to keep memory low
 	// GOMEMLIMIT=750MiB caps total Go heap to prevent OOM
@@ -51,6 +58,29 @@ func main() {
 		configPath := fs.String("config", cfgPath, "Path to configuration file")
 		fs.Parse(os.Args[2:])
 		runServer(*configPath)
+
+	case "kiro-login":
+		// Interactive Kiro free-tier login (device code / social / token import)
+		cfgPath := "config.yaml"
+		if len(os.Args) > 2 {
+			cfgPath = os.Args[2]
+		}
+		cli.KiroLogin(cfgPath)
+
+	case "version":
+		os.Exit(cli.CmdVersion(os.Args[2:]))
+
+	case "models":
+		os.Exit(cli.CmdModels(os.Args[2:]))
+
+	case "providers":
+		os.Exit(cli.CmdProviders(os.Args[2:]))
+
+	case "doctor":
+		os.Exit(cli.CmdDoctor(os.Args[2:]))
+
+	case "chat":
+		os.Exit(cli.CmdChat(os.Args[2:]))
 
 	case "help", "--help", "-h":
 		printUsage()
@@ -172,13 +202,22 @@ func runServer(configPath string) {
 }
 
 func printUsage() {
-	fmt.Println(`AI Gateway — OpenAI-compatible multi-provider proxy
+	fmt.Printf(`AI Gateway %s — OpenAI-compatible multi-provider proxy
 
 Usage:
   aigateway                  Start server + terminal config (recommended)
   aigateway config [path]    Interactive config CLI only (no server)
   aigateway serve [flags]    Start server only (no terminal)
+  aigateway kiro-login [path] Kiro free-tier login (device/social/token)
   aigateway help             Show this help
+
+Agent (non-interactive) commands — full access without a terminal UI:
+  aigateway version [--json]
+  aigateway models [--config path] [--json]
+  aigateway providers [--config path] [--json]
+  aigateway doctor [--config path] [--gateway URL] [--json]
+  aigateway chat --model X --prompt "..." [--gateway URL] [--api-key KEY]
+                   [--system ...] [--max-tokens N] [--api chat|responses] [--json]
 
 Flags:
   -config string   Path to configuration file (default "config.yaml")
@@ -188,7 +227,7 @@ Modes:
                                You can configure via web (http://localhost:8080/admin)
                                AND terminal at the same time!
   aigateway config             Terminal config only, no server
-  aigateway serve              Server only, no terminal (logs to stdout)`)
+   aigateway serve              Server only, no terminal (logs to stdout)`, version)
 }
 
 // CustomLogHandler formats log entries into clean, readable lines.

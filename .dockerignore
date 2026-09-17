@@ -1,0 +1,8 @@
+.git
+*.log
+*.exe
+aigateway
+gogate
+cloudflared.exe
+C:\Users\-\AppData\Local\Temp\opencode
+scratch/

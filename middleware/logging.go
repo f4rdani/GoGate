@@ -1,17 +1,23 @@
 package middleware
 
 import (
+	"bytes"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 )
 
-// statusWriter wraps http.ResponseWriter to capture the status code.
+// maxLoggedBodyBytes caps captured response bodies in debug body logging.
+const maxLoggedBodyBytes = 4096
+
+// statusWriter wraps http.ResponseWriter to capture the status code and,
+// optionally, a truncated prefix of the response body for debug logging.
 type statusWriter struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
+	capture     *bytes.Buffer
 }
 
 func (sw *statusWriter) WriteHeader(status int) {
@@ -27,6 +33,14 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 		sw.status = 200
 		sw.wroteHeader = true
 	}
+	if sw.capture != nil && sw.capture.Len() < maxLoggedBodyBytes {
+		room := maxLoggedBodyBytes - sw.capture.Len()
+		if len(b) > room {
+			sw.capture.Write(b[:room])
+		} else {
+			sw.capture.Write(b)
+		}
+	}
 	return sw.ResponseWriter.Write(b)
 }
 
@@ -39,19 +53,40 @@ func (sw *statusWriter) Flush() {
 
 // LoggingMiddleware logs every HTTP request with method, path, status, and duration.
 func LoggingMiddleware(next http.Handler) http.Handler {
+	return LoggingMiddlewareWithBodies(next, false)
+}
+
+// LoggingMiddlewareWithBodies is LoggingMiddleware plus optional truncated
+// response-body capture at debug level (server `log_bodies: true`).
+// Only response bodies are captured — request bodies stay untouched so the
+// downstream body-limit middleware keeps enforcing size caps.
+func LoggingMiddlewareWithBodies(next http.Handler, logBodies bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, status: 200}
+		if logBodies {
+			sw.capture = &bytes.Buffer{}
+		}
 
 		next.ServeHTTP(sw, r)
 
-		slog.Info("request",
+		attrs := []interface{}{
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
 			"duration", time.Since(start),
 			"remote", r.RemoteAddr,
-		)
+		}
+		if logBodies && sw.capture != nil {
+			body := sw.capture.String()
+			if sw.capture.Len() >= maxLoggedBodyBytes {
+				body += "…[truncated]"
+			}
+			attrs = append(attrs, "resp_body", body)
+			slog.Debug("request", attrs...)
+		} else {
+			slog.Info("request", attrs...)
+		}
 	})
 }
 

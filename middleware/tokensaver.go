@@ -78,18 +78,41 @@ func CompressToolOutputs(req *models.ChatCompletionRequest) {
 
 // InjectCavemanMode prepends or adds a system message instructing the LLM to output tersely.
 func InjectCavemanMode(req *models.ChatCompletionRequest) {
-	if req == nil {
+	injectStylePrompt(req, "IMPORTANT: Be extremely concise in your responses. Use short sentences. No unnecessary words. Skip pleasantries and preamble. Provide code-only answers when possible. Avoid verbose markdown formatting unless essential. Think step-by-step internally but output only the final answer.")
+}
+
+// Ponytail output styles: minimal, YAGNI-first code with fewer output tokens.
+const (
+	ponytailLite  = "Build exactly what is asked — nothing more. Prefer the lazier alternative: standard library over new dependencies, editing existing code over adding new code. Name the lazier option you did not take."
+	ponytailFull  = "You are a lazy senior developer. Enforce the YAGNI ladder: standard library first, then language natives, then existing dependencies, then a one-liner, and only then minimal new code. Delete instead of adding. No unrequested abstractions, no scaffolding, no speculative generality."
+	ponytailUltra = "You are a YAGNI extremist. Deletion first: the shortest working diff wins. Ship the one-liner and challenge the rest of the requirement in the same response. Never add abstractions, wrappers, or future-proofing. Never trade away input validation, error handling that prevents data loss, security, accessibility, or anything explicitly requested."
+)
+
+// InjectPonytailMode injects a lazy-senior-dev style prompt. Level is one of
+// "lite", "full" or "ultra" (case-insensitive); anything else is a no-op.
+func InjectPonytailMode(req *models.ChatCompletionRequest, level string) {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "lite":
+		injectStylePrompt(req, ponytailLite)
+	case "full":
+		injectStylePrompt(req, ponytailFull)
+	case "ultra":
+		injectStylePrompt(req, ponytailUltra)
+	}
+}
+
+// injectStylePrompt prepends prompt to the leading system message (or adds one).
+func injectStylePrompt(req *models.ChatCompletionRequest, prompt string) {
+	if req == nil || prompt == "" {
 		return
 	}
-
-	const cavemanPrompt = "IMPORTANT: Be extremely concise in your responses. Use short sentences. No unnecessary words. Skip pleasantries and preamble. Provide code-only answers when possible. Avoid verbose markdown formatting unless essential. Think step-by-step internally but output only the final answer."
 
 	// Check if there is already a system message at the beginning
 	if len(req.Messages) > 0 && req.Messages[0].Role == "system" {
 		sysMsg := &req.Messages[0]
 		var content string
 		if err := json.Unmarshal(sysMsg.Content, &content); err == nil {
-			newContent := cavemanPrompt + "\n\n" + content
+			newContent := prompt + "\n\n" + content
 			sysMsg.Content, _ = json.Marshal(newContent)
 			return
 		}
@@ -98,7 +121,7 @@ func InjectCavemanMode(req *models.ChatCompletionRequest) {
 	// Otherwise, prepend a new system message
 	newMsg := models.Message{
 		Role:    "system",
-		Content: json.RawMessage(strconv.Quote(cavemanPrompt)),
+		Content: json.RawMessage(strconv.Quote(prompt)),
 	}
 	req.Messages = append([]models.Message{newMsg}, req.Messages...)
 }

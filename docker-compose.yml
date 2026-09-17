@@ -1,0 +1,13 @@
+# GoGate AI Gateway — one-command deployment.
+# Usage: docker compose up -d --build
+services:
+  aigateway:
+    build: .
+    image: aigateway:latest
+    container_name: aigateway
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount your own config (kept outside the image so secrets never bake in)
+      - ./config.yaml:/app/config.yaml:ro
+    restart: unless-stopped

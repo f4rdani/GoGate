@@ -13,6 +13,7 @@ import (
 
 	"github.com/aigateway/balancer"
 	"github.com/aigateway/config"
+	"github.com/aigateway/middleware"
 	"github.com/aigateway/models"
 	"github.com/aigateway/provider"
 )
@@ -51,10 +52,55 @@ type RetryConfig struct {
 
 // Router resolves model names to provider backends.
 type Router struct {
-	routes   map[string]*ModelRoute
-	registry *provider.Registry
-	retryCfg RetryConfig
-	cfg      *config.Config
+	routes        map[string]*ModelRoute
+	registry      *provider.Registry
+	retryCfg      RetryConfig
+	cfg           *config.Config
+	limiter       *middleware.ConcurrencyLimiter
+	budgetChecker func(providerName string) bool
+}
+
+// SetLimiter attaches the concurrency limiter used for per-provider slots.
+// A nil limiter disables provider-level limiting.
+func (r *Router) SetLimiter(l *middleware.ConcurrencyLimiter) {
+	r.limiter = l
+}
+
+// SetBudgetChecker attaches the monthly-budget predicate (nil = no budgets).
+// Over-budget backends are skipped like unhealthy ones.
+func (r *Router) SetBudgetChecker(fn func(providerName string) bool) {
+	r.budgetChecker = fn
+}
+
+// overBudget reports whether a provider exhausted its monthly token budget.
+func (r *Router) overBudget(providerName string) bool {
+	if r.budgetChecker == nil || providerName == "" {
+		return false
+	}
+	return r.budgetChecker(providerName)
+}
+
+// acquireProviderSlot takes a per-provider concurrency slot.
+// Returns a release func and true on success; on saturation returns a
+// no-op release and false (caller must fail over or report 429).
+func (r *Router) acquireProviderSlot(providerName string) (release func(), ok bool) {
+	if r.limiter == nil {
+		return func() {}, true
+	}
+	if !r.limiter.AcquireProvider(providerName) {
+		return func() {}, false
+	}
+	return func() { r.limiter.ReleaseProvider(providerName) }, true
+}
+
+// providerSaturated builds the 429 error used when a provider is at its
+// concurrency limit. It is retryable (fail over) but never sleep-retried.
+func providerSaturated(providerName string) *provider.ProviderError {
+	return &provider.ProviderError{
+		StatusCode: 429,
+		Body:       fmt.Sprintf("provider %s concurrency saturated, try again shortly", providerName),
+		Provider:   providerName,
+	}
 }
 
 // NewRouter creates a Router from configuration.
@@ -206,11 +252,56 @@ func (r *Router) resolveSmartVisionRoute(modelName string, req *models.ChatCompl
 	return modelName
 }
 
-func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
+// dynamicModels resolves the live model catalog backing a virtual auto route
+// (oc/auto, mimo/auto). Resolution order: in-memory cache, then a live
+// /models fetch trying each key in turn (cached on success). Model names are
+// never hardcoded — everything comes from the upstream provider.
+func (r *Router) dynamicModels(ctx context.Context, p provider.Provider) ([]string, error) {
+	if list := provider.GetCachedDynamicModels(p.Name()); len(list) > 0 {
+		return list, nil
+	}
+	up, ok := p.(provider.UpstreamConfigProvider)
+	if !ok || up.Client() == nil || strings.TrimSpace(up.BaseURL()) == "" {
+		return nil, fmt.Errorf("no cached catalog for %s and provider exposes no fetchable endpoint", p.Name())
+	}
+	var keys []string
+	for _, k := range up.APIKeys() {
+		if strings.TrimSpace(k.Key) != "" {
+			keys = append(keys, k.Key)
+		}
+	}
+	if up.ProviderType() == "opencode" || up.ProviderType() == "mimo" {
+		keys = append(keys, "") // keyless public catalog attempt
+	}
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no API keys available to fetch %s catalog", p.Name())
+	}
+	var lastErr error
+	for _, k := range keys {
+		list, err := provider.FetchUpstreamModels(ctx, up.Client(), up.BaseURL(), k, up.ProviderType())
+		if err == nil {
+			provider.SetCachedDynamicModels(p.Name(), list)
+			return list, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("fetch %s catalog: %w", p.Name(), lastErr)
+}
+
+func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, string, error) {
+	if r.overBudget(p.Name()) {
+		return nil, p.Name(), provider.BudgetExceeded(p.Name())
+	}
+	release, ok := r.acquireProviderSlot(p.Name())
+	if !ok {
+		return nil, p.Name(), providerSaturated(p.Name())
+	}
+	defer release()
+
 	if model == "oc/auto" {
-		modelsList := provider.GetCachedDynamicModels(p.Name())
-		if len(modelsList) == 0 {
-			modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
+		modelsList, err := r.dynamicModels(ctx, p)
+		if err != nil {
+			return nil, p.Name(), err
 		}
 		var lastErr error
 		for _, mName := range modelsList {
@@ -218,18 +309,18 @@ func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model 
 			slog.Info("routing oc/auto to model in combo", "model", mName)
 			resp, err := p.ChatCompletion(ctx, req)
 			if err == nil {
-				return resp, nil
+				return resp, p.Name(), nil
 			}
 			slog.Warn("oc/auto failed model fallback in combo", "model", mName, "error", err)
 			lastErr = err
 		}
-		return nil, fmt.Errorf("all opencode free models failed in combo: %w", lastErr)
+		return nil, p.Name(), fmt.Errorf("all opencode free models failed in combo: %w", lastErr)
 	}
 
 	if model == "mimo/auto" {
-		modelsList := provider.GetCachedDynamicModels(p.Name())
-		if len(modelsList) == 0 {
-			modelsList = []string{"mimo-v2.5-free"}
+		modelsList, err := r.dynamicModels(ctx, p)
+		if err != nil {
+			return nil, p.Name(), err
 		}
 		var lastErr error
 		for _, mName := range modelsList {
@@ -237,23 +328,33 @@ func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model 
 			slog.Info("routing mimo/auto to model in combo", "model", mName)
 			resp, err := p.ChatCompletion(ctx, req)
 			if err == nil {
-				return resp, nil
+				return resp, p.Name(), nil
 			}
 			slog.Warn("mimo/auto failed model fallback in combo", "model", mName, "error", err)
 			lastErr = err
 		}
-		return nil, fmt.Errorf("all mimo free models failed in combo: %w", lastErr)
+		return nil, p.Name(), fmt.Errorf("all mimo free models failed in combo: %w", lastErr)
 	}
 
 	req.Model = model
-	return p.ChatCompletion(ctx, req)
+	resp, err := p.ChatCompletion(ctx, req)
+	return resp, p.Name(), err
 }
 
 func (r *Router) executeBackendStream(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error {
+	if r.overBudget(p.Name()) {
+		return provider.BudgetExceeded(p.Name())
+	}
+	release, ok := r.acquireProviderSlot(p.Name())
+	if !ok {
+		return providerSaturated(p.Name())
+	}
+	defer release()
+
 	if model == "oc/auto" {
-		modelsList := provider.GetCachedDynamicModels(p.Name())
-		if len(modelsList) == 0 {
-			modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
+		modelsList, err := r.dynamicModels(ctx, p)
+		if err != nil {
+			return err
 		}
 		var lastErr error
 		for _, mName := range modelsList {
@@ -270,9 +371,9 @@ func (r *Router) executeBackendStream(ctx context.Context, p provider.Provider, 
 	}
 
 	if model == "mimo/auto" {
-		modelsList := provider.GetCachedDynamicModels(p.Name())
-		if len(modelsList) == 0 {
-			modelsList = []string{"mimo-v2.5-free"}
+		modelsList, err := r.dynamicModels(ctx, p)
+		if err != nil {
+			return err
 		}
 		var lastErr error
 		for _, mName := range modelsList {
@@ -296,8 +397,8 @@ func (r *Router) executeBackendStream(ctx context.Context, p provider.Provider, 
 func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) error {
 	var lastErr error
 	maxRetries := r.retryCfg.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 1
+	if maxRetries < 0 {
+		maxRetries = 0
 	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
@@ -338,7 +439,9 @@ func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) 
 }
 
 // ChatCompletion routes a non-streaming chat completion request.
-func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
+// Returns the response, the name of the provider that served it ("" if none),
+// and an error if all backends failed.
+func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, string, error) {
 	modelName = r.resolveSmartVisionRoute(modelName, req)
 	route, ok := r.routes[modelName]
 	if !ok {
@@ -354,29 +457,38 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "oc/")
-				if targetModel == "auto" {
-					modelsList := provider.GetCachedDynamicModels(p.Name())
-					if len(modelsList) == 0 {
-						modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
-					}
-					var lastErr error
-					for _, mName := range modelsList {
-						req.Model = mName
-						slog.Info("routing oc/auto to model", "model", mName)
-						resp, err := p.ChatCompletion(ctx, req)
-						if err == nil {
-							return resp, nil
-						}
-						slog.Warn("oc/auto failed model fallback", "model", mName, "error", err)
-						lastErr = err
-					}
-					return nil, fmt.Errorf("all opencode free models failed: %w", lastErr)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return nil, p.Name(), provider.BudgetExceeded(p.Name())
+			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return nil, p.Name(), providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "oc/")
+			if targetModel == "auto" {
+				modelsList, err := r.dynamicModels(ctx, p)
+				if err != nil {
+					return nil, p.Name(), err
 				}
-				req.Model = targetModel
-				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, p.Name(), targetModel))
-				return p.ChatCompletion(ctx, req)
+				var lastErr error
+				for _, mName := range modelsList {
+					req.Model = mName
+					slog.Info("routing oc/auto to model", "model", mName)
+					resp, err := p.ChatCompletion(ctx, req)
+					if err == nil {
+						return resp, p.Name(), nil
+					}
+					slog.Warn("oc/auto failed model fallback", "model", mName, "error", err)
+					lastErr = err
+				}
+				return nil, p.Name(), fmt.Errorf("all opencode free models failed: %w", lastErr)
+			}
+			req.Model = targetModel
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, p.Name(), targetModel))
+			resp, err := p.ChatCompletion(ctx, req)
+			return resp, p.Name(), err
 			}
 		}
 		if strings.HasPrefix(modelName, "mimo/") {
@@ -390,41 +502,50 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "mimo/")
-				if targetModel == "auto" {
-					modelsList := provider.GetCachedDynamicModels(p.Name())
-					if len(modelsList) == 0 {
-						modelsList = []string{"mimo-v2.5-free"}
-					}
-					var lastErr error
-					for _, mName := range modelsList {
-						req.Model = mName
-						slog.Info("routing mimo/auto to model", "model", mName)
-						resp, err := p.ChatCompletion(ctx, req)
-						if err == nil {
-							return resp, nil
-						}
-						slog.Warn("mimo/auto failed model fallback", "model", mName, "error", err)
-						lastErr = err
-					}
-					return nil, fmt.Errorf("all mimo free models failed: %w", lastErr)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return nil, p.Name(), provider.BudgetExceeded(p.Name())
+			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return nil, p.Name(), providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "mimo/")
+			if targetModel == "auto" {
+				modelsList, err := r.dynamicModels(ctx, p)
+				if err != nil {
+					return nil, p.Name(), err
 				}
-				req.Model = targetModel
-				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, p.Name(), targetModel))
-				return p.ChatCompletion(ctx, req)
+				var lastErr error
+				for _, mName := range modelsList {
+					req.Model = mName
+					slog.Info("routing mimo/auto to model", "model", mName)
+					resp, err := p.ChatCompletion(ctx, req)
+					if err == nil {
+						return resp, p.Name(), nil
+					}
+					slog.Warn("mimo/auto failed model fallback", "model", mName, "error", err)
+					lastErr = err
+				}
+				return nil, p.Name(), fmt.Errorf("all mimo free models failed: %w", lastErr)
+			}
+			req.Model = targetModel
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, p.Name(), targetModel))
+			resp, err := p.ChatCompletion(ctx, req)
+			return resp, p.Name(), err
 			}
 		}
-		return nil, fmt.Errorf("model not found: %s", modelName)
+		return nil, "", fmt.Errorf("model not found: %s", modelName)
 	}
 	if route.Disabled {
-		return nil, fmt.Errorf("model is disabled: %s", modelName)
+		return nil, "", fmt.Errorf("model is disabled: %s", modelName)
 	}
 
 	switch route.Strategy {
 	case "", "direct":
 		if !route.Backend.Provider.IsHealthy() {
-			return nil, fmt.Errorf("provider %s is offline or disabled", route.Backend.Provider.Name())
+			return nil, route.Backend.Provider.Name(), fmt.Errorf("provider %s is offline or disabled", route.Backend.Provider.Name())
 		}
 		// Direct: single backend
 		req.Model = route.Backend.Model
@@ -438,6 +559,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 		idx := firstIdx
 
 		var lastErr error
+		lastProv := ""
 		for attempt := 0; attempt < total; attempt++ {
 			var backend *Backend
 			for i := 0; i < total; i++ {
@@ -462,31 +584,35 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 				)
 			}
 
-			reqCopy := *req
-			reqCopy.Model = backend.Model
-			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+		reqCopy := *req
+		reqCopy.Model = backend.Model
+		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
 
-			resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
-			if err == nil {
-				return resp, nil
-			}
-
-			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
-			slog.Warn("round-robin: backend failed, trying next available backend",
-				"alias", modelName,
-				"provider", backend.Provider.Name(),
-				"model", backend.Model,
-				"disabled_for", circuitBreakerDuration.String(),
-				"error", err,
-			)
-			lastErr = err
-
-			if pe, ok := err.(*provider.ProviderError); ok && !pe.IsRetryable() {
-				return nil, err
-			}
-			idx = route.Balancer.Next()
+		resp, backendName, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
+		if err == nil {
+			return resp, backendName, nil
 		}
-		return nil, lastErr
+
+		// Budget blocks are policy, not upstream failures — don't trip the breaker.
+		if !provider.IsBudgetExceeded(err) {
+			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+		}
+		slog.Warn("round-robin: backend failed, trying next available backend",
+			"alias", modelName,
+			"provider", backend.Provider.Name(),
+			"model", backend.Model,
+			"disabled_for", circuitBreakerDuration.String(),
+			"error", err,
+		)
+		lastErr = err
+		lastProv = backendName
+
+		if pe, ok := err.(*provider.ProviderError); ok && !pe.IsRetryable() {
+			return nil, backendName, err
+		}
+		idx = route.Balancer.Next()
+	}
+	return nil, lastProv, lastErr
 
 	case "fallback", "tiered":
 		// Fallback with retry: try each backend in tier order
@@ -528,30 +654,36 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 			reqCopy := *req
 			reqCopy.Model = backend.Model
 
-			var successResp *models.ChatCompletionResponse
-			retryErr := r.retryWithBackoff(ctx, func() (bool, error) {
-				resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
-				if err == nil {
-					successResp = resp
-					if i > 0 {
-						slog.Info(fmt.Sprintf("ℹ️ [ROUTING] fallback succeeded: %s → %s/%s", modelName, backend.Provider.Name(), backend.Model))
-					}
-					return false, nil
+		var successResp *models.ChatCompletionResponse
+		successProv := ""
+		retryErr := r.retryWithBackoff(ctx, func() (bool, error) {
+			resp, backendName, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
+			if err == nil {
+				successResp = resp
+				successProv = backendName
+				if i > 0 {
+					slog.Info(fmt.Sprintf("ℹ️ [ROUTING] fallback succeeded: %s → %s/%s", modelName, backend.Provider.Name(), backend.Model))
 				}
-				// Only retry on retryable errors
-				if pe, ok := err.(*provider.ProviderError); ok {
-					return pe.IsRetryable(), err
-				}
-				return false, err
-			})
-
-			if retryErr == nil && successResp != nil {
-				return successResp, nil
+				return false, nil
 			}
+			// Only retry on retryable errors — but never sleep-retry a
+			// key-exhausted provider (all its keys are circuit-broken) or
+			// a budget-blocked one; fail over to the next backend instead.
+			if pe, ok := err.(*provider.ProviderError); ok {
+				return pe.IsRetryable() && !pe.KeyExhausted && !provider.IsBudgetExceeded(err), err
+			}
+			return false, err
+		})
+
+		if retryErr == nil && successResp != nil {
+			return successResp, successProv, nil
+		}
 
 			lastErr = retryErr
-			// Disable this backend via circuit breaker
-			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			// Disable this backend via circuit breaker (not for policy blocks)
+			if !provider.IsBudgetExceeded(retryErr) {
+				backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			}
 			slog.Warn("fallback: backend failed after retries",
 				"alias", modelName,
 				"provider", backend.Provider.Name(),
@@ -567,10 +699,10 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 				continue
 			}
 		}
-		return nil, fmt.Errorf("all backends failed for model %s: %w", modelName, lastErr)
+		return nil, "", fmt.Errorf("all backends failed for model %s: %w", modelName, lastErr)
 
 	default:
-		return nil, fmt.Errorf("unknown routing strategy: %s", route.Strategy)
+		return nil, "", fmt.Errorf("unknown routing strategy: %s", route.Strategy)
 	}
 }
 
@@ -597,17 +729,25 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "oc/")
-				if targetModel == "auto" {
-					modelsList := provider.GetCachedDynamicModels(p.Name())
-					if len(modelsList) == 0 {
-						modelsList = []string{"deepseek-v4-flash-free", "mimo-v2.5-free", "nemotron-3-ultra-free", "north-mini-code-free"}
-					}
-					var lastErr error
-					for _, mName := range modelsList {
-						req.Model = mName
-						slog.Info("routing stream oc/auto to model", "model", mName)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return provider.BudgetExceeded(p.Name())
+			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "oc/")
+			if targetModel == "auto" {
+				modelsList, err := r.dynamicModels(ctx, p)
+				if err != nil {
+					return err
+				}
+				var lastErr error
+				for _, mName := range modelsList {
+					req.Model = mName
+					slog.Info("routing stream oc/auto to model", "model", mName)
 						err := p.ChatCompletionStream(ctx, req, w, flusher)
 						if err == nil {
 							return nil
@@ -632,17 +772,25 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "mimo/")
-				if targetModel == "auto" {
-					modelsList := provider.GetCachedDynamicModels(p.Name())
-					if len(modelsList) == 0 {
-						modelsList = []string{"mimo-v2.5-free"}
-					}
-					var lastErr error
-					for _, mName := range modelsList {
-						req.Model = mName
-						slog.Info("routing stream mimo/auto to model", "model", mName)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return provider.BudgetExceeded(p.Name())
+			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "mimo/")
+			if targetModel == "auto" {
+				modelsList, err := r.dynamicModels(ctx, p)
+				if err != nil {
+					return err
+				}
+				var lastErr error
+				for _, mName := range modelsList {
+					req.Model = mName
+					slog.Info("routing stream mimo/auto to model", "model", mName)
 						err := p.ChatCompletionStream(ctx, req, w, flusher)
 						if err == nil {
 							return nil
@@ -717,7 +865,9 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 				return nil
 			}
 
-			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			if !provider.IsBudgetExceeded(err) {
+				backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			}
 			slog.Warn("round-robin stream: backend failed, circuit broken",
 				"alias", modelName,
 				"provider", backend.Provider.Name(),
@@ -789,8 +939,10 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 			}
 
 			lastErr = err
-			// Disable this backend via circuit breaker
-			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			// Disable this backend via circuit breaker (not for policy blocks)
+			if !provider.IsBudgetExceeded(err) {
+				backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+			}
 			slog.Warn("fallback stream: backend failed",
 				"alias", modelName,
 				"provider", backend.Provider.Name(),
@@ -833,12 +985,20 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "oc/")
-				req.Model = targetModel
-				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
-				return p.Embeddings(ctx, req)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return nil, provider.BudgetExceeded(p.Name())
 			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return nil, providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "oc/")
+			req.Model = targetModel
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
+			return p.Embeddings(ctx, req)
+		}
 		}
 		if strings.HasPrefix(modelName, "mimo/") {
 			p, pok := r.registry.Get("mimo")
@@ -851,12 +1011,20 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 					}
 				}
 			}
-			if pok {
-				targetModel := strings.TrimPrefix(modelName, "mimo/")
-				req.Model = targetModel
-				slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
-				return p.Embeddings(ctx, req)
+		if pok {
+			if r.overBudget(p.Name()) {
+				return nil, provider.BudgetExceeded(p.Name())
 			}
+			release, ok := r.acquireProviderSlot(p.Name())
+			if !ok {
+				return nil, providerSaturated(p.Name())
+			}
+			defer release()
+			targetModel := strings.TrimPrefix(modelName, "mimo/")
+			req.Model = targetModel
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, p.Name(), targetModel))
+			return p.Embeddings(ctx, req)
+		}
 		}
 		return nil, fmt.Errorf("model not found: %s", modelName)
 	}
@@ -872,6 +1040,14 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 		// Direct: single backend
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, route.Backend.Provider.Name(), route.Backend.Model))
+		if r.overBudget(route.Backend.Provider.Name()) {
+			return nil, provider.BudgetExceeded(route.Backend.Provider.Name())
+		}
+		release, ok := r.acquireProviderSlot(route.Backend.Provider.Name())
+		if !ok {
+			return nil, providerSaturated(route.Backend.Provider.Name())
+		}
+		defer release()
 		return route.Backend.Provider.Embeddings(ctx, req)
 
 	case "round-robin":
@@ -902,12 +1078,21 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 			req.Model = backend.Model
 			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, backend.Provider.Name(), backend.Model))
 			var callErr error
-			resp, callErr = backend.Provider.Embeddings(ctx, req)
+			if r.overBudget(backend.Provider.Name()) {
+				callErr = provider.BudgetExceeded(backend.Provider.Name())
+			} else if release, ok := r.acquireProviderSlot(backend.Provider.Name()); !ok {
+				callErr = providerSaturated(backend.Provider.Name())
+			} else {
+				resp, callErr = backend.Provider.Embeddings(ctx, req)
+				release()
+			}
 			if callErr != nil {
 				if provErr, ok := callErr.(*provider.ProviderError); ok {
 					if provErr.IsRetryable() {
-						backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
-						slog.Warn("backend circuit broken (embeddings)", "provider", backend.Provider.Name(), "model", backend.Model)
+						if !provider.IsBudgetExceeded(callErr) {
+							backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+							slog.Warn("backend circuit broken (embeddings)", "provider", backend.Provider.Name(), "model", backend.Model)
+						}
 						// Pick next backend for retry
 						idx = (idx + 1) % total
 						backend = &route.Backends[idx]
@@ -935,15 +1120,24 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 			req.Model = b.Model
 			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, b.Provider.Name(), b.Model))
 			var callErr error
-			resp, callErr = b.Provider.Embeddings(ctx, req)
+			if r.overBudget(b.Provider.Name()) {
+				callErr = provider.BudgetExceeded(b.Provider.Name())
+			} else if release, ok := r.acquireProviderSlot(b.Provider.Name()); !ok {
+				callErr = providerSaturated(b.Provider.Name())
+			} else {
+				resp, callErr = b.Provider.Embeddings(ctx, req)
+				release()
+			}
 			if callErr == nil {
 				return resp, nil
 			}
 
 			lastErr = callErr
 			if provErr, ok := callErr.(*provider.ProviderError); ok && provErr.IsRetryable() {
-				b.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
-				slog.Warn("backend circuit broken (embeddings)", "provider", b.Provider.Name(), "model", b.Model)
+				if !provider.IsBudgetExceeded(callErr) {
+					b.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
+					slog.Warn("backend circuit broken (embeddings)", "provider", b.Provider.Name(), "model", b.Model)
+				}
 			} else {
 				break // non-retryable error, stop fallback
 			}

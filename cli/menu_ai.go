@@ -16,12 +16,13 @@ import (
 // ==================== Provider Templates ====================
 
 type providerTemplate struct {
-	Name           string
-	Type           string
-	BaseURL        string
-	Desc           string
-	HelpURL        string
-	FallbackModels []string
+	Name    string
+	Type    string
+	BaseURL string
+	Desc    string
+	HelpURL string
+	// NOTE: model lists are never hardcoded here — they are fetched live
+	// from the provider catalog, or entered manually when fetch fails.
 }
 
 var templates = []providerTemplate{
@@ -38,11 +39,6 @@ var templates = []providerTemplate{
 		BaseURL: "https://api.anthropic.com",
 		Desc:    "Anthropic — Claude Sonnet, Haiku",
 		HelpURL: "https://console.anthropic.com/settings/keys",
-		FallbackModels: []string{
-			"claude-sonnet-4-20250514",
-			"claude-haiku-4-20250514",
-			"claude-opus-4-20250514",
-		},
 	},
 	{
 		Name:    "groq",
@@ -99,13 +95,6 @@ var templates = []providerTemplate{
 		BaseURL: "",
 		Desc:    "Cloudflare Workers AI — Llama, Mistral, Gemma",
 		HelpURL: "https://developers.cloudflare.com/workers-ai/get-started/",
-		FallbackModels: []string{
-			"@cf/meta/llama-3-8b-instruct",
-			"@cf/mistral/mistral-7b-instruct-v0.1",
-			"@cf/meta/llama-3-70b-instruct",
-			"@cf/qwen/qwen1.5-14b-chat",
-			"@cf/baai/bge-large-en-v1.5",
-		},
 	},
 	{
 		Name:    "cerebras",
@@ -113,6 +102,20 @@ var templates = []providerTemplate{
 		BaseURL: "https://api.cerebras.ai/v1",
 		Desc:    "Cerebras Inference — Super fast inference (GPT OSS, Gemma 4, GLM 4.7)",
 		HelpURL: "https://cloud.cerebras.ai",
+	},
+	{
+		Name:    "oauth",
+		Type:    "oauth",
+		BaseURL: "",
+		Desc:    "OAuth2 generic — token refresh otomatis (isi base_url + token_url + refresh_token)",
+		HelpURL: "",
+	},
+	{
+		Name:    "kiro",
+		Type:    "kiro",
+		BaseURL: "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
+		Desc:    "Kiro AI — free tier via API key atau refresh token (OAuth/Google/GitHub)",
+		HelpURL: "https://kiro.dev",
 	},
 }
 
@@ -281,27 +284,22 @@ func setupFromTemplate(cfg *config.Config, tmpl providerTemplate) {
 
 	if err != nil {
 		printWarning(fmt.Sprintf(T("Gagal fetch model: %v", "Failed to fetch models: %v"), err))
-		if len(tmpl.FallbackModels) > 0 {
-			printInfo(T("Menggunakan model default:", "Using default models:"))
-			fetchedModels = tmpl.FallbackModels
-		} else {
-			// Manual input
-			var manualModels string
-			errM := huh.NewInput().
-				Title("Tambah model manual").
-				Placeholder("model-1, model-2, model-3").
-				Value(&manualModels).
-				Run()
-			if isAbort(errM) {
-				printInfo("Dibatalkan")
-				return
-			}
-			fetchedModels = splitTrim(manualModels)
-			if len(fetchedModels) == 0 {
-				printError("Minimal 1 model")
-				pause()
-				return
-			}
+		// Manual input — model names always come from the user, never hardcoded
+		var manualModels string
+		errM := huh.NewInput().
+			Title("Tambah model manual").
+			Placeholder("model-1, model-2, model-3").
+			Value(&manualModels).
+			Run()
+		if isAbort(errM) {
+			printInfo("Dibatalkan")
+			return
+		}
+		fetchedModels = splitTrim(manualModels)
+		if len(fetchedModels) == 0 {
+			printError("Minimal 1 model")
+			pause()
+			return
 		}
 	}
 
@@ -510,31 +508,18 @@ func addCustomProvider(cfg *config.Config) {
 
 	if err != nil {
 		printWarning(fmt.Sprintf(T("Gagal fetch: %v", "Failed to fetch: %v"), err))
-		
-		// If cloudflare, suggest fallback models
-		if providerType == "cloudflare" {
-			models = []string{
-				"@cf/meta/llama-3-8b-instruct",
-				"@cf/mistral/mistral-7b-instruct-v0.1",
-				"@cf/meta/llama-3-70b-instruct",
-				"@cf/qwen/qwen1.5-14b-chat",
-				"@cf/baai/bge-large-en-v1.5",
-			}
-			printInfo(T("Menggunakan model default Cloudflare:", "Using default Cloudflare models:"))
-		} else {
-			printInfo(T("Tambah model manual:", "Add model manually:"))
+		printInfo(T("Tambah model manual:", "Add model manually:"))
 
-			var modelsStr string
-			huh.NewInput().
-				Title("Models").
-				Placeholder("model-1, model-2, model-3").
-				Value(&modelsStr).
-				Run()
-			models = splitTrim(modelsStr)
-			if len(models) == 0 {
-				printError(T("Minimal 1 model", "At least 1 model is required"))
-				return
-			}
+		var modelsStr string
+		huh.NewInput().
+			Title("Models").
+			Placeholder("model-1, model-2, model-3").
+			Value(&modelsStr).
+			Run()
+		models = splitTrim(modelsStr)
+		if len(models) == 0 {
+			printError(T("Minimal 1 model", "At least 1 model is required"))
+			return
 		}
 	}
 
@@ -1219,7 +1204,7 @@ func addUpstreamKey(cfg *config.Config) {
 	var testErr error
 
 	spinnerErr := withSpinner("Menguji konektivitas API key...", func() error {
-		ok, count, testErr = testAPIKey(p.BaseURL, key, p.Type)
+		ok, count, testErr = testAPIKey(p.BaseURL, key, p.Type, p.Models)
 		return testErr
 	})
 

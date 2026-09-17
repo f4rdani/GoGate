@@ -90,7 +90,7 @@ func testAPIKeyMenu(cfg *config.Config) {
 
 	// If there is only 1 API key, test it directly
 	if len(p.APIKeys) == 1 {
-		runSingleKeyTest(p.Name, p.BaseURL, p.APIKeys[0], p.Type, 1)
+		runSingleKeyTest(p.Name, p.BaseURL, p.APIKeys[0], p.Type, 1, p.Models)
 		return
 	}
 
@@ -116,7 +116,7 @@ func testAPIKeyMenu(cfg *config.Config) {
 		printInfo(fmt.Sprintf("Memulai pengetesan %d API key untuk %s...", len(p.APIKeys), p.Name))
 		for i, key := range p.APIKeys {
 			fmt.Println()
-			runSingleKeyTest(p.Name, p.BaseURL, key, p.Type, i+1)
+			runSingleKeyTest(p.Name, p.BaseURL, key, p.Type, i+1, p.Models)
 		}
 	} else if choice == "specific" {
 		var selectedKeyIdx int
@@ -138,18 +138,18 @@ func testAPIKeyMenu(cfg *config.Config) {
 		}
 
 		fmt.Println()
-		runSingleKeyTest(p.Name, p.BaseURL, p.APIKeys[selectedKeyIdx], p.Type, selectedKeyIdx+1)
+		runSingleKeyTest(p.Name, p.BaseURL, p.APIKeys[selectedKeyIdx], p.Type, selectedKeyIdx+1, p.Models)
 	}
 }
 
-func runSingleKeyTest(providerName, baseURL, apiKey, providerType string, keyNum int) {
+func runSingleKeyTest(providerName, baseURL, apiKey, providerType string, keyNum int, candidates []string) {
 	masked := maskAPIKey(apiKey)
 	var ok bool
 	var count int
 	var testErr error
 
 	spinnerErr := withSpinner(fmt.Sprintf("Testing key #%d (%s) untuk %s...", keyNum, masked, providerName), func() error {
-		ok, count, testErr = testAPIKey(baseURL, apiKey, providerType)
+		ok, count, testErr = testAPIKey(baseURL, apiKey, providerType, candidates)
 		return testErr
 	})
 

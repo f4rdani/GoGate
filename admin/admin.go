@@ -34,6 +34,15 @@ type AdminHandler struct {
 	registry    *provider.Registry
 	tunnelMgr   *tunnel.TunnelManager
 	proxyPool   *relay.ProxyPool
+
+	quotaMu    sync.Mutex
+	quotaCache map[string]kiroQuotaEntry
+}
+
+// kiroQuotaEntry is one cached Kiro quota lookup.
+type kiroQuotaEntry struct {
+	at    time.Time
+	usage *provider.KiroUsage
 }
 
 // NewAdminHandler creates a new admin handler.
@@ -342,6 +351,7 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		APIKeys      []string `json:"api_keys"`
 		DisabledKeys []string `json:"disabled_keys"`
 		Disabled     bool     `json:"disabled"`
+		Quota       *provider.KiroUsage `json:"quota,omitempty"`
 	}
 
 	result := make([]providerInfo, 0, len(cfg.Providers))
@@ -401,6 +411,10 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			info.Healthy = len(p.APIKeys) > 0 // assume healthy if has keys but no registry
+		}
+		// Kiro free-tier quota (best-effort, 5-minute cache).
+		if p.Type == "kiro" && !p.Disabled {
+			info.Quota = a.getKiroQuota(p.Name)
 		}
 		result = append(result, info)
 	}
@@ -514,6 +528,43 @@ func (a *AdminHandler) getRegistry() *provider.Registry {
 	return a.registry
 }
 
+// getKiroQuota returns cached remaining quota for a Kiro provider (5-minute
+// TTL, best-effort — nil when unreachable so listings never block).
+func (a *AdminHandler) getKiroQuota(providerName string) *provider.KiroUsage {
+	a.quotaMu.Lock()
+	if a.quotaCache != nil {
+		if e, ok := a.quotaCache[providerName]; ok && time.Since(e.at) < 5*time.Minute {
+			a.quotaMu.Unlock()
+			return e.usage
+		}
+	}
+	a.quotaMu.Unlock()
+
+	var usage *provider.KiroUsage
+	if reg := a.getRegistry(); reg != nil {
+		if p, ok := reg.Get(providerName); ok {
+			if kp, ok := p.(interface {
+				UsageLimits(context.Context) (*provider.KiroUsage, error)
+			}); ok {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				u, err := kp.UsageLimits(ctx)
+				cancel()
+				if err == nil {
+					usage = u
+				}
+			}
+		}
+	}
+
+	a.quotaMu.Lock()
+	if a.quotaCache == nil {
+		a.quotaCache = make(map[string]kiroQuotaEntry)
+	}
+	a.quotaCache[providerName] = kiroQuotaEntry{at: time.Now(), usage: usage}
+	a.quotaMu.Unlock()
+	return usage
+}
+
 // saveAndReload validates, saves config to disk, and hot-reloads the server.
 // Uses write lock to prevent concurrent mutations from interleaving.
 func (a *AdminHandler) saveAndReload() error {
@@ -620,6 +671,12 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 		RelayURL     *string  `json:"relay_url"`
 		RelaySecret  *string  `json:"relay_secret"`
 		ProxyURL     *string  `json:"proxy_url"`
+		TokenURL     *string  `json:"token_url"`
+		ClientID     *string  `json:"client_id"`
+		ClientSecret *string  `json:"client_secret"`
+		RefreshToken *string  `json:"refresh_token"`
+		ProfileARN   *string  `json:"profile_arn"`
+		Region       *string  `json:"region"`
 		Disabled     *bool    `json:"disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -648,6 +705,24 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 	if req.ProxyURL != nil {
 		existing.ProxyURL = *req.ProxyURL
+	}
+	if req.TokenURL != nil {
+		existing.TokenURL = *req.TokenURL
+	}
+	if req.ClientID != nil {
+		existing.ClientID = *req.ClientID
+	}
+	if req.ClientSecret != nil {
+		existing.ClientSecret = *req.ClientSecret
+	}
+	if req.RefreshToken != nil {
+		existing.RefreshToken = *req.RefreshToken
+	}
+	if req.ProfileARN != nil {
+		existing.ProfileARN = *req.ProfileARN
+	}
+	if req.Region != nil {
+		existing.Region = *req.Region
 	}
 	if req.Disabled != nil {
 		existing.Disabled = *req.Disabled
@@ -890,6 +965,7 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	var rawMap map[string]interface{}
 	json.Unmarshal(bodyBytes, &rawMap)
 	_, hasTokenSaver := rawMap["token_saver"]
+	_, hasRateLimit := rawMap["rate_limit"]
 
 	// Find the key in config by its hash
 	var existing *config.APIKeyConfig
@@ -914,7 +990,13 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		tokenSaverVal = req.TokenSaver
 	}
 
-	if !a.getKeyStore().UpdateKey(key, req.Name, req.AllowedModels, req.RateLimit, tokenSaverVal, disabledVal) {
+	// Absent rate_limit must preserve the existing value (not reset to 0/unlimited).
+	rateLimitVal := existing.RateLimit
+	if hasRateLimit {
+		rateLimitVal = req.RateLimit
+	}
+
+	if !a.getKeyStore().UpdateKey(key, req.Name, req.AllowedModels, rateLimitVal, tokenSaverVal, disabledVal) {
 		a.sendError(w, http.StatusNotFound, "Key not found in keystore")
 		return
 	}
@@ -1110,22 +1192,25 @@ func (a *AdminHandler) HandleUpdateConfigRetry(w http.ResponseWriter, r *http.Re
 // ==================== Diagnostic Endpoints ====================
 
 // providerTemplate defines a quick setup template for a provider.
+// Model lists are never hardcoded here — they are always fetched live from
+// the provider catalog (or supplied manually by the caller).
 type providerTemplate struct {
 	Name           string   `json:"name"`
 	Type           string   `json:"type"`
 	BaseURL        string   `json:"base_url"`
 	Desc           string   `json:"desc"`
 	HelpURL        string   `json:"help_url"`
-	FallbackModels []string `json:"fallback_models,omitempty"`
 }
 
 var providerTemplates = []providerTemplate{
 	{Name: "openai", Type: "openai", BaseURL: "https://api.openai.com/v1", Desc: "OpenAI \u2014 GPT-4o, GPT-4.1", HelpURL: "https://platform.openai.com/api-keys"},
-	{Name: "anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com", Desc: "Anthropic \u2014 Claude Sonnet, Haiku", HelpURL: "https://console.anthropic.com/settings/keys", FallbackModels: []string{"claude-sonnet-4-20250514", "claude-haiku-4-20250514"}},
+	{Name: "anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com", Desc: "Anthropic \u2014 Claude Sonnet, Haiku", HelpURL: "https://console.anthropic.com/settings/keys"},
 	{Name: "groq", Type: "groq", BaseURL: "https://api.groq.com/openai/v1", Desc: "Groq \u2014 Llama, Mixtral (super cepat)", HelpURL: "https://console.groq.com/keys"},
 	{Name: "mistral", Type: "mistral", BaseURL: "https://api.mistral.ai/v1", Desc: "Mistral AI \u2014 Mistral Large, Small", HelpURL: "https://console.mistral.ai/api-keys/"},
 	{Name: "deepseek", Type: "openai", BaseURL: "https://api.deepseek.com/v1", Desc: "DeepSeek \u2014 Chat, Reasoner", HelpURL: "https://platform.deepseek.com/api_keys"},
 	{Name: "openrouter", Type: "openai", BaseURL: "https://openrouter.ai/api/v1", Desc: "OpenRouter \u2014 akses 300+ model", HelpURL: "https://openrouter.ai/keys"},
+	{Name: "oauth", Type: "oauth", BaseURL: "", Desc: "OAuth2 generic - token refresh otomatis (isi base_url + token_url + refresh_token)", HelpURL: ""},
+	{Name: "kiro", Type: "kiro", BaseURL: "https://q.us-east-1.amazonaws.com/generateAssistantResponse", Desc: "Kiro AI - free tier via API key atau refresh token", HelpURL: "https://kiro.dev"},
 	{Name: "gemini", Type: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Desc: "Google Gemini \u2014 Gemini 1.5, 2.0, 2.5 Pro/Flash", HelpURL: "https://aistudio.google.com/app/apikey"},
 }
 
@@ -1311,6 +1396,210 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 	return "(empty)", latency, nil
 }
 
+// maskDiagKey returns a masked representation of an API key for display (e.g. "abcd1234...wxyz").
+func maskDiagKey(k string) string {
+	k = strings.TrimSpace(k)
+	if len(k) >= 12 {
+		return k[:8] + "..." + k[len(k)-4:]
+	}
+	if len(k) > 4 {
+		return k[:2] + "..." + k[len(k)-2:]
+	}
+	if len(k) > 0 {
+		return "***"
+	}
+	return "-"
+}
+
+// diagKeyCandidate is one upstream key to try during a diag request.
+type diagKeyCandidate struct {
+	Key   string
+	Index int // 0-based index into provider APIKeys, -1 for explicit/raw keys
+}
+
+// isDiagFallbackRetryable reports whether a diag failure is worth retrying with the next key.
+// Model/payload errors (400, 404, model not found) fail identically for every key,
+// so they must NOT trigger fallback. Everything else (429 rate limit, 401/403 key
+// problems, 5xx, network errors) is key-specific or transient and should try the next key.
+func isDiagFallbackRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	// Never fallback on these: same result for every key.
+	nonRetryableMarkers := []string{
+		"http 400", "http 404",
+		"model_not_found", "does not exist", "model not found",
+		"invalid_request", "invalid model",
+	}
+	for _, m := range nonRetryableMarkers {
+		if strings.Contains(lower, m) {
+			return false
+		}
+	}
+	return true
+}
+
+// buildDiagKeyCandidates resolves baseURL/providerType from the provider name and builds
+// the ordered list of upstream keys to try.
+//   - explicit api_key in request  -> single candidate, no fallback (Index=-1)
+//   - provider + valid key_index   -> single candidate, no fallback (tests one specific key)
+//   - provider without key_index   -> ALL active provider keys in order (auto-fallback mode)
+//   - raw baseURL/api_key          -> single candidate, no fallback
+func (a *AdminHandler) buildDiagKeyCandidates(providerName string, keyIndex *int, baseURL, providerType *string, explicitAPIKey string) ([]diagKeyCandidate, error) {
+	if providerName != "" {
+		prov := a.cfg.GetProvider(providerName)
+		if prov == nil {
+			return nil, fmt.Errorf("provider '%s' not found", providerName)
+		}
+		*baseURL = prov.BaseURL
+		if *providerType == "" {
+			*providerType = prov.Type
+		}
+		if strings.TrimSpace(explicitAPIKey) != "" {
+			return []diagKeyCandidate{{Key: strings.TrimSpace(explicitAPIKey), Index: -1}}, nil
+		}
+		// OAuth providers authenticate with a live refreshed token, not stored keys.
+		if prov.Type == "oauth" {
+			tok, err := a.oauthDiagToken(providerName)
+			if err != nil {
+				return nil, err
+			}
+			return []diagKeyCandidate{{Key: tok, Index: -1}}, nil
+		}
+		if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
+			return []diagKeyCandidate{{Key: prov.APIKeys[*keyIndex], Index: *keyIndex}}, nil
+		}
+		if len(prov.APIKeys) == 0 {
+			if *providerType == "opencode" || *providerType == "mimo" {
+				return []diagKeyCandidate{{Key: "", Index: -1}}, nil
+			}
+			if len(prov.DisabledKeys) > 0 {
+				return nil, fmt.Errorf("provider '%s' has no active API keys (%d disabled)", providerName, len(prov.DisabledKeys))
+			}
+			return nil, fmt.Errorf("provider '%s' has no API keys", providerName)
+		}
+		candidates := make([]diagKeyCandidate, 0, len(prov.APIKeys))
+		for i, k := range prov.APIKeys {
+			if strings.TrimSpace(k) == "" {
+				continue
+			}
+			candidates = append(candidates, diagKeyCandidate{Key: k, Index: i})
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("provider '%s' has no API keys", providerName)
+		}
+		return candidates, nil
+	}
+	if strings.TrimSpace(explicitAPIKey) == "" && *providerType != "opencode" && *providerType != "mimo" {
+		return nil, fmt.Errorf("base_url and api_key (or provider name) required")
+	}
+	if *baseURL == "" {
+		return nil, fmt.Errorf("base_url and api_key (or provider name) required")
+	}
+	return []diagKeyCandidate{{Key: strings.TrimSpace(explicitAPIKey), Index: -1}}, nil
+}
+
+// oauthDiagToken mints a live bearer token for an OAuth provider so the
+// diagnostics endpoints can test it without a stored key.
+func (a *AdminHandler) oauthDiagToken(providerName string) (string, error) {
+	reg := a.getRegistry()
+	if reg == nil {
+		return "", fmt.Errorf("provider registry not initialized")
+	}
+	p, ok := reg.Get(providerName)
+	if !ok {
+		return "", fmt.Errorf("provider '%s' not found", providerName)
+	}
+	src, ok := p.(interface {
+		OAuthToken(context.Context) (string, error)
+	})
+	if !ok {
+		return "", fmt.Errorf("provider '%s' does not support OAuth tokens", providerName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	tok, err := src.OAuthToken(ctx)
+	if err != nil {
+		return "", fmt.Errorf("oauth token: %w", err)
+	}
+	if tok == "" {
+		return "", fmt.Errorf("oauth provider '%s' returned an empty token", providerName)
+	}
+	return tok, nil
+}
+
+// kiroDiagCredentials resolves Kiro credentials for diagnostics: an explicit
+// key (API key, or a refresh token starting with "aorAAAAAG"), a specific
+// key index, or the provider's configured credentials.
+func (a *AdminHandler) kiroDiagCredentials(providerName, explicitKey string, keyIndex *int) (provider.KiroCredentials, bool, error) {
+	var cred provider.KiroCredentials
+	if providerName == "" {
+		return cred, false, nil
+	}
+	prov := a.cfg.GetProvider(providerName)
+	if prov == nil || prov.Type != "kiro" {
+		return cred, false, nil
+	}
+	if k := strings.TrimSpace(explicitKey); k != "" {
+		if strings.HasPrefix(k, "aorAAAAAG") {
+			return provider.KiroCredentials{RefreshToken: k}, true, nil
+		}
+		return provider.KiroCredentials{APIKey: k}, true, nil
+	}
+	if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
+		return provider.KiroCredentials{APIKey: prov.APIKeys[*keyIndex]}, true, nil
+	}
+	if len(prov.APIKeys) > 0 {
+		return provider.KiroCredentials{APIKey: prov.APIKeys[0]}, true, nil
+	}
+	if strings.TrimSpace(prov.RefreshToken) != "" {
+		return provider.KiroCredentials{RefreshToken: prov.RefreshToken, ProfileARN: prov.ProfileARN}, true, nil
+	}
+	return cred, true, fmt.Errorf("provider '%s' has no kiro credentials (api key or refresh token)", providerName)
+}
+
+// diagTestKiroModel runs a minimal completion through the registered Kiro
+// provider (which handles key rotation and surface failover internally).
+func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request, providerName, model string) {
+	reg := a.getRegistry()
+	if reg == nil {
+		a.sendError(w, http.StatusBadRequest, "provider registry not initialized")
+		return
+	}
+	p, ok := reg.Get(providerName)
+	if !ok {
+		a.sendError(w, http.StatusBadRequest, fmt.Sprintf("provider '%s' not found", providerName))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	start := time.Now()
+	resp, err := p.ChatCompletion(ctx, &models.ChatCompletionRequest{
+		Model:    model,
+		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"Say OK"`)}},
+	})
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"provider": providerName, "model": model, "type": "kiro",
+			"target": "kiro-generateAssistantResponse", "latency_ms": latency,
+		})
+		return
+	}
+	text := "(empty)"
+	if len(resp.Choices) > 0 && resp.Choices[0].Message != nil {
+		text = resp.Choices[0].Message.ContentString()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": true, "response": text, "latency_ms": latency, "status": "OK",
+		"provider": providerName, "model": model, "type": "kiro",
+		"target":    "kiro-generateAssistantResponse",
+		"key_label": "auto (kiro rotation)",
+	})
+}
+
 // resolveDiagParams resolves baseURL, apiKey, and providerType from provider name and optional keyIndex,
 // or falls back to using the raw baseURL/apiKey passed directly.
 func (a *AdminHandler) resolveDiagParams(providerName string, keyIndex *int, baseURL, apiKey, providerType *string) error {
@@ -1370,6 +1659,36 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if cred, isKiro, err := a.kiroDiagCredentials(req.Provider, req.APIKey, req.KeyIndex); err != nil {
+		a.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	} else if isKiro {
+		start := time.Now()
+		models, ferr := provider.KiroListModels(r.Context(), nil, cred)
+		latency := time.Since(start).Milliseconds()
+		targetURL := "kiro-catalog"
+		if ferr != nil {
+			a.sendDiagError(w, http.StatusBadGateway, ferr.Error(), map[string]interface{}{
+				"provider":   req.Provider,
+				"target":     targetURL,
+				"key_index":  req.KeyIndex,
+				"type":       "kiro",
+				"latency_ms": latency,
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok":          true,
+			"model_count": len(models),
+			"models":      models,
+			"latency_ms":  latency,
+			"status":      "OK",
+			"provider":    req.Provider,
+			"target":      targetURL,
+		})
+		return
+	}
 	var client *http.Client
 	if req.Provider != "" && a.registry != nil {
 		if p, ok := a.registry.Get(req.Provider); ok {
@@ -1407,6 +1726,10 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 }
 
 // HandleDiagTestModel handles POST /admin/diag/test-model.
+// Auto-fallback: when provider is given WITHOUT explicit api_key/key_index,
+// tries each active key in order until one succeeds (e.g. on 429 rate limit).
+// Success response includes key_index (0-based), key_number (1-based), key_masked,
+// attempts, fallback_used, and key_count so the dashboard can show "success with key N".
 func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Request) {
 	if !a.checkAuth(r) {
 		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
@@ -1428,7 +1751,14 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		a.sendError(w, http.StatusBadRequest, "model required")
 		return
 	}
-	if err := a.resolveDiagParams(req.Provider, req.KeyIndex, &req.BaseURL, &req.APIKey, &req.Type); err != nil {
+	// Kiro speaks CodeWhisperer EventStream, not OpenAI HTTP — run the test
+	// through the registered provider (which rotates keys/surfaces itself).
+	if prov := a.cfg.GetProvider(req.Provider); prov != nil && prov.Type == "kiro" {
+		a.diagTestKiroModel(w, r, req.Provider, req.Model)
+		return
+	}
+	candidates, err := a.buildDiagKeyCandidates(req.Provider, req.KeyIndex, &req.BaseURL, &req.Type, req.APIKey)
+	if err != nil {
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1444,28 +1774,77 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	if req.Type == "anthropic" {
 		targetURL = strings.TrimRight(req.BaseURL, "/") + "/v1/messages"
 	}
-	response, latency, err := diagTestModel(client, req.BaseURL, req.APIKey, req.Model, req.Type)
-	if err != nil {
-		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
-			"provider":   req.Provider,
-			"base_url":   req.BaseURL,
-			"model":      req.Model,
-			"type":       req.Type,
-			"target":     targetURL,
-			"latency_ms": latency,
-		})
-		return
+	type keyFailure struct {
+		KeyIndex  interface{} `json:"key_index"`
+		KeyMasked string      `json:"key_masked"`
+		Error     string      `json:"error"`
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":         true,
-		"response":   response,
-		"latency_ms": latency,
-		"status":     "OK",
+	failures := make([]keyFailure, 0, len(candidates))
+	var lastLatency int64
+	for i, cand := range candidates {
+		response, latency, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type)
+		if err == nil {
+			resp := map[string]interface{}{
+				"ok":         true,
+				"response":   response,
+				"latency_ms": latency,
+				"status":     "OK",
+				"provider":   req.Provider,
+				"model":      req.Model,
+				"target":     targetURL,
+				"attempts":   i + 1,
+				"key_count":  len(candidates),
+			}
+			if cand.Index >= 0 {
+				resp["key_index"] = cand.Index
+				resp["key_number"] = cand.Index + 1
+				resp["key_label"] = fmt.Sprintf("Key #%d", cand.Index+1)
+				resp["key_masked"] = maskDiagKey(cand.Key)
+				resp["fallback_used"] = i > 0
+			}
+			if len(failures) > 0 {
+				resp["failed_attempts"] = failures
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+		lastLatency = latency
+		var idx interface{}
+		if cand.Index >= 0 {
+			idx = cand.Index
+		}
+		failures = append(failures, keyFailure{KeyIndex: idx, KeyMasked: maskDiagKey(cand.Key), Error: err.Error()})
+		if i < len(candidates)-1 {
+			if !isDiagFallbackRetryable(err) {
+				break
+			}
+			// Small pacing so rapid fallback doesn't trip per-IP limits.
+			time.Sleep(150 * time.Millisecond)
+			continue
+		}
+	}
+	// All candidates exhausted (or non-retryable error on first key).
+	lastErrMsg := ""
+	if len(failures) > 0 {
+		lastErrMsg = failures[len(failures)-1].Error
+	}
+	details := map[string]interface{}{
 		"provider":   req.Provider,
+		"base_url":   req.BaseURL,
 		"model":      req.Model,
+		"type":       req.Type,
 		"target":     targetURL,
-	})
+		"latency_ms": lastLatency,
+		"attempts":   len(failures),
+		"key_count":  len(candidates),
+		"failures":   failures,
+	}
+	if len(candidates) == 1 && candidates[0].Index >= 0 {
+		details["key_index"] = candidates[0].Index
+		details["key_masked"] = maskDiagKey(candidates[0].Key)
+	}
+	a.sendDiagError(w, http.StatusBadGateway, lastErrMsg, details)
 }
 
 // HandleDiagFetchModels handles POST /admin/diag/fetch-models.
@@ -1485,7 +1864,28 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
 	}
-	if err := a.resolveDiagParams(req.Provider, req.KeyIndex, &req.BaseURL, &req.APIKey, &req.Type); err != nil {
+	if cred, isKiro, err := a.kiroDiagCredentials(req.Provider, req.APIKey, req.KeyIndex); err != nil {
+		a.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	} else if isKiro {
+		start := time.Now()
+		models, ferr := provider.KiroListModels(r.Context(), nil, cred)
+		latency := time.Since(start).Milliseconds()
+		if ferr != nil {
+			a.sendDiagError(w, http.StatusBadGateway, ferr.Error(), map[string]interface{}{
+				"provider": req.Provider, "target": "kiro-catalog", "type": "kiro",
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true, "models": models, "count": len(models),
+			"provider": req.Provider, "target": "kiro-catalog", "latency_ms": latency,
+		})
+		return
+	}
+	candidates, err := a.buildDiagKeyCandidates(req.Provider, req.KeyIndex, &req.BaseURL, &req.Type, req.APIKey)
+	if err != nil {
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1498,28 +1898,59 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		}
 	}
 	targetURL := strings.TrimRight(req.BaseURL, "/") + "/models"
-	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
-	if err != nil {
-		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
-			"provider": req.Provider,
-			"base_url": req.BaseURL,
-			"target":   targetURL,
-			"type":     req.Type,
-		})
-		return
+	var lastErr error
+	for i, cand := range candidates {
+		models, err := diagFetchModels(client, req.BaseURL, cand.Key, req.Type)
+		if err == nil {
+			resp := map[string]interface{}{
+				"ok":        true,
+				"models":    models,
+				"count":     len(models),
+				"provider":  req.Provider,
+				"base_url":  req.BaseURL,
+				"target":    targetURL,
+				"attempts":  i + 1,
+				"key_count": len(candidates),
+			}
+			if cand.Index >= 0 {
+				resp["key_index"] = cand.Index
+				resp["key_number"] = cand.Index + 1
+				resp["key_label"] = fmt.Sprintf("Key #%d", cand.Index+1)
+				resp["key_masked"] = maskDiagKey(cand.Key)
+				resp["fallback_used"] = i > 0
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(resp)
+			return
+		}
+		lastErr = err
+		if i < len(candidates)-1 {
+			if !isDiagFallbackRetryable(err) {
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+			continue
+		}
 	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":       true,
-		"models":   models,
-		"count":    len(models),
-		"provider": req.Provider,
-		"base_url": req.BaseURL,
-		"target":   targetURL,
-	})
+	details := map[string]interface{}{
+		"provider":  req.Provider,
+		"base_url":  req.BaseURL,
+		"target":    targetURL,
+		"type":      req.Type,
+		"attempts":  1,
+		"key_count": len(candidates),
+	}
+	if len(candidates) == 1 && candidates[0].Index >= 0 {
+		details["key_index"] = candidates[0].Index
+	}
+	msg := ""
+	if lastErr != nil {
+		msg = lastErr.Error()
+	}
+	a.sendDiagError(w, http.StatusBadGateway, msg, details)
 }
 
-// HandleQuickSetup handles POST /admin/templates/setup \u2014 create provider from template + fetch models.
+// HandleQuickSetup handles POST /admin/templates/setup — create provider from template + fetch models.
 func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) {
 	if !a.checkAuth(r) {
 		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
@@ -1554,19 +1985,17 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 		a.sendError(w, http.StatusConflict, "Provider '"+tmpl.Name+"' already exists")
 		return
 	}
-	// Fetch models if not provided
+	// Fetch models live if not provided — never fall back to hardcoded
+	// model names. Providers without a catalog endpoint (e.g. anthropic)
+	// must supply "models" explicitly.
 	models := req.Models
 	if len(models) == 0 {
 		fetched, err := diagFetchModels(nil, tmpl.BaseURL, req.APIKey, tmpl.Type)
 		if err != nil {
-			models = tmpl.FallbackModels
-			if len(models) == 0 {
-				a.sendError(w, http.StatusBadGateway, "Failed to fetch models and no fallback: "+err.Error())
-				return
-			}
-		} else {
-			models = fetched
+			a.sendError(w, http.StatusBadGateway, "Failed to fetch models from provider catalog ("+err.Error()+"). Supply \"models\" explicitly.")
+			return
 		}
+		models = fetched
 	}
 	// Create provider
 	p := config.ProviderConfig{

@@ -98,7 +98,7 @@ func TestDirectRouting(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "gpt-4o"}
-	resp, err := r.ChatCompletion(context.Background(), "gpt-4o", req)
+	resp, _, err := r.ChatCompletion(context.Background(), "gpt-4o", req)
 	if err != nil {
 		t.Fatalf("ChatCompletion failed: %v", err)
 	}
@@ -135,13 +135,13 @@ func TestRoundRobinRouting(t *testing.T) {
 
 	// First request should go to one provider, second to the other
 	req1 := &models.ChatCompletionRequest{Model: "fast-mix"}
-	resp1, err := r.ChatCompletion(context.Background(), "fast-mix", req1)
+	resp1, _, err := r.ChatCompletion(context.Background(), "fast-mix", req1)
 	if err != nil {
 		t.Fatalf("first request failed: %v", err)
 	}
 
 	req2 := &models.ChatCompletionRequest{Model: "fast-mix"}
-	resp2, err := r.ChatCompletion(context.Background(), "fast-mix", req2)
+	resp2, _, err := r.ChatCompletion(context.Background(), "fast-mix", req2)
 	if err != nil {
 		t.Fatalf("second request failed: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestFallbackRouting(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "test-model"}
-	resp, err := r.ChatCompletion(context.Background(), "test-model", req)
+	resp, _, err := r.ChatCompletion(context.Background(), "test-model", req)
 	if err != nil {
 		t.Fatalf("expected fallback to succeed, got error: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestFallbackTieredRouting(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "smart-fallback"}
-	resp, err := r.ChatCompletion(context.Background(), "smart-fallback", req)
+	resp, _, err := r.ChatCompletion(context.Background(), "smart-fallback", req)
 	if err != nil {
 		t.Fatalf("expected tiered fallback to succeed: %v", err)
 	}
@@ -267,7 +267,7 @@ func TestFallbackSkipUnhealthy(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "test"}
-	resp, err := r.ChatCompletion(context.Background(), "test", req)
+	resp, _, err := r.ChatCompletion(context.Background(), "test", req)
 	if err != nil {
 		t.Fatalf("expected success: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestRetryWithBackoff(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "test"}
-	_, err = r.ChatCompletion(context.Background(), "test", req)
+	_, _, err = r.ChatCompletion(context.Background(), "test", req)
 	if err == nil {
 		t.Error("expected error after all retries exhausted")
 	}
@@ -415,7 +415,7 @@ func TestAllBackendsFail(t *testing.T) {
 	}
 
 	req := &models.ChatCompletionRequest{Model: "test"}
-	_, err = r.ChatCompletion(context.Background(), "test", req)
+	_, _, err = r.ChatCompletion(context.Background(), "test", req)
 	if err == nil {
 		t.Error("expected error when all backends fail")
 	}
@@ -450,7 +450,7 @@ func TestGetModelNames(t *testing.T) {
 
 func TestModelNotFound(t *testing.T) {
 	r := &Router{routes: make(map[string]*ModelRoute)}
-	_, err := r.ChatCompletion(context.Background(), "nonexistent", &models.ChatCompletionRequest{})
+	_, _, err := r.ChatCompletion(context.Background(), "nonexistent", &models.ChatCompletionRequest{})
 	if err == nil {
 		t.Error("expected error for nonexistent model")
 	}
@@ -489,7 +489,7 @@ func TestRoundRobinDistribution(t *testing.T) {
 	// Send 6 requests — each provider should get 2
 	for i := 0; i < 6; i++ {
 		req := &models.ChatCompletionRequest{Model: "rr-model"}
-		_, err := r.ChatCompletion(context.Background(), "rr-model", req)
+		_, _, err := r.ChatCompletion(context.Background(), "rr-model", req)
 		if err != nil {
 			t.Fatalf("request %d failed: %v", i, err)
 		}
@@ -611,7 +611,7 @@ func TestSmartVisionRouting(t *testing.T) {
 	}
 
 	// Route it
-	resp, err := r.ChatCompletion(context.Background(), "text-model", req)
+	resp, _, err := r.ChatCompletion(context.Background(), "text-model", req)
 	if err != nil {
 		t.Fatalf("ChatCompletion failed: %v", err)
 	}
