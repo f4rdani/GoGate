@@ -2552,6 +2552,10 @@ function parseBackendLines(text) {
 
 const _hubKeyTestResults = {};
 const _hubModelTestResults = {};
+let _hubModelSearchQuery = '';
+let _hubModelFilter = 'all';
+let _hubSelectedModels = new Set();
+
 
 async function api(path, opts = {}) {
   const headers = {
@@ -3655,6 +3659,10 @@ function openProviderHub(provName){
   if(!p) return;
 
   _revealedKeys = {};
+  _hubModelSearchQuery = '';
+  _hubModelFilter = 'all';
+  _hubSelectedModels.clear();
+
   const isFreeProxy = p.proxy_url === 'auto' || p.proxy_url === 'pool';
   const isRelay = !isFreeProxy && !!p.relay_url;
   const isCustom = !isFreeProxy && !isRelay && !!p.proxy_url;
@@ -3859,15 +3867,68 @@ function getProviderModelEntries(p){
   return entries;
 }
 
-function renderHubModels(p){
-  const entries = getProviderModelEntries(p);
-  if(!entries.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.75rem 0;">No upstream models or routes registered for this provider. Click <strong>+ Add Model</strong> or <strong>Sync from API</strong> to import.</div>';
+function getFilteredProviderModelEntries(p){
+  const allEntries = getProviderModelEntries(p);
+  const q = (_hubModelSearchQuery || '').toLowerCase().trim();
+  const filter = _hubModelFilter || 'all';
+
+  return allEntries.filter(item => {
+    if(q){
+      const matchRoute = (item.routeName || '').toLowerCase().includes(q);
+      const matchTarget = (item.upstreamTarget || '').toLowerCase().includes(q);
+      if(!matchRoute && !matchTarget) return false;
+    }
+
+    if(filter === 'active') return !item.disabled;
+    if(filter === 'disabled') return !!item.disabled;
+    if(filter === 'reasoning') return !!item.reasoning;
+    if(filter === 'vision') return !!item.vision;
+    if(filter === 'autoroute') return !item.isExplicitRoute;
+
+    return true;
+  });
+}
+
+function renderHubBulkActionBar(p, filtered){
+  const selCount = _hubSelectedModels.size;
+  if(!selCount) return '';
+
+  return `
+    <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(99,102,241,0.09); border:1px solid rgba(99,102,241,0.3); border-radius:var(--radius); padding:0.5rem 0.8rem; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem;">
+      <div style="display:flex; align-items:center; gap:0.6rem; font-size:0.82rem;">
+        <span class="tag tag-purple" style="font-weight:700;">${selCount} model terpilih</span>
+        <button class="btn btn-sm btn-ghost" onclick="clearHubModelSelection('${esc(p.name)}')">Batal Pilih</button>
+      </div>
+      <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteHubModels('${esc(p.name)}')">🗑️ Hapus Terpilih (${selCount})</button>
+        <button class="btn btn-sm" onclick="bulkToggleHubModels('${esc(p.name)}', false)">✅ Enable</button>
+        <button class="btn btn-sm" onclick="bulkToggleHubModels('${esc(p.name)}', true)">🚫 Disable</button>
+        <button class="btn btn-sm btn-primary" onclick="bulkTestHubModels('${esc(p.name)}')">🧪 Test Terpilih</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderHubModelsTable(p, filtered){
+  if(!filtered.length){
+    return `
+      <div style="text-align:center; padding:1.5rem 0; color:var(--text3); font-size:0.8rem; border:1px dashed var(--border); border-radius:var(--radius);">
+        Tidak ada model yang cocok dengan filter atau pencarian "${esc(_hubModelSearchQuery)}".
+        ${_hubModelSearchQuery || _hubModelFilter !== 'all' ? `<div style="margin-top:0.4rem;"><button class="btn btn-sm btn-ghost" onclick="resetHubModelFilters('${esc(p.name)}')">Reset Filter &amp; Pencarian</button></div>` : ''}
+      </div>
+    `;
+  }
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(item => _hubSelectedModels.has(item.routeName + ':::' + item.upstreamTarget));
 
   return `
     <div class="table-wrap" style="border-radius:var(--radius);overflow-x:auto;">
       <table>
         <thead>
           <tr>
+            <th style="width:36px;text-align:center;">
+              <input type="checkbox" id="hubMasterSelect" ${allFilteredSelected ? 'checked' : ''} onchange="toggleHubSelectAll(this.checked, '${esc(p.name)}')">
+            </th>
             <th>Route Name</th>
             <th>Upstream Target</th>
             <th>Features / Mode</th>
@@ -3877,10 +3938,12 @@ function renderHubModels(p){
           </tr>
         </thead>
         <tbody>
-          ${entries.map(item => {
+          ${filtered.map(item => {
+            const itemKey = item.routeName + ':::' + item.upstreamTarget;
+            const isChecked = _hubSelectedModels.has(itemKey);
             const testKey = p.name + '_' + item.upstreamTarget;
             const testRes = _hubModelTestResults[testKey] || _hubModelTestResults[p.name + '_' + item.routeName];
-            let rowStyle = '';
+            let rowStyle = isChecked ? 'background: rgba(99, 102, 241, 0.05);' : '';
             let testResultCol = '<span style="color:var(--text3);font-size:0.75rem;">--</span>';
             let errorRow = '';
 
@@ -3891,7 +3954,7 @@ function renderHubModels(p){
                 const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, model: item.upstreamTarget });
                 errorRow = `
                   <tr style="background: rgba(239, 68, 68, 0.08) !important;">
-                    <td colspan="6" style="padding: 0.45rem 0.75rem; font-size: 0.75rem; border-top: 1px dashed rgba(239,68,68,0.35);">
+                    <td colspan="7" style="padding: 0.45rem 0.75rem; font-size: 0.75rem; border-top: 1px dashed rgba(239,68,68,0.35);">
                       <div style="color:var(--red);">
                         <strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong>
                       </div>
@@ -3901,7 +3964,7 @@ function renderHubModels(p){
                   </tr>
                 `;
               } else if (testRes.status === 'success') {
-                rowStyle = 'background: rgba(16, 185, 129, 0.06);';
+                rowStyle = isChecked ? 'background: rgba(99, 102, 241, 0.08);' : 'background: rgba(16, 185, 129, 0.06);';
                 testResultCol = `<span class="test-succ-badge">✅ OK (${testRes.latency}ms)</span>`;
               }
             }
@@ -3913,6 +3976,9 @@ function renderHubModels(p){
 
             return `
               <tr style="${rowStyle}">
+                <td style="width:36px;text-align:center;">
+                  <input type="checkbox" class="hub-model-checkbox" ${isChecked ? 'checked' : ''} onchange="toggleHubModelSelect('${esc(item.routeName)}', '${esc(item.upstreamTarget)}', this.checked, '${esc(p.name)}')">
+                </td>
                 <td><strong class="mono" style="color:var(--text1);font-size:0.82rem;">${esc(item.routeName)}</strong></td>
                 <td class="mono" style="font-size:0.78rem;color:var(--text2);">${esc(item.upstreamTarget)}</td>
                 <td><div style="display:flex;gap:0.3rem;flex-wrap:wrap;">${badges.length ? badges.join('') : '<span style="color:var(--text3);font-size:0.75rem;">Standard</span>'}</div></td>
@@ -3932,6 +3998,139 @@ function renderHubModels(p){
     </div>
   `;
 }
+
+function renderHubModels(p){
+  const allEntries = getProviderModelEntries(p);
+  if(!allEntries.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.75rem 0;">No upstream models or routes registered for this provider. Click <strong>+ Add Model</strong> or <strong>Sync from API</strong> to import.</div>';
+
+  const filtered = getFilteredProviderModelEntries(p);
+
+  return `
+    <!-- Search & Filter Controls -->
+    <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
+      <div style="position:relative; flex:1; min-width:200px;">
+        <input type="text" id="hubModelSearchInput" class="form-control" style="width:100%; padding:0.42rem 2rem 0.42rem 0.65rem; font-size:0.8rem;" placeholder="Cari route name atau upstream ID..." value="${esc(_hubModelSearchQuery)}" oninput="onHubModelSearch(this.value)">
+        ${_hubModelSearchQuery ? `<button type="button" onclick="clearHubModelSearch('${esc(p.name)}')" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--text3); font-size:0.9rem; padding:0 4px;" title="Hapus pencarian">✕</button>` : ''}
+      </div>
+      <div style="min-width:160px;">
+        <select id="hubModelFilterSelect" onchange="onHubModelFilterChange(this.value, '${esc(p.name)}')" style="width:100%; padding:0.42rem 0.65rem; font-size:0.8rem;">
+          <option value="all" ${_hubModelFilter==='all'?'selected':''}>Semua Model (${allEntries.length})</option>
+          <option value="active" ${_hubModelFilter==='active'?'selected':''}>Hanya Aktif</option>
+          <option value="disabled" ${_hubModelFilter==='disabled'?'selected':''}>Hanya Disabled</option>
+          <option value="reasoning" ${_hubModelFilter==='reasoning'?'selected':''}>🧠 Reasoning / Thinking</option>
+          <option value="vision" ${_hubModelFilter==='vision'?'selected':''}>👁️ Vision / Multimodal</option>
+          <option value="autoroute" ${_hubModelFilter==='autoroute'?'selected':''}>Auto-Route (Tanpa Alias)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar -->
+    <div id="hubBulkActionBarContainer">
+      ${renderHubBulkActionBar(p, filtered)}
+    </div>
+
+    <!-- Models Table Container -->
+    <div id="hubModelsTableContainer">
+      ${renderHubModelsTable(p, filtered)}
+    </div>
+  `;
+}
+
+function updateHubModelsViews(p){
+  if(!p) return;
+  const filtered = getFilteredProviderModelEntries(p);
+  const barContainer = document.getElementById('hubBulkActionBarContainer');
+  if(barContainer){
+    barContainer.innerHTML = renderHubBulkActionBar(p, filtered);
+  }
+  const tableContainer = document.getElementById('hubModelsTableContainer');
+  if(tableContainer){
+    tableContainer.innerHTML = renderHubModelsTable(p, filtered);
+  }
+  const titleEl = document.getElementById('hubModelsCountTitle');
+  if(titleEl){
+    const all = getProviderModelEntries(p);
+    titleEl.textContent = (filtered.length !== all.length)
+      ? `Upstream Models & Routes (${filtered.length} / ${all.length})`
+      : `Upstream Models & Routes (${all.length})`;
+  }
+}
+
+function onHubModelSearch(val){
+  _hubModelSearchQuery = val || '';
+  const pName = document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p){
+    updateHubModelsViews(p);
+  }
+}
+
+function clearHubModelSearch(provName){
+  _hubModelSearchQuery = '';
+  const pName = provName || document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p && document.getElementById('hubModelsList')){
+    document.getElementById('hubModelsList').innerHTML = renderHubModels(p);
+  }
+}
+
+function onHubModelFilterChange(val, provName){
+  _hubModelFilter = val || 'all';
+  const pName = provName || document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p){
+    updateHubModelsViews(p);
+  }
+}
+
+function resetHubModelFilters(provName){
+  _hubModelSearchQuery = '';
+  _hubModelFilter = 'all';
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p && document.getElementById('hubModelsList')){
+    document.getElementById('hubModelsList').innerHTML = renderHubModels(p);
+  }
+}
+
+function toggleHubSelectAll(checked, provName){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+  const filtered = getFilteredProviderModelEntries(p);
+
+  filtered.forEach(item => {
+    const itemKey = item.routeName + ':::' + item.upstreamTarget;
+    if(checked){
+      _hubSelectedModels.add(itemKey);
+    } else {
+      _hubSelectedModels.delete(itemKey);
+    }
+  });
+
+  updateHubModelsViews(p);
+}
+
+function toggleHubModelSelect(routeName, upstreamTarget, checked, provName){
+  const itemKey = routeName + ':::' + upstreamTarget;
+  if(checked){
+    _hubSelectedModels.add(itemKey);
+  } else {
+    _hubSelectedModels.delete(itemKey);
+  }
+
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p){
+    updateHubModelsViews(p);
+  }
+}
+
+function clearHubModelSelection(provName){
+  _hubSelectedModels.clear();
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p){
+    updateHubModelsViews(p);
+  }
+}
+
 
 
 function selectHubEgressMode(mode){
@@ -4184,6 +4383,9 @@ async function deleteHubModel(provName, routeName, upstreamTarget){
     });
     p.models = updated;
 
+    _hubSelectedModels.delete((routeName || upstreamTarget) + ':::' + upstreamTarget);
+    _hubSelectedModels.delete(routeName + ':::' + upstreamTarget);
+
     toast(`Model deleted: ${targetLabel}`, 'info');
     await fetchAll();
     const curP = _currentProviders.find(x => x.name === provName);
@@ -4228,6 +4430,125 @@ async function toggleHubModelDisabled(provName, routeName, upstreamTarget, setDi
     toast('Error toggling model: ' + e.message, 'error');
   }
 }
+
+async function bulkDeleteHubModels(provName){
+  const count = _hubSelectedModels.size;
+  if(!count) return;
+
+  if(!await confirm(`Hapus ${count} model yang dipilih dari provider "${provName}"? Tindakan ini akan menghapus rute model terkait.`)) return;
+
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  toast(`Menghapus ${count} model...`, 'info');
+
+  const selectedKeys = Array.from(_hubSelectedModels);
+  const routeNamesToDelete = [];
+  const upstreamTargetsToDelete = new Set();
+
+  selectedKeys.forEach(k => {
+    const parts = k.split(':::');
+    const rName = parts[0];
+    const uTarget = parts[1] || parts[0];
+    if(rName) routeNamesToDelete.push(rName);
+    if(uTarget) upstreamTargetsToDelete.add(uTarget);
+    if(rName) upstreamTargetsToDelete.add(rName);
+  });
+
+  try{
+    // 1. Delete matching routes
+    const existingRouteNames = new Set((_currentModels || []).map(m => m.name));
+    for(const rName of routeNamesToDelete){
+      if(existingRouteNames.has(rName)){
+        try{
+          await api('/admin/models/' + encodeURIComponent(rName), { method: 'DELETE' });
+        }catch(_){}
+      }
+    }
+
+    // 2. Update provider models list
+    const rawModels = (p.models || []).map(m => typeof m === 'string' ? m : (m.model || m.name)).filter(Boolean);
+    const updated = rawModels.filter(m => !upstreamTargetsToDelete.has(m));
+    await api('/admin/providers/' + encodeURIComponent(provName), {
+      method: 'PUT',
+      body: JSON.stringify({ models: updated })
+    });
+    p.models = updated;
+
+    _hubSelectedModels.clear();
+    toast(`Berhasil menghapus ${count} model!`, 'success');
+    await fetchAll();
+    const curP = _currentProviders.find(x => x.name === provName);
+    if(curP && document.getElementById('hubModelsList')){
+      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+    }
+  }catch(e){
+    toast('Gagal menghapus model: ' + e.message, 'error');
+  }
+}
+
+async function bulkToggleHubModels(provName, setDisabled){
+  const count = _hubSelectedModels.size;
+  if(!count) return;
+
+  const actionText = setDisabled ? 'menonaktifkan' : 'mengaktifkan';
+  toast(`Sedang ${actionText} ${count} model...`, 'info');
+
+  const selectedKeys = Array.from(_hubSelectedModels);
+  const existingRoutesMap = new Map((_currentModels || []).map(m => [m.name, m]));
+
+  try{
+    for(const k of selectedKeys){
+      const parts = k.split(':::');
+      const rName = parts[0];
+      const uTarget = parts[1] || parts[0];
+
+      if(existingRoutesMap.has(rName)){
+        await api('/admin/models/' + encodeURIComponent(rName), {
+          method: 'PUT',
+          body: JSON.stringify({ disabled: setDisabled })
+        });
+      } else {
+        await api('/admin/models', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: rName || uTarget,
+            provider: provName,
+            model: uTarget,
+            disabled: setDisabled
+          })
+        });
+      }
+    }
+
+    toast(`Berhasil ${actionText} ${count} model!`, 'success');
+    await fetchAll();
+    const curP = _currentProviders.find(x => x.name === provName);
+    if(curP && document.getElementById('hubModelsList')){
+      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+    }
+  }catch(e){
+    toast(`Gagal ${actionText} model: ` + e.message, 'error');
+  }
+}
+
+async function bulkTestHubModels(provName){
+  const count = _hubSelectedModels.size;
+  if(!count) return;
+
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  toast(`Menguji ${count} model terpilih...`, 'info');
+  const selectedKeys = Array.from(_hubSelectedModels);
+  for(const k of selectedKeys){
+    const parts = k.split(':::');
+    const rName = parts[0];
+    const uTarget = parts[1] || parts[0];
+    await testHubSingleModel(provName, uTarget, rName);
+  }
+}
+
 
 async function testHubSingleModel(provName, upstreamTarget, routeName){
   const testKey = provName + '_' + upstreamTarget;
