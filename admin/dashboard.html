@@ -2555,6 +2555,9 @@ const _hubModelTestResults = {};
 let _hubModelSearchQuery = '';
 let _hubModelFilter = 'all';
 let _hubSelectedModels = new Set();
+let _hubKeySearchQuery = '';
+let _hubKeyFilter = 'all';
+let _hubSelectedKeys = new Set();
 
 
 async function api(path, opts = {}) {
@@ -3662,6 +3665,9 @@ function openProviderHub(provName){
   _hubModelSearchQuery = '';
   _hubModelFilter = 'all';
   _hubSelectedModels.clear();
+  _hubKeySearchQuery = '';
+  _hubKeyFilter = 'all';
+  _hubSelectedKeys.clear();
 
   const isFreeProxy = p.proxy_url === 'auto' || p.proxy_url === 'pool';
   const isRelay = !isFreeProxy && !!p.relay_url;
@@ -3732,92 +3738,305 @@ function openProviderHub(provName){
     <!-- 2. API Keys Rotation -->
     <div class="hub-section">
       <div class="hub-header">
-        <div class="hub-title">Upstream API Keys (${(p.api_keys||[]).length})</div>
-        <div style="display:flex; gap:0.4rem;">
+        <div class="hub-title" id="hubKeysCountTitle">Upstream API Keys (${getProviderKeyEntries(p).length})</div>
+        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
           <button class="btn btn-sm btn-primary" onclick="showAddKeyPrompt('${esc(p.name)}')">+ Add Key</button>
           <button class="btn btn-sm" onclick="testAllProviderKeys('${esc(p.name)}')">Test All Keys</button>
         </div>
       </div>
       <div id="hubKeysList">${renderHubKeys(p)}</div>
     </div>
-
-    <!-- 3. Models List -->
-    <div class="hub-section">
-      <div class="hub-header">
-        <div class="hub-title" id="hubModelsCountTitle">Upstream Models &amp; Routes (${getProviderModelEntries(p).length})</div>
-        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
-          <button class="btn btn-sm btn-primary" onclick="showAddHubModelModal('${esc(p.name)}')">+ Add Model</button>
-          <button class="btn btn-sm" onclick="showSyncModelsModal('${esc(p.name)}')">Sync from API</button>
-          <button class="btn btn-sm" onclick="testAllProviderModels('${esc(p.name)}')">Test All Models</button>
-        </div>
-      </div>
-      <div id="hubModelsList">${renderHubModels(p)}</div>
-    </div>
   `;
 
   openModal(`Provider Hub: ${p.name}`, html, null, 'modal-xl');
 }
-function renderHubKeys(p){
-  const keys = p.api_keys || [];
-  if(!keys.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.5rem 0;">No API keys registered for this provider.</div>';
 
-  return `<div style="display:flex;flex-direction:column;gap:0.5rem;">` + keys.map((k, idx) => {
-    const isRevealed = !!_revealedKeys[idx];
-    const displayVal = isRevealed ? esc(k) : esc(maskKey(k));
-    const testRes = _hubKeyTestResults[p.name + '_' + idx];
+function getProviderKeyEntries(p){
+  if(!p) return [];
+  const entries = [];
+  const activeKeys = p.api_keys || [];
+  const disabledKeys = p.disabled_keys || [];
 
-    let borderStyle = 'border: 1px solid var(--border);';
-    let bgStyle = 'background: var(--surface-subtle);';
-    let statusBadge = '';
-    let errorDetailBox = '';
+  activeKeys.forEach((k, idx) => {
+    entries.push({
+      key: k,
+      masked: maskKey(k),
+      disabled: false,
+      status: 'active',
+      index: idx + 1
+    });
+  });
 
-    if (testRes) {
-      if (testRes.status === 'failed') {
-        borderStyle = 'border: 1.5px solid #ef4444; border-left: 4px solid #ef4444;';
-        bgStyle = 'background: rgba(239, 68, 68, 0.08); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);';
-        statusBadge = '<span class="test-err-badge">❌ GAGAL</span>';
-        const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, keyIndex: idx });
-        errorDetailBox = `
-          <div style="margin-top:0.45rem;padding:0.45rem 0.65rem;background:rgba(239,68,68,0.12);border-radius:6px;font-size:0.75rem;color:var(--red);">
-            <div><strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong></div>
-            <div style="margin-top:0.25rem;font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;">${esc(parsed.raw)}</div>
-            <div style="margin-top:0.3rem;color:var(--text2);font-size:0.72rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
-          </div>
-        `;
-      } else if (testRes.status === 'success') {
-        borderStyle = 'border: 1.5px solid #10b981; border-left: 4px solid #10b981;';
-        bgStyle = 'background: rgba(16, 185, 129, 0.06);';
-        statusBadge = `<span class="test-succ-badge">✅ VALID (${testRes.latency}ms)</span>`;
-      }
+  disabledKeys.forEach((k, idx) => {
+    entries.push({
+      key: k,
+      masked: maskKey(k),
+      disabled: true,
+      status: 'disabled',
+      index: activeKeys.length + idx + 1
+    });
+  });
+
+  return entries;
+}
+
+function getFilteredProviderKeyEntries(p){
+  const allEntries = getProviderKeyEntries(p);
+  const q = (_hubKeySearchQuery || '').toLowerCase().trim();
+  const filter = _hubKeyFilter || 'all';
+
+  return allEntries.filter(item => {
+    if(q){
+      const matchKey = (item.key || '').toLowerCase().includes(q);
+      const matchMasked = (item.masked || '').toLowerCase().includes(q);
+      if(!matchKey && !matchMasked) return false;
     }
 
-    return `
-      <div style="${borderStyle} ${bgStyle} padding:0.5rem 0.65rem;border-radius:var(--radius);transition:all 0.2s ease;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
-          <div style="display:flex;align-items:center;gap:0.5rem;font-family:var(--font-mono);font-size:0.78rem;">
-            <span class="tag tag-gray">#${idx+1}</span>
-            <span style="font-weight:600;">${displayVal}</span>
-            <button class="btn btn-sm btn-ghost" onclick="toggleKeyReveal(${idx})" style="padding:0.15rem 0.35rem;font-size:0.7rem;">${isRevealed?'Hide':'Reveal'}</button>
-            ${statusBadge}
-          </div>
-          <div style="display:flex;gap:0.35rem;" id="key_actions_${idx}">
-            <button class="btn btn-sm btn-primary" onclick="testHubSingleKey('${esc(p.name)}', ${idx})">Test</button>
-            <button class="btn btn-sm" onclick="editHubKeyPrompt('${esc(p.name)}', ${idx})">Edit</button>
-            <button class="btn btn-sm btn-danger" onclick="deleteHubKey('${esc(p.name)}', ${idx})">Delete</button>
-          </div>
-        </div>
-        ${errorDetailBox}
-      </div>
-    `;
-  }).join('') + `</div>`;
+    if(filter === 'active') return !item.disabled;
+    if(filter === 'disabled') return !!item.disabled;
+
+    return true;
+  });
 }
 
-function toggleKeyReveal(i){
-  _revealedKeys[i] = !_revealedKeys[i];
-  const pName = document.getElementById('hub_provider_name').value;
-  const p = _currentProviders.find(x => x.name === pName);
-  if(p) document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+function renderHubKeyBulkActionBar(p, filtered){
+  const selCount = _hubSelectedKeys.size;
+  if(!selCount) return '';
+
+  return `
+    <div style="display:flex; align-items:center; justify-content:space-between; background:rgba(99,102,241,0.09); border:1px solid rgba(99,102,241,0.3); border-radius:var(--radius); padding:0.5rem 0.8rem; margin-bottom:0.75rem; flex-wrap:wrap; gap:0.5rem; animation:fadeIn 0.2s ease;">
+      <div style="display:flex; align-items:center; gap:0.6rem; font-size:0.82rem;">
+        <span class="tag tag-purple" style="font-weight:700;">${selCount} key terpilih</span>
+        <button class="btn btn-sm btn-ghost" onclick="clearHubKeySelection('${esc(p.name)}')">Batal Pilih</button>
+      </div>
+      <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+        <button class="btn btn-sm btn-danger" onclick="bulkDeleteHubKeys('${esc(p.name)}')">🗑️ Hapus Terpilih (${selCount})</button>
+        <button class="btn btn-sm" onclick="bulkToggleHubKeys('${esc(p.name)}', false)">✅ Aktifkan</button>
+        <button class="btn btn-sm" onclick="bulkToggleHubKeys('${esc(p.name)}', true)">🚫 Disable</button>
+        <button class="btn btn-sm btn-primary" onclick="bulkTestHubKeys('${esc(p.name)}')">🧪 Test Terpilih</button>
+      </div>
+    </div>
+  `;
 }
+
+function renderHubKeysList(p, filtered){
+  if(!filtered.length){
+    return `
+      <div style="text-align:center; padding:1.5rem 0; color:var(--text3); font-size:0.8rem; border:1px dashed var(--border); border-radius:var(--radius);">
+        Tidak ada API key yang cocok dengan filter atau pencarian "${esc(_hubKeySearchQuery)}".
+        ${_hubKeySearchQuery || _hubKeyFilter !== 'all' ? `<div style="margin-top:0.4rem;"><button class="btn btn-sm btn-ghost" onclick="resetHubKeyFilters('${esc(p.name)}')">Reset Filter &amp; Pencarian</button></div>` : ''}
+      </div>
+    `;
+  }
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(item => _hubSelectedKeys.has(item.key));
+
+  return `
+    <div style="margin-bottom:0.45rem; display:flex; align-items:center; gap:0.5rem; padding:0 0.2rem;">
+      <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.75rem; font-weight:600; color:var(--text2); cursor:pointer;">
+        <input type="checkbox" id="hubKeyMasterSelect" ${allFilteredSelected ? 'checked' : ''} onchange="toggleHubKeySelectAll(this.checked, '${esc(p.name)}')">
+        <span>Pilih Semua Key (${filtered.length})</span>
+      </label>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:0.5rem;">
+      ${filtered.map((item, idx) => {
+        const isRevealed = !!_revealedKeys[item.key];
+        const displayVal = isRevealed ? esc(item.key) : esc(item.masked);
+        const isChecked = _hubSelectedKeys.has(item.key);
+        const testRes = _hubKeyTestResults[p.name + '_' + item.key] || _hubKeyTestResults[p.name + '_' + idx];
+
+        let borderStyle = isChecked ? 'border: 1.5px solid var(--primary);' : 'border: 1px solid var(--border);';
+        let bgStyle = isChecked ? 'background: rgba(99, 102, 241, 0.05);' : 'background: var(--surface-subtle);';
+        let statusBadge = item.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>';
+        let testBadge = '';
+        let errorDetailBox = '';
+
+        if(testRes){
+          if(testRes.status === 'failed'){
+            borderStyle = 'border: 1.5px solid #ef4444; border-left: 4px solid #ef4444;';
+            bgStyle = 'background: rgba(239, 68, 68, 0.08); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);';
+            testBadge = '<span class="test-err-badge">❌ GAGAL</span>';
+            const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, keyIndex: idx });
+            errorDetailBox = `
+              <div style="margin-top:0.45rem;padding:0.45rem 0.65rem;background:rgba(239,68,68,0.12);border-radius:6px;font-size:0.75rem;color:var(--red);">
+                <div><strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong></div>
+                <div style="margin-top:0.25rem;font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;">${esc(parsed.raw)}</div>
+                <div style="margin-top:0.3rem;color:var(--text2);font-size:0.72rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
+              </div>
+            `;
+          } else if(testRes.status === 'success'){
+            borderStyle = 'border: 1.5px solid #10b981; border-left: 4px solid #10b981;';
+            bgStyle = isChecked ? 'background: rgba(99, 102, 241, 0.08);' : 'background: rgba(16, 185, 129, 0.06);';
+            testBadge = `<span class="test-succ-badge">✅ VALID (${testRes.latency}ms)</span>`;
+          }
+        }
+
+        return `
+          <div style="${borderStyle} ${bgStyle} padding:0.55rem 0.75rem;border-radius:var(--radius);transition:all 0.2s ease;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+              <div style="display:flex;align-items:center;gap:0.5rem;font-family:var(--font-mono);font-size:0.78rem;">
+                <input type="checkbox" class="hub-key-checkbox" ${isChecked ? 'checked' : ''} onchange="toggleHubKeySelect('${esc(item.key)}', this.checked, '${esc(p.name)}')">
+                <span class="tag tag-gray">#${item.index}</span>
+                <span style="font-weight:600;word-break:break-all;">${displayVal}</span>
+                <button class="btn btn-sm btn-ghost" onclick="toggleKeyReveal('${esc(item.key)}')" style="padding:0.15rem 0.35rem;font-size:0.7rem;">${isRevealed?'Hide':'Reveal'}</button>
+                ${statusBadge}
+                ${testBadge}
+              </div>
+              <div style="display:flex;gap:0.35rem;" id="key_actions_${idx}">
+                <button class="btn btn-sm btn-primary" onclick="testHubDirectKey('${esc(p.name)}', '${esc(item.key)}')">Test</button>
+                <button class="btn btn-sm" onclick="toggleHubKeyDisabled('${esc(p.name)}', '${esc(item.key)}', ${!item.disabled})">${item.disabled ? 'Aktifkan' : 'Disable'}</button>
+                <button class="btn btn-sm" onclick="editHubKeyDirectPrompt('${esc(p.name)}', '${esc(item.key)}')">Edit</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteHubKeyDirect('${esc(p.name)}', '${esc(item.key)}')">Delete</button>
+              </div>
+            </div>
+            ${errorDetailBox}
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderHubKeys(p){
+  const allEntries = getProviderKeyEntries(p);
+  if(!allEntries.length){
+    return '<div style="font-size:0.8rem;color:var(--text3);padding:0.75rem 0;">No API keys registered for this provider. Click <strong>+ Add Key</strong> to add one.</div>';
+  }
+
+  const filtered = getFilteredProviderKeyEntries(p);
+
+  return `
+    <!-- Search & Filter Controls for Keys -->
+    <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
+      <div style="position:relative; flex:1; min-width:200px;">
+        <input type="text" id="hubKeySearchInput" class="form-control" style="width:100%; padding:0.42rem 2rem 0.42rem 0.65rem; font-size:0.8rem;" placeholder="Cari API key..." value="${esc(_hubKeySearchQuery)}" oninput="onHubKeySearch(this.value)">
+        ${_hubKeySearchQuery ? `<button type="button" onclick="clearHubKeySearch('${esc(p.name)}')" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--text3); font-size:0.9rem; padding:0 4px;" title="Hapus pencarian">✕</button>` : ''}
+      </div>
+      <div style="min-width:150px;">
+        <select id="hubKeyFilterSelect" onchange="onHubKeyFilterChange(this.value, '${esc(p.name)}')" style="width:100%; padding:0.42rem 0.65rem; font-size:0.8rem;">
+          <option value="all" ${_hubKeyFilter==='all'?'selected':''}>Semua Key (${allEntries.length})</option>
+          <option value="active" ${_hubKeyFilter==='active'?'selected':''}>Hanya Aktif</option>
+          <option value="disabled" ${_hubKeyFilter==='disabled'?'selected':''}>Hanya Disabled</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Bulk Action Bar for Keys -->
+    <div id="hubKeyBulkActionBarContainer">
+      ${renderHubKeyBulkActionBar(p, filtered)}
+    </div>
+
+    <!-- Keys List Container -->
+    <div id="hubKeysListContainer">
+      ${renderHubKeysList(p, filtered)}
+    </div>
+  `;
+}
+
+function updateHubKeysViews(p){
+  if(!p) return;
+  const filtered = getFilteredProviderKeyEntries(p);
+  const barContainer = document.getElementById('hubKeyBulkActionBarContainer');
+  if(barContainer){
+    barContainer.innerHTML = renderHubKeyBulkActionBar(p, filtered);
+  }
+  const listContainer = document.getElementById('hubKeysListContainer');
+  if(listContainer){
+    listContainer.innerHTML = renderHubKeysList(p, filtered);
+  }
+  const titleEl = document.getElementById('hubKeysCountTitle');
+  if(titleEl){
+    const all = getProviderKeyEntries(p);
+    titleEl.textContent = (filtered.length !== all.length)
+      ? `Upstream API Keys (${filtered.length} / ${all.length})`
+      : `Upstream API Keys (${all.length})`;
+  }
+}
+
+function onHubKeySearch(val){
+  _hubKeySearchQuery = val || '';
+  const pName = document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p){
+    updateHubKeysViews(p);
+  }
+}
+
+function clearHubKeySearch(provName){
+  _hubKeySearchQuery = '';
+  const pName = provName || document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p && document.getElementById('hubKeysList')){
+    document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+  }
+}
+
+function onHubKeyFilterChange(val, provName){
+  _hubKeyFilter = val || 'all';
+  const pName = provName || document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p){
+    updateHubKeysViews(p);
+  }
+}
+
+function resetHubKeyFilters(provName){
+  _hubKeySearchQuery = '';
+  _hubKeyFilter = 'all';
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p && document.getElementById('hubKeysList')){
+    document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+  }
+}
+
+function toggleHubKeySelectAll(checked, provName){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+  const filtered = getFilteredProviderKeyEntries(p);
+
+  filtered.forEach(item => {
+    if(checked){
+      _hubSelectedKeys.add(item.key);
+    } else {
+      _hubSelectedKeys.delete(item.key);
+    }
+  });
+
+  updateHubKeysViews(p);
+}
+
+function toggleHubKeySelect(keyVal, checked, provName){
+  if(checked){
+    _hubSelectedKeys.add(keyVal);
+  } else {
+    _hubSelectedKeys.delete(keyVal);
+  }
+
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p){
+    updateHubKeysViews(p);
+  }
+}
+
+function clearHubKeySelection(provName){
+  _hubSelectedKeys.clear();
+  const p = _currentProviders.find(x => x.name === provName);
+  if(p){
+    updateHubKeysViews(p);
+  }
+}
+
+function toggleKeyReveal(k){
+  _revealedKeys[k] = !_revealedKeys[k];
+  const pName = document.getElementById('hub_provider_name')?.value;
+  const p = _currentProviders.find(x => x.name === pName);
+  if(p && document.getElementById('hubKeysListContainer')){
+    updateHubKeysViews(p);
+  } else if(p && document.getElementById('hubKeysList')){
+    document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+  }
+}
+
 
 function getProviderModelEntries(p){
   if(!p) return [];
@@ -4197,6 +4416,7 @@ function showAddKeyPrompt(provName){
     submitAddKey(provName, key.trim());
   }
 }
+
 async function submitAddKey(provName, newKey){
   const p = _currentProviders.find(x => x.name === provName);
   if(!p) return;
@@ -4205,76 +4425,261 @@ async function submitAddKey(provName, newKey){
     await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({api_keys:keys})});
     toast('Key added to '+provName,'success');
     p.api_keys = keys;
-    document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+    if(document.getElementById('hubKeysList')){
+      document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+    }
+    updateHubKeysViews(p);
     fetchAll();
   }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function editHubKeyDirectPrompt(provName, keyVal){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+  const newKey = prompt('Edit API key:', keyVal);
+  if(newKey !== null && newKey.trim() && newKey.trim() !== keyVal){
+    await submitEditHubKeyDirect(provName, keyVal, newKey.trim());
+  }
+}
+
+async function submitEditHubKeyDirect(provName, oldVal, newVal){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  const inActive = (p.api_keys || []).includes(oldVal);
+  const inDisabled = (p.disabled_keys || []).includes(oldVal);
+
+  const newActive = inActive ? p.api_keys.map(k => k === oldVal ? newVal : k) : (p.api_keys || []);
+  const newDisabled = inDisabled ? p.disabled_keys.map(k => k === oldVal ? newVal : k) : (p.disabled_keys || []);
+
+  try{
+    await api('/admin/providers/'+encodeURIComponent(provName), {
+      method:'PUT',
+      body:JSON.stringify({api_keys: newActive, disabled_keys: newDisabled})
+    });
+    p.api_keys = newActive;
+    p.disabled_keys = newDisabled;
+
+    if(_hubSelectedKeys.has(oldVal)){
+      _hubSelectedKeys.delete(oldVal);
+      _hubSelectedKeys.add(newVal);
+    }
+    if(_hubKeyTestResults[provName + '_' + oldVal]){
+      _hubKeyTestResults[provName + '_' + newVal] = _hubKeyTestResults[provName + '_' + oldVal];
+      delete _hubKeyTestResults[provName + '_' + oldVal];
+    }
+
+    toast('API key updated','success');
+    updateHubKeysViews(p);
+    fetchAll();
+  }catch(e){
+    toast('Error updating key: '+e.message,'error');
+  }
 }
 
 async function editHubKeyPrompt(provName, keyIndex){
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.api_keys) return;
-  const oldKey = p.api_keys[keyIndex];
-  const newKey = prompt('Edit API key #' + (keyIndex+1) + ':', oldKey);
-  if(newKey !== null && newKey.trim() && newKey.trim() !== oldKey){
-    const keys = [...p.api_keys];
-    keys[keyIndex] = newKey.trim();
-    try{
-      await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({api_keys:keys})});
-      toast('Key updated','success');
-      p.api_keys = keys;
-      document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
-      fetchAll();
-    }catch(e){toast('Error: '+e.message,'error');}
+  if(!p || !p.api_keys || !p.api_keys[keyIndex]) return;
+  await editHubKeyDirectPrompt(provName, p.api_keys[keyIndex]);
+}
+
+async function deleteHubKeyDirect(provName, keyVal){
+  if(!await confirm('Hapus API key ini dari ' + provName + '?')) return;
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  const newActive = (p.api_keys || []).filter(k => k !== keyVal);
+  const newDisabled = (p.disabled_keys || []).filter(k => k !== keyVal);
+
+  try{
+    await api('/admin/providers/'+encodeURIComponent(provName), {
+      method:'PUT',
+      body:JSON.stringify({api_keys: newActive, disabled_keys: newDisabled})
+    });
+    p.api_keys = newActive;
+    p.disabled_keys = newDisabled;
+    _hubSelectedKeys.delete(keyVal);
+    delete _hubKeyTestResults[provName + '_' + keyVal];
+
+    toast('API key dihapus','info');
+    updateHubKeysViews(p);
+    fetchAll();
+  }catch(e){
+    toast('Error: '+e.message,'error');
   }
 }
 
 async function deleteHubKey(provName, keyIndex){
-  if(!await confirm('Remove API key #' + (keyIndex+1) + ' from ' + provName + '?')) return;
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.api_keys) return;
-  const keys = p.api_keys.filter((_, idx) => idx !== keyIndex);
-  try{
-    await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({api_keys:keys})});
-    toast('Key removed','info');
-    p.api_keys = keys;
-    document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
-    fetchAll();
-  }catch(e){toast('Error: '+e.message,'error');}
+  if(!p || !p.api_keys || !p.api_keys[keyIndex]) return;
+  await deleteHubKeyDirect(provName, p.api_keys[keyIndex]);
 }
 
-async function testHubSingleKey(provName, keyIndex){
-  const el = document.getElementById('key_actions_' + keyIndex);
-  if(el) el.innerHTML = '<span style="font-size:0.75rem;color:var(--cyan);font-weight:700;">⏳ Testing...</span>';
+async function toggleHubKeyDisabled(provName, keyVal, setDisabled){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  let active = [...(p.api_keys || [])];
+  let disabled = [...(p.disabled_keys || [])];
+
+  if(setDisabled){
+    active = active.filter(k => k !== keyVal);
+    if(!disabled.includes(keyVal)) disabled.push(keyVal);
+  } else {
+    disabled = disabled.filter(k => k !== keyVal);
+    if(!active.includes(keyVal)) active.push(keyVal);
+  }
+
   try{
-    const r = await api('/admin/diag/test-key',{method:'POST',body:JSON.stringify({provider:provName,key_index:keyIndex})});
-    _hubKeyTestResults[provName + '_' + keyIndex] = {
+    await api('/admin/providers/'+encodeURIComponent(provName), {
+      method:'PUT',
+      body:JSON.stringify({api_keys: active, disabled_keys: disabled})
+    });
+    p.api_keys = active;
+    p.disabled_keys = disabled;
+
+    toast(`Key berhasil di-${setDisabled ? 'nonaktifkan' : 'aktifkan'}`,'success');
+    updateHubKeysViews(p);
+    fetchAll();
+  }catch(e){
+    toast('Error: '+e.message,'error');
+  }
+}
+
+async function testHubDirectKey(provName, keyVal){
+  toast(`Menguji key untuk ${provName}...`,'info');
+  try{
+    const r = await api('/admin/diag/test-key', {
+      method:'POST',
+      body:JSON.stringify({provider: provName, api_key: keyVal})
+    });
+    _hubKeyTestResults[provName + '_' + keyVal] = {
       status: 'success',
       latency: r.latency_ms || 0,
       time: Date.now()
     };
-    toast(`Key #${keyIndex+1} Valid! (${r.latency_ms}ms)`,'success');
+    toast(`Key Valid! (${r.latency_ms}ms)`,'success');
   }catch(e){
-    const parsed = parseTestErrorDetails(e, { provider: provName, keyIndex, targetURL: e.data?.target });
-    _hubKeyTestResults[provName + '_' + keyIndex] = {
+    const parsed = parseTestErrorDetails(e, { provider: provName, keyVal, targetURL: e.data?.target });
+    _hubKeyTestResults[provName + '_' + keyVal] = {
       status: 'failed',
       error: e.message,
       parsed: parsed,
       raw: e.message,
       time: Date.now()
     };
-    toast(`Key #${keyIndex+1} Gagal: ` + parsed.title,'error');
+    toast(`Key Gagal: ` + parsed.title,'error');
   }
   const p = _currentProviders.find(x => x.name === provName);
-  if(p) document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+  if(p) updateHubKeysViews(p);
+}
+
+async function testHubSingleKey(provName, keyIndex){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p || !p.api_keys || !p.api_keys[keyIndex]) return;
+  await testHubDirectKey(provName, p.api_keys[keyIndex]);
+}
+
+async function bulkDeleteHubKeys(provName){
+  if(_hubSelectedKeys.size === 0){
+    toast('Pilih minimal satu API key untuk dihapus', 'warning');
+    return;
+  }
+  const count = _hubSelectedKeys.size;
+  if(!await confirm(`Hapus ${count} API key terpilih dari ${provName}?`)) return;
+
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  const newActive = (p.api_keys || []).filter(k => !_hubSelectedKeys.has(k));
+  const newDisabled = (p.disabled_keys || []).filter(k => !_hubSelectedKeys.has(k));
+
+  try{
+    await api('/admin/providers/'+encodeURIComponent(provName), {
+      method:'PUT',
+      body:JSON.stringify({api_keys: newActive, disabled_keys: newDisabled})
+    });
+    p.api_keys = newActive;
+    p.disabled_keys = newDisabled;
+
+    _hubSelectedKeys.forEach(k => delete _hubKeyTestResults[provName + '_' + k]);
+    _hubSelectedKeys.clear();
+
+    toast(`${count} API key berhasil dihapus`, 'info');
+    updateHubKeysViews(p);
+    fetchAll();
+  }catch(e){
+    toast('Error deleting keys: ' + e.message, 'error');
+  }
+}
+
+async function bulkToggleHubKeys(provName, setDisabled){
+  if(_hubSelectedKeys.size === 0){
+    toast(`Pilih minimal satu API key untuk di-${setDisabled ? 'nonaktifkan' : 'aktifkan'}`, 'warning');
+    return;
+  }
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  let active = [...(p.api_keys || [])];
+  let disabled = [...(p.disabled_keys || [])];
+  const targetKeys = Array.from(_hubSelectedKeys);
+
+  if(setDisabled){
+    active = active.filter(k => !_hubSelectedKeys.has(k));
+    targetKeys.forEach(k => {
+      if(!disabled.includes(k)) disabled.push(k);
+    });
+  } else {
+    disabled = disabled.filter(k => !_hubSelectedKeys.has(k));
+    targetKeys.forEach(k => {
+      if(!active.includes(k)) active.push(k);
+    });
+  }
+
+  try{
+    await api('/admin/providers/'+encodeURIComponent(provName), {
+      method:'PUT',
+      body:JSON.stringify({api_keys: active, disabled_keys: disabled})
+    });
+    p.api_keys = active;
+    p.disabled_keys = disabled;
+
+    toast(`${targetKeys.length} API key berhasil di-${setDisabled ? 'nonaktifkan' : 'aktifkan'}`, 'success');
+    updateHubKeysViews(p);
+    fetchAll();
+  }catch(e){
+    toast('Error updating keys: ' + e.message, 'error');
+  }
+}
+
+async function bulkTestHubKeys(provName){
+  if(_hubSelectedKeys.size === 0){
+    toast('Pilih minimal satu API key untuk diuji', 'warning');
+    return;
+  }
+  const keysToTest = Array.from(_hubSelectedKeys);
+  toast(`Menguji ${keysToTest.length} API key terpilih...`, 'info');
+
+  for(const k of keysToTest){
+    await testHubDirectKey(provName, k);
+  }
+  toast(`Selesai menguji ${keysToTest.length} API key!`, 'success');
 }
 
 async function testAllProviderKeys(provName){
-  toast(`Menguji semua API key untuk ${provName}...`,'info');
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.api_keys) return;
-  for(let i=0; i<p.api_keys.length; i++){
-    await testHubSingleKey(provName, i);
+  if(!p) return;
+  const allEntries = getProviderKeyEntries(p);
+  if(!allEntries.length){
+    toast('Tidak ada API key untuk diuji', 'warning');
+    return;
   }
+  toast(`Menguji semua (${allEntries.length}) API key untuk ${provName}...`, 'info');
+  for(const item of allEntries){
+    await testHubDirectKey(provName, item.key);
+  }
+  toast(`Selesai menguji semua API key untuk ${provName}!`, 'success');
 }
 
 function showAddHubModelModal(provName){

@@ -68,6 +68,7 @@ type ProviderConfig struct {
 	Type                string        `yaml:"type" json:"type"` // "openai", "anthropic", "groq", "mistral", "custom", "cloudflare"
 	BaseURL             string        `yaml:"base_url" json:"base_url"`
 	APIKeys             []string      `yaml:"api_keys" json:"api_keys"`
+	DisabledKeys        []string      `yaml:"disabled_keys,omitempty" json:"disabled_keys,omitempty"`
 	AccountID           string        `yaml:"account_id,omitempty" json:"account_id,omitempty"` // for Cloudflare compatibility
 	Models              []string      `yaml:"models" json:"models"`
 	Tier                int           `yaml:"tier,omitempty" json:"tier,omitempty"`                         // 1=subscription, 2=cheap, 3=free (default=1)

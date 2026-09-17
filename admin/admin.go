@@ -337,10 +337,11 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		Models      []string `json:"models"`
 		Healthy     bool     `json:"healthy"`
 		HasKey      bool     `json:"has_key"`
-		KeyCount    int      `json:"key_count"`
-		Keys        []string `json:"keys"`
-		APIKeys     []string `json:"api_keys"`
-		Disabled    bool     `json:"disabled"`
+		KeyCount     int      `json:"key_count"`
+		Keys         []string `json:"keys"`
+		APIKeys      []string `json:"api_keys"`
+		DisabledKeys []string `json:"disabled_keys"`
+		Disabled     bool     `json:"disabled"`
 	}
 
 	result := make([]providerInfo, 0, len(cfg.Providers))
@@ -367,21 +368,27 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			rawKeys = []string{}
 		}
 
+		rawDisabledKeys := p.DisabledKeys
+		if rawDisabledKeys == nil {
+			rawDisabledKeys = []string{}
+		}
+
 		info := providerInfo{
-			Name:        p.Name,
-			Type:        p.Type,
-			Tier:        p.Tier,
-			BaseURL:     p.BaseURL,
-			AccountID:   p.AccountID,
-			RelayURL:    p.RelayURL,
-			RelaySecret: p.RelaySecret,
-			ProxyURL:    p.ProxyURL,
-			Models:      modelsList,
-			HasKey:      len(p.APIKeys) > 0,
-			KeyCount:    len(p.APIKeys),
-			Keys:        maskedKeys,
-			APIKeys:     rawKeys,
-			Disabled:    p.Disabled,
+			Name:         p.Name,
+			Type:         p.Type,
+			Tier:         p.Tier,
+			BaseURL:      p.BaseURL,
+			AccountID:    p.AccountID,
+			RelayURL:     p.RelayURL,
+			RelaySecret:  p.RelaySecret,
+			ProxyURL:     p.ProxyURL,
+			Models:       modelsList,
+			HasKey:       len(p.APIKeys) > 0,
+			KeyCount:     len(p.APIKeys),
+			Keys:         maskedKeys,
+			APIKeys:      rawKeys,
+			DisabledKeys: rawDisabledKeys,
+			Disabled:     p.Disabled,
 		}
 		// Check health from registry
 		if p.Disabled {
@@ -603,16 +610,17 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Type        string   `json:"type"`
-		BaseURL     string   `json:"base_url"`
-		AccountID   string   `json:"account_id"`
-		APIKeys     []string `json:"api_keys"`
-		Models      []string `json:"models"`
-		Tier        *int     `json:"tier"`
-		RelayURL    *string  `json:"relay_url"`
-		RelaySecret *string  `json:"relay_secret"`
-		ProxyURL    *string  `json:"proxy_url"`
-		Disabled    *bool    `json:"disabled"`
+		Type         string   `json:"type"`
+		BaseURL      string   `json:"base_url"`
+		AccountID    string   `json:"account_id"`
+		APIKeys      []string `json:"api_keys"`
+		DisabledKeys []string `json:"disabled_keys"`
+		Models       []string `json:"models"`
+		Tier         *int     `json:"tier"`
+		RelayURL     *string  `json:"relay_url"`
+		RelaySecret  *string  `json:"relay_secret"`
+		ProxyURL     *string  `json:"proxy_url"`
+		Disabled     *bool    `json:"disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -656,6 +664,18 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 			}
 		}
 		existing.APIKeys = uniqueKeys
+	}
+	if req.DisabledKeys != nil {
+		uniqueDisabled := make([]string, 0, len(req.DisabledKeys))
+		seen := make(map[string]bool)
+		for _, k := range req.DisabledKeys {
+			k = strings.TrimSpace(k)
+			if k != "" && !seen[k] {
+				seen[k] = true
+				uniqueDisabled = append(uniqueDisabled, k)
+			}
+		}
+		existing.DisabledKeys = uniqueDisabled
 	}
 	if req.Models != nil {
 		existing.Models = req.Models
@@ -1300,18 +1320,26 @@ func (a *AdminHandler) resolveDiagParams(providerName string, keyIndex *int, bas
 			return fmt.Errorf("provider '%s' not found", providerName)
 		}
 		*baseURL = prov.BaseURL
-		*providerType = prov.Type
-		if len(prov.APIKeys) == 0 {
-			if prov.Type != "opencode" && prov.Type != "mimo" {
-				return fmt.Errorf("provider '%s' has no API keys", providerName)
+		if *providerType == "" {
+			*providerType = prov.Type
+		}
+		if *apiKey == "" {
+			if len(prov.APIKeys) == 0 && len(prov.DisabledKeys) == 0 {
+				if prov.Type != "opencode" && prov.Type != "mimo" {
+					return fmt.Errorf("provider '%s' has no API keys", providerName)
+				}
+				*apiKey = ""
+			} else {
+				idx := 0
+				if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
+					idx = *keyIndex
+				}
+				if idx < len(prov.APIKeys) {
+					*apiKey = prov.APIKeys[idx]
+				} else if len(prov.DisabledKeys) > 0 {
+					*apiKey = prov.DisabledKeys[0]
+				}
 			}
-			*apiKey = ""
-		} else {
-			idx := 0
-			if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
-				idx = *keyIndex
-			}
-			*apiKey = prov.APIKeys[idx]
 		}
 		return nil
 	}
