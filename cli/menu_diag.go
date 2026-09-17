@@ -154,7 +154,9 @@ func runSingleKeyTest(providerName, baseURL, apiKey, providerType string, keyNum
 	})
 
 	if spinnerErr != nil {
-		printError(fmt.Sprintf("Key #%d (%s) GAGAL: %v", keyNum, masked, spinnerErr))
+		printTestFailure("API Key", fmt.Sprintf("#%d (%s)", keyNum, masked), spinnerErr, map[string]string{
+			"location": fmt.Sprintf("API Key #%d untuk provider %s (%s)", keyNum, providerName, baseURL),
+		})
 		return
 	}
 
@@ -164,6 +166,49 @@ func runSingleKeyTest(providerName, baseURL, apiKey, providerType string, keyNum
 			KeyStyle.Render("Model tersedia:"),
 			lipgloss.NewStyle().Foreground(Accent).Render(fmt.Sprintf("%d model", count)))
 	}
+}
+
+func printTestFailure(targetType, name string, err error, extraInfo map[string]string) {
+	fmt.Println()
+	fmt.Printf("  ❌  %s '%s' %s\n", targetType, name, BadgeError.Render(" GAGAL "))
+	errStr := err.Error()
+	lower := strings.ToLower(errStr)
+
+	location := "Upstream Provider Endpoint"
+	suggestion := "Periksa konfigurasi provider atau log gateway."
+
+	if strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized") || strings.Contains(lower, "invalid_api_key") {
+		location = "Header Authorization / API Key Upstream"
+		suggestion = "API key salah, expired, atau tidak diizinkan. Cek kembali API Key di dashboard provider."
+	} else if strings.Contains(lower, "403") || strings.Contains(lower, "forbidden") {
+		location = "Izin Akses / Kebijakan Wilayah Provider"
+		suggestion = "Akun tidak memiliki izin atau IP diblokir provider (gunakan proxy/VPN)."
+	} else if strings.Contains(lower, "404") || strings.Contains(lower, "not found") || strings.Contains(lower, "does not exist") {
+		location = fmt.Sprintf("Model ID '%s' di Katalog Upstream", name)
+		suggestion = "Model tidak ditemukan di provider ini. Periksa ejaan atau lakukan Sync Models."
+	} else if strings.Contains(lower, "429") || strings.Contains(lower, "quota") || strings.Contains(lower, "rate limit") {
+		location = "Billing / Quota Upstream Provider"
+		suggestion = "Saldo API habis atau melebihi limit per menit (RPM). Cek billing akun upstream."
+	} else if strings.Contains(lower, "connection refused") || strings.Contains(lower, "connectex") {
+		location = "Jaringan / Base URL Target (Host Unreachable)"
+		suggestion = "Server target tidak aktif atau port salah. Pastikan server lokal sudah berjalan."
+	} else if strings.Contains(lower, "no such host") || strings.Contains(lower, "lookup") {
+		location = "Domain Host Base URL (DNS Failed)"
+		suggestion = "Domain Base URL tidak valid atau koneksi internet terputus."
+	} else if strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded") {
+		location = "Latensi Server Upstream (> 60s)"
+		suggestion = "Upstream server lambat merespons. Pilih model yang lebih cepat atau cek koneksi."
+	}
+
+	for k, v := range extraInfo {
+		if k == "location" {
+			location = v
+		}
+	}
+
+	fmt.Printf("     📍 %s %s\n", KeyStyle.Render("Lokasi Error:"), lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#ef4444")).Render(location))
+	fmt.Printf("     🔍 %s %s\n", KeyStyle.Render("Detail Error:"), lipgloss.NewStyle().Foreground(lipgloss.Color("#fca5a5")).Render(errStr))
+	fmt.Printf("     💡 %s %s\n", KeyStyle.Render("Saran:       "), lipgloss.NewStyle().Foreground(lipgloss.Color("#cbd5e1")).Render(suggestion))
 }
 
 func maskAPIKey(key string) string {
@@ -247,7 +292,9 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 		})
 
 		if spinnerErr != nil {
-			printError(fmt.Sprintf("oc/auto GAGAL: %v", spinnerErr))
+			printTestFailure("Model", "oc/auto", spinnerErr, map[string]string{
+				"location": "Virtual Route oc/auto (OpenCode Keyless Proxy)",
+			})
 		} else {
 			fmt.Printf("  ✅  Model '%s' %s\n", "oc/auto", BadgeSuccess.Render(" BERFUNGSI "))
 			printKeyValue("     📥 Response:", response)
@@ -336,7 +383,9 @@ func testModelMenu(cfg *config.Config, cfgPath string) {
 		})
 
 		if spinnerErr != nil {
-			printError(fmt.Sprintf("Model '%s' GAGAL: %v", modelID, spinnerErr))
+			printTestFailure("Model", modelID, spinnerErr, map[string]string{
+				"location": fmt.Sprintf("Provider %s (%s)", p.Name, p.BaseURL),
+			})
 		} else {
 			if isReasoning && isVision {
 				fmt.Printf("  🧠👁️  Model '%s' %s\n", modelID, BadgeSuccess.Render(" BERFUNGSI & REASONING & VISION "))
@@ -518,7 +567,9 @@ func testAllModelsAllProviders(cfg *config.Config, cfgPath string) {
 			})
 
 			if spinnerErr != nil {
-				printError(fmt.Sprintf("Model '%s' GAGAL: %v", modelID, spinnerErr))
+				printTestFailure("Model", modelID, spinnerErr, map[string]string{
+					"location": fmt.Sprintf("Provider %s (%s)", p.Name, p.BaseURL),
+				})
 			} else {
 				totalSuccess++
 				if isReasoning && isVision {

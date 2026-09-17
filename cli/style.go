@@ -98,6 +98,12 @@ var (
 			Foreground(lipgloss.Color("#000000")).
 			Background(Success).
 			Padding(0, 1)
+
+	BadgeError = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#ffffff")).
+			Background(lipgloss.Color("#ef4444")).
+			Padding(0, 1)
 )
 
 // ==================== Helper Functions ====================

@@ -146,6 +146,24 @@ func (a *AdminHandler) sendError(w http.ResponseWriter, status int, msg string) 
 	})
 }
 
+// sendDiagError sends a detailed diagnostic error response with rich metadata.
+func (a *AdminHandler) sendDiagError(w http.ResponseWriter, status int, msg string, details map[string]interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	resp := map[string]interface{}{
+		"error": models.ErrorDetail{
+			Message: msg,
+			Type:    "diag_error",
+		},
+		"message": msg,
+		"ok":      false,
+	}
+	for k, v := range details {
+		resp[k] = v
+	}
+	json.NewEncoder(w).Encode(resp)
+}
+
 // HandleListKeys handles GET /admin/keys — list all API keys.
 func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 	if !a.checkAuth(r) {
@@ -1332,13 +1350,32 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	start := time.Now()
 	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
+	latency := time.Since(start).Milliseconds()
+	targetURL := strings.TrimRight(req.BaseURL, "/") + "/models"
 	if err != nil {
-		a.sendError(w, http.StatusBadGateway, err.Error())
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"provider":   req.Provider,
+			"base_url":   req.BaseURL,
+			"target":     targetURL,
+			"key_index":  req.KeyIndex,
+			"type":       req.Type,
+			"latency_ms": latency,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "model_count": len(models), "models": models})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":          true,
+		"model_count": len(models),
+		"models":      models,
+		"latency_ms":  latency,
+		"status":      "OK",
+		"provider":    req.Provider,
+		"base_url":    req.BaseURL,
+		"target":      targetURL,
+	})
 }
 
 // HandleDiagTestModel handles POST /admin/diag/test-model.
@@ -1375,13 +1412,32 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 			}
 		}
 	}
+	targetURL := strings.TrimRight(req.BaseURL, "/") + "/chat/completions"
+	if req.Type == "anthropic" {
+		targetURL = strings.TrimRight(req.BaseURL, "/") + "/v1/messages"
+	}
 	response, latency, err := diagTestModel(client, req.BaseURL, req.APIKey, req.Model, req.Type)
 	if err != nil {
-		a.sendError(w, http.StatusBadGateway, err.Error())
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"provider":   req.Provider,
+			"base_url":   req.BaseURL,
+			"model":      req.Model,
+			"type":       req.Type,
+			"target":     targetURL,
+			"latency_ms": latency,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"ok": true, "response": response, "latency_ms": latency})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":         true,
+		"response":   response,
+		"latency_ms": latency,
+		"status":     "OK",
+		"provider":   req.Provider,
+		"model":      req.Model,
+		"target":     targetURL,
+	})
 }
 
 // HandleDiagFetchModels handles POST /admin/diag/fetch-models.
@@ -1413,13 +1469,26 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 			}
 		}
 	}
+	targetURL := strings.TrimRight(req.BaseURL, "/") + "/models"
 	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
 	if err != nil {
-		a.sendError(w, http.StatusBadGateway, err.Error())
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"provider": req.Provider,
+			"base_url": req.BaseURL,
+			"target":   targetURL,
+			"type":     req.Type,
+		})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"models": models, "count": len(models)})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":       true,
+		"models":   models,
+		"count":    len(models),
+		"provider": req.Provider,
+		"base_url": req.BaseURL,
+		"target":   targetURL,
+	})
 }
 
 // HandleQuickSetup handles POST /admin/templates/setup \u2014 create provider from template + fetch models.

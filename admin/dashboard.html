@@ -1021,6 +1021,99 @@ input:focus, select:focus, textarea:focus {
 .toast.success { background: var(--green-soft); color: var(--green); border: 1px solid var(--green-border); }
 .toast.error { background: var(--red-soft); color: var(--red); border: 1px solid var(--red-border); }
 
+/* Test Result Cards & Error Diagnostics */
+@keyframes testShake {
+  0%, 100% { transform: translateX(0); }
+  15%, 45%, 75% { transform: translateX(-4px); }
+  30%, 60%, 90% { transform: translateX(4px); }
+}
+.test-res-box {
+  display: none;
+  margin-top: 0.75rem;
+  padding: 0.85rem;
+  border-radius: var(--radius);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  transition: all 0.2s ease;
+}
+.test-result-failed {
+  animation: testShake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  background: rgba(239, 68, 68, 0.09) !important;
+  border: 1.5px solid #ef4444 !important;
+  border-left: 5px solid #ef4444 !important;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.25) !important;
+  color: var(--text1) !important;
+}
+.test-result-success {
+  background: rgba(16, 185, 129, 0.08) !important;
+  border: 1.5px solid #10b981 !important;
+  border-left: 5px solid #10b981 !important;
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.2) !important;
+  color: var(--text1) !important;
+}
+.test-err-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-full);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  background: #ef4444;
+  color: #ffffff;
+}
+.test-succ-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-full);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  background: #10b981;
+  color: #000000;
+}
+.test-diag-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.75rem;
+  background: rgba(239, 68, 68, 0.06);
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  margin: 0.6rem 0;
+  font-size: 0.78rem;
+}
+.test-raw-box {
+  background: var(--terminal-bg);
+  color: #fca5a5;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  margin: 0.4rem 0 0.6rem 0;
+}
+.test-tip-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 0.55rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--text2);
+}
+
 /* Toggle Switch Button */
 .toggle-btn {
   padding: 0.25rem 0.65rem;
@@ -2457,6 +2550,9 @@ function parseBackendLines(text) {
   });
 }
 
+const _hubKeyTestResults = {};
+const _hubModelTestResults = {};
+
 async function api(path, opts = {}) {
   const headers = {
     'Content-Type': 'application/json',
@@ -2477,10 +2573,156 @@ async function api(path, opts = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
+    let msg = res.statusText;
+    if (err) {
+      if (typeof err.error === 'string') msg = err.error;
+      else if (err.error && typeof err.error.message === 'string') msg = err.error.message;
+      else if (typeof err.message === 'string') msg = err.message;
+    }
+    const e = new Error(msg);
+    e.status = res.status;
+    e.data = err;
+    throw e;
   }
   if (res.status === 204) return null;
   return res.json();
+}
+
+function parseTestErrorDetails(e, ctx = {}) {
+  const data = (e && e.data) ? e.data : {};
+  let raw = '';
+  if (e && typeof e.message === 'string' && e.message) {
+    raw = e.message;
+  } else if (typeof e === 'string') {
+    raw = e;
+  } else if (data.error && typeof data.error.message === 'string') {
+    raw = data.error.message;
+  } else if (typeof data.error === 'string') {
+    raw = data.error;
+  } else {
+    raw = JSON.stringify(e || 'Unknown error');
+  }
+
+  const provider = ctx.provider || data.provider || '';
+  const model = ctx.model || data.model || '';
+  const keyIdx = ctx.keyIndex !== undefined ? ctx.keyIndex : data.key_index;
+  const target = ctx.targetURL || data.target || (data.base_url ? data.base_url + (model ? '/chat/completions' : '/models') : '');
+  const latency = (data.latency_ms !== undefined && data.latency_ms !== null) ? data.latency_ms + 'ms' : (ctx.latency ? ctx.latency + 'ms' : '--');
+
+  let title = 'Test Gagal';
+  let location = provider ? `Upstream Provider (${provider})` : 'Upstream Gateway Endpoint';
+  let statusBadge = e && e.status ? `HTTP ${e.status}` : 'Request Failed';
+  let suggestion = 'Periksa kembali parameter konfigurasi atau log server.';
+
+  const lower = (raw + ' ' + (data.type || '')).toLowerCase();
+
+  if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_api_key') || lower.includes('invalid api key') || lower.includes('incorrect api key')) {
+    title = 'Autentikasi Gagal (401 Unauthorized)';
+    location = `Header Authorization / API Key Provider ${provider ? '(' + provider + ')' : ''} ${keyIdx !== undefined && keyIdx !== '' ? '[Key #' + (parseInt(keyIdx)+1) + ']' : ''}`;
+    statusBadge = 'HTTP 401 Unauthorized';
+    suggestion = 'API Key upstream tidak valid, kadaluwarsa, atau tidak terdaftar. Periksa kembali API Key Anda di dashboard provider dan perbarui di GoGate.';
+  } else if (lower.includes('403') || lower.includes('forbidden') || lower.includes('permission_denied') || lower.includes('country')) {
+    title = 'Akses Ditolak (403 Forbidden)';
+    location = `Kebijakan Akses / Geo-blocking Provider ${provider ? '(' + provider + ')' : ''}`;
+    statusBadge = 'HTTP 403 Forbidden';
+    suggestion = 'Akun API tidak memiliki izin untuk fitur/model ini, atau IP server Anda diblokir wilayahnya oleh provider (aktifkan Proxy Pool).';
+  } else if (lower.includes('404') || lower.includes('not found') || lower.includes('does not exist') || lower.includes('model_not_found')) {
+    title = 'Model / Endpoint Tidak Ditemukan (404 Not Found)';
+    location = model ? `Model ID: "${model}" pada Provider ${provider}` : `URL Endpoint: ${target || 'Upstream Target'}`;
+    statusBadge = 'HTTP 404 Not Found';
+    suggestion = `Model "${model || ''}" tidak ditemukan di katalog upstream. Periksa ejaan nama model atau klik 'Sync Models' untuk memuat model yang tersedia.`;
+  } else if (lower.includes('429') || lower.includes('quota') || lower.includes('rate limit') || lower.includes('insufficient_quota') || lower.includes('too many requests')) {
+    title = 'Batas Kuota / Rate Limit Terlampaui (429)';
+    location = `Billing Saldo / Batas RPM Provider ${provider ? '(' + provider + ')' : ''}`;
+    statusBadge = 'HTTP 429 Too Many Requests';
+    suggestion = 'Saldo kredit API provider habis atau frekuensi request melebihi batas per menit (RPM). Cek billing akun provider atau tambahkan key cadangan.';
+  } else if (lower.includes('connection refused') || lower.includes('connectex') || lower.includes('dial tcp')) {
+    title = 'Koneksi Ditolak (Connection Refused)';
+    location = `Jaringan / Base URL Target: ${target || data.base_url || 'Host Provider'}`;
+    statusBadge = 'TCP Connection Refused';
+    suggestion = 'Server target tidak aktif atau port salah. Jika menggunakan model lokal (misal Ollama/LM Studio), pastikan server sudah dijalankan.';
+  } else if (lower.includes('no such host') || lower.includes('lookup') || lower.includes('dns')) {
+    title = 'Domain Host Tidak Ditemukan (DNS Resolution Failed)';
+    location = `Domain Host Base URL (${data.base_url || target || 'Host'})`;
+    statusBadge = 'DNS Resolution Error';
+    suggestion = 'Domain pada Base URL tidak dapat ditemukan. Periksa ejaan hostname dan pastikan koneksi internet aktif.';
+  } else if (lower.includes('deadline exceeded') || lower.includes('timeout') || lower.includes('timed out')) {
+    title = 'Waktu Request Habis (Timeout > 60s)';
+    location = `Latensi Jaringan / Respons Upstream (${provider || 'Provider'})`;
+    statusBadge = 'Client Timeout';
+    suggestion = 'Server upstream terlalu lama merespons (> 60 detik). Coba gunakan model yang lebih ringan atau periksa koneksi internet.';
+  } else if (lower.includes('no api keys')) {
+    title = 'API Key Belum Dikonfigurasi';
+    location = `Konfigurasi Provider ${provider}`;
+    statusBadge = 'Missing API Key';
+    suggestion = 'Provider ini belum memiliki API Key. Tambahkan API Key di menu Provider Hub sebelum melakukan pengetesan.';
+  } else if (lower.includes('500') || lower.includes('502') || lower.includes('503') || lower.includes('504')) {
+    title = 'Gangguan Server Upstream';
+    location = `Server Provider ${provider ? '(' + provider + ')' : ''}`;
+    statusBadge = 'Upstream Server Error';
+    suggestion = 'Server provider AI sedang mengalami gangguan atau pemeliharaan. Silakan coba beberapa saat lagi atau aktifkan model fallback.';
+  }
+
+  return { title, location, statusBadge, target: target || data.base_url || '--', latency, raw, suggestion, provider, model };
+}
+
+function renderTestFailureHTML(parsed) {
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.6rem;padding-bottom:0.5rem;border-bottom:1px solid rgba(239,68,68,0.25);">
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <span class="test-err-badge">❌ GAGAL</span>
+        <span style="font-weight:700;color:var(--red);font-size:0.88rem;">${esc(parsed.title)}</span>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text3);font-weight:600;">Latensi: ${esc(parsed.latency)}</span>
+    </div>
+
+    <div class="test-diag-grid">
+      <span style="color:var(--text3);font-weight:600;">📍 Lokasi Masalah:</span>
+      <span style="color:var(--red);font-weight:700;">${esc(parsed.location)}</span>
+
+      <span style="color:var(--text3);font-weight:600;">🌐 Target URL:</span>
+      <span style="color:var(--text1);font-family:var(--font-mono);word-break:break-all;font-size:0.73rem;">${esc(parsed.target)}</span>
+
+      <span style="color:var(--text3);font-weight:600;">⚠️ Status Kode:</span>
+      <span style="color:var(--red);font-weight:700;">${esc(parsed.statusBadge)}</span>
+    </div>
+
+    <div style="margin-bottom:0.55rem;">
+      <div style="font-size:0.72rem;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:0.25rem;">🔍 Detail Pesan Error dari Server:</div>
+      <div class="test-raw-box">${esc(parsed.raw)}</div>
+    </div>
+
+    <div class="test-tip-box">
+      <span style="font-size:1.05rem;line-height:1;">💡</span>
+      <div><strong style="color:var(--text1);">Saran Perbaikan:</strong> <span style="color:var(--text2);">${esc(parsed.suggestion)}</span></div>
+    </div>
+  `;
+}
+
+function renderTestSuccessHTML(title, meta = {}, content = '') {
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;margin-bottom:0.6rem;padding-bottom:0.5rem;border-bottom:1px solid rgba(16,185,129,0.25);">
+      <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+        <span class="test-succ-badge">✅ BERHASIL</span>
+        <span style="font-weight:700;color:var(--green);font-size:0.88rem;">${esc(title)}</span>
+      </div>
+      <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--green);font-weight:700;">Latensi: ${esc(meta.latency||'--')}</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:0.35rem 0.75rem;background:rgba(16,185,129,0.06);padding:0.6rem 0.75rem;border-radius:6px;border:1px solid rgba(16,185,129,0.2);margin:0.6rem 0;font-size:0.78rem;">
+      ${meta.provider ? `<span style="color:var(--text3);font-weight:600;">📡 Provider:</span><span style="color:var(--text1);font-weight:700;">${esc(meta.provider)}</span>` : ''}
+      ${meta.model ? `<span style="color:var(--text3);font-weight:600;">🤖 Model:</span><span style="color:var(--text1);font-family:var(--font-mono);font-weight:700;">${esc(meta.model)}</span>` : ''}
+      ${meta.modelCount !== undefined ? `<span style="color:var(--text3);font-weight:600;">📦 Model Ditemukan:</span><span style="color:var(--text1);font-weight:700;">${esc(meta.modelCount)} model</span>` : ''}
+      ${meta.target ? `<span style="color:var(--text3);font-weight:600;">🌐 Target URL:</span><span style="color:var(--text2);font-family:var(--font-mono);font-size:0.73rem;">${esc(meta.target)}</span>` : ''}
+    </div>
+
+    ${content ? `
+      <div>
+        <div style="font-size:0.72rem;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:0.25rem;">📥 Respons Model:</div>
+        <div style="background:var(--surface);color:var(--text1);padding:0.6rem 0.75rem;border-radius:6px;font-family:var(--font-mono);font-size:0.78rem;border:1px solid var(--border);white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;">${esc(content)}</div>
+      </div>
+    ` : ''}
+  `;
 }
 
 function toast(msg,type='info'){
@@ -3501,21 +3743,52 @@ function renderHubKeys(p){
   const keys = p.api_keys || [];
   if(!keys.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.5rem 0;">No API keys registered for this provider.</div>';
 
-  return `<div style="display:flex;flex-direction:column;gap:0.4rem;">` + keys.map((k, idx) => {
+  return `<div style="display:flex;flex-direction:column;gap:0.5rem;">` + keys.map((k, idx) => {
     const isRevealed = !!_revealedKeys[idx];
     const displayVal = isRevealed ? esc(k) : esc(maskKey(k));
+    const testRes = _hubKeyTestResults[p.name + '_' + idx];
+
+    let borderStyle = 'border: 1px solid var(--border);';
+    let bgStyle = 'background: var(--surface-subtle);';
+    let statusBadge = '';
+    let errorDetailBox = '';
+
+    if (testRes) {
+      if (testRes.status === 'failed') {
+        borderStyle = 'border: 1.5px solid #ef4444; border-left: 4px solid #ef4444;';
+        bgStyle = 'background: rgba(239, 68, 68, 0.08); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);';
+        statusBadge = '<span class="test-err-badge">❌ GAGAL</span>';
+        const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, keyIndex: idx });
+        errorDetailBox = `
+          <div style="margin-top:0.45rem;padding:0.45rem 0.65rem;background:rgba(239,68,68,0.12);border-radius:6px;font-size:0.75rem;color:var(--red);">
+            <div><strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong></div>
+            <div style="margin-top:0.25rem;font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;">${esc(parsed.raw)}</div>
+            <div style="margin-top:0.3rem;color:var(--text2);font-size:0.72rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
+          </div>
+        `;
+      } else if (testRes.status === 'success') {
+        borderStyle = 'border: 1.5px solid #10b981; border-left: 4px solid #10b981;';
+        bgStyle = 'background: rgba(16, 185, 129, 0.06);';
+        statusBadge = `<span class="test-succ-badge">✅ VALID (${testRes.latency}ms)</span>`;
+      }
+    }
+
     return `
-      <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface-subtle);padding:0.45rem 0.65rem;border-radius:var(--radius);border:1px solid var(--border);">
-        <div style="display:flex;align-items:center;gap:0.5rem;font-family:var(--font-mono);font-size:0.78rem;">
-          <span class="tag tag-gray">#${idx+1}</span>
-          <span>${displayVal}</span>
-          <button class="btn btn-sm btn-ghost" onclick="toggleKeyReveal(${idx})" style="padding:0.15rem 0.35rem;font-size:0.7rem;">${isRevealed?'Hide':'Reveal'}</button>
+      <div style="${borderStyle} ${bgStyle} padding:0.5rem 0.65rem;border-radius:var(--radius);transition:all 0.2s ease;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+          <div style="display:flex;align-items:center;gap:0.5rem;font-family:var(--font-mono);font-size:0.78rem;">
+            <span class="tag tag-gray">#${idx+1}</span>
+            <span style="font-weight:600;">${displayVal}</span>
+            <button class="btn btn-sm btn-ghost" onclick="toggleKeyReveal(${idx})" style="padding:0.15rem 0.35rem;font-size:0.7rem;">${isRevealed?'Hide':'Reveal'}</button>
+            ${statusBadge}
+          </div>
+          <div style="display:flex;gap:0.35rem;" id="key_actions_${idx}">
+            <button class="btn btn-sm btn-primary" onclick="testHubSingleKey('${esc(p.name)}', ${idx})">Test</button>
+            <button class="btn btn-sm" onclick="editHubKeyPrompt('${esc(p.name)}', ${idx})">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteHubKey('${esc(p.name)}', ${idx})">Delete</button>
+          </div>
         </div>
-        <div style="display:flex;gap:0.35rem;" id="key_actions_${idx}">
-          <button class="btn btn-sm" onclick="testHubSingleKey('${esc(p.name)}', ${idx})">Test</button>
-          <button class="btn btn-sm" onclick="editHubKeyPrompt('${esc(p.name)}', ${idx})">Edit</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteHubKey('${esc(p.name)}', ${idx})">Delete</button>
-        </div>
+        ${errorDetailBox}
       </div>
     `;
   }).join('') + `</div>`;
@@ -3536,21 +3809,52 @@ function renderHubModels(p){
     <div class="table-wrap" style="border-radius:var(--radius);">
       <table>
         <thead>
-          <tr><th>Route Name</th><th>Upstream Target</th><th>Status</th><th style="text-align:right;">Actions</th></tr>
+          <tr><th>Route Name</th><th>Upstream Target</th><th>Status</th><th>Hasil Test</th><th style="text-align:right;">Actions</th></tr>
         </thead>
         <tbody>
-          ${models.map(m => `
-            <tr>
-              <td><strong class="mono">${esc(m.name)}</strong></td>
-              <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
-              <td>${m.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}</td>
-              <td style="text-align:right;white-space:nowrap;">
-                <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(p.name)}', '${esc(m.name)}')">Test</button>
-                <button class="btn btn-sm" onclick="toggleHubModelDisabled('${esc(p.name)}', '${esc(m.name)}', ${!m.disabled})">${m.disabled?'Enable':'Disable'}</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteHubModel('${esc(p.name)}', '${esc(m.name)}')">Delete</button>
-              </td>
-            </tr>
-          `).join('')}
+          ${models.map(m => {
+            const testRes = _hubModelTestResults[p.name + '_' + m.name];
+            let rowStyle = '';
+            let testResultCol = '<span style="color:var(--text3);font-size:0.75rem;">--</span>';
+            let errorRow = '';
+
+            if (testRes) {
+              if (testRes.status === 'failed') {
+                rowStyle = 'background: rgba(239, 68, 68, 0.12) !important;';
+                testResultCol = '<span class="test-err-badge">❌ GAGAL</span>';
+                const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, model: m.name });
+                errorRow = `
+                  <tr style="background: rgba(239, 68, 68, 0.08) !important;">
+                    <td colspan="5" style="padding: 0.45rem 0.75rem; font-size: 0.75rem; border-top: 1px dashed rgba(239,68,68,0.35);">
+                      <div style="color:var(--red);">
+                        <strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong>
+                      </div>
+                      <div style="font-family:var(--font-mono);font-size:0.72rem;color:#fca5a5;margin-top:0.25rem;word-break:break-all;">${esc(parsed.raw)}</div>
+                      <div style="color:var(--text2);font-size:0.72rem;margin-top:0.25rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
+                    </td>
+                  </tr>
+                `;
+              } else if (testRes.status === 'success') {
+                rowStyle = 'background: rgba(16, 185, 129, 0.06);';
+                testResultCol = `<span class="test-succ-badge">✅ OK (${testRes.latency}ms)</span>`;
+              }
+            }
+
+            return `
+              <tr style="${rowStyle}">
+                <td><strong class="mono">${esc(m.name)}</strong></td>
+                <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
+                <td>${m.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}</td>
+                <td>${testResultCol}</td>
+                <td style="text-align:right;white-space:nowrap;">
+                  <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(p.name)}', '${esc(m.name)}')">Test</button>
+                  <button class="btn btn-sm" onclick="toggleHubModelDisabled('${esc(p.name)}', '${esc(m.name)}', ${!m.disabled})">${m.disabled?'Enable':'Disable'}</button>
+                  <button class="btn btn-sm btn-danger" onclick="deleteHubModel('${esc(p.name)}', '${esc(m.name)}')">Delete</button>
+                </td>
+              </tr>
+              ${errorRow}
+            `;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -3668,19 +3972,32 @@ async function deleteHubKey(provName, keyIndex){
 
 async function testHubSingleKey(provName, keyIndex){
   const el = document.getElementById('key_actions_' + keyIndex);
-  if(el) el.innerHTML = '<span style="font-size:0.75rem;color:var(--cyan);">Testing...</span>';
+  if(el) el.innerHTML = '<span style="font-size:0.75rem;color:var(--cyan);font-weight:700;">⏳ Testing...</span>';
   try{
     const r = await api('/admin/diag/test-key',{method:'POST',body:JSON.stringify({provider:provName,key_index:keyIndex})});
-    toast(`Key #${keyIndex+1} Valid! Latency: ${r.latency_ms}ms`,'success');
+    _hubKeyTestResults[provName + '_' + keyIndex] = {
+      status: 'success',
+      latency: r.latency_ms || 0,
+      time: Date.now()
+    };
+    toast(`Key #${keyIndex+1} Valid! (${r.latency_ms}ms)`,'success');
   }catch(e){
-    toast(`Key #${keyIndex+1} Failed: ` + e.message,'error');
+    const parsed = parseTestErrorDetails(e, { provider: provName, keyIndex, targetURL: e.data?.target });
+    _hubKeyTestResults[provName + '_' + keyIndex] = {
+      status: 'failed',
+      error: e.message,
+      parsed: parsed,
+      raw: e.message,
+      time: Date.now()
+    };
+    toast(`Key #${keyIndex+1} Gagal: ` + parsed.title,'error');
   }
   const p = _currentProviders.find(x => x.name === provName);
-  if(p && el) document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
+  if(p) document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
 }
 
 async function testAllProviderKeys(provName){
-  toast(`Testing all keys for ${provName}...`,'info');
+  toast(`Menguji semua API key untuk ${provName}...`,'info');
   const p = _currentProviders.find(x => x.name === provName);
   if(!p || !p.api_keys) return;
   for(let i=0; i<p.api_keys.length; i++){
@@ -3735,15 +4052,32 @@ async function toggleHubModelDisabled(provName, modelName, setDisabled){
 }
 
 async function testAllProviderModels(provName){
-  toast(`Testing all models for ${provName}...`,'info');
+  toast(`Menguji semua model untuk ${provName}...`,'info');
   const p = _currentProviders.find(x => x.name === provName);
   if(!p || !p.models) return;
   for(const m of p.models){
     try{
       const r = await api('/admin/diag/test-model',{method:'POST',body:JSON.stringify({provider:provName,model:m.name})});
-      toast(`${m.name}: ${r.latency_ms}ms [${r.status}]`,'success');
+      _hubModelTestResults[provName + '_' + m.name] = {
+        status: 'success',
+        latency: r.latency_ms || 0,
+        time: Date.now()
+      };
+      toast(`${m.name}: ${r.latency_ms}ms [BERFUNGSI]`,'success');
     }catch(e){
-      toast(`${m.name} Failed: `+e.message,'error');
+      const parsed = parseTestErrorDetails(e, { provider: provName, model: m.name, targetURL: e.data?.target });
+      _hubModelTestResults[provName + '_' + m.name] = {
+        status: 'failed',
+        error: e.message,
+        parsed: parsed,
+        raw: e.message,
+        time: Date.now()
+      };
+      toast(`${m.name} GAGAL: ` + parsed.title,'error');
+    }
+    const curP = _currentProviders.find(x => x.name === provName);
+    if(curP && document.getElementById('hubModelsList')) {
+      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
     }
   }
 }
@@ -3984,7 +4318,7 @@ function showTestKey(initialProvider, initialKeyIdx){
       <label class="full">Provider<select id="tk_prov">${provOpts}</select></label>
       <label class="full">Key Index (optional)<input id="tk_idx" type="number" value="${initialKeyIdx!==undefined?initialKeyIdx:''}" placeholder="0 for 1st key, leave blank for custom key"></label>
       <label class="full">Or Enter Custom Key<input id="tk_custom" type="password" placeholder="sk-... (optional)"></label>
-      <div id="tk_res" class="full" style="display:none;padding:0.75rem;border-radius:var(--radius);font-family:var(--font-mono);font-size:0.78rem;"></div>
+      <div id="tk_res" class="full test-res-box"></div>
     </div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runTestKey()">Run Test</button></div>
   `, null);
@@ -3996,9 +4330,11 @@ async function runTestKey(){
   const customKey = document.getElementById('tk_custom').value.trim();
   const resBox = document.getElementById('tk_res');
   resBox.style.display = 'block';
+  resBox.className = 'full test-res-box';
   resBox.style.background = 'var(--surface-subtle)';
+  resBox.style.border = '1px solid var(--border)';
   resBox.style.color = 'var(--text1)';
-  resBox.textContent = 'Testing connection and measuring latency...';
+  resBox.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem;color:var(--cyan);font-weight:700;">⏳ Sedang menguji koneksi &amp; mengukur latensi API key...</div>';
 
   const body = {provider: prov};
   if(customKey) body.api_key = customKey;
@@ -4006,13 +4342,23 @@ async function runTestKey(){
 
   try{
     const r = await api('/admin/diag/test-key',{method:'POST',body:JSON.stringify(body)});
-    resBox.style.background = 'var(--green-soft)';
-    resBox.style.color = 'var(--green)';
-    resBox.innerHTML = `<strong>VALID &amp; HEALTHY!</strong><br>Status: ${r.status}<br>Latency: ${r.latency_ms}ms<br>Message: ${esc(r.message||'OK')}`;
+    resBox.className = 'full test-res-box test-result-success';
+    resBox.innerHTML = renderTestSuccessHTML('API Key Valid &amp; Berfungsi!', {
+      provider: prov,
+      latency: (r.latency_ms || 0) + 'ms',
+      modelCount: r.model_count,
+      target: r.target || (r.base_url ? r.base_url + '/models' : '')
+    });
+    if (idxVal !== '') {
+      _hubKeyTestResults[prov + '_' + idxVal] = { status: 'success', latency: r.latency_ms };
+    }
   }catch(e){
-    resBox.style.background = 'var(--red-soft)';
-    resBox.style.color = 'var(--red)';
-    resBox.innerHTML = `<strong>FAILED:</strong><br>${esc(e.message)}`;
+    resBox.className = 'full test-res-box test-result-failed';
+    const parsed = parseTestErrorDetails(e, { provider: prov, keyIndex: idxVal, targetURL: e.data?.target });
+    resBox.innerHTML = renderTestFailureHTML(parsed);
+    if (idxVal !== '') {
+      _hubKeyTestResults[prov + '_' + idxVal] = { status: 'failed', parsed, raw: e.message };
+    }
   }
 }
 
@@ -4025,7 +4371,7 @@ function showTestModel(initialProvider, initialModel){
       <label>Model<select id="tm_model">${modelOpts}</select></label>
       <label>Provider Override<select id="tm_prov">${provOpts}</select></label>
       <label class="full">Prompt<input id="tm_prompt" value="Hi, answer in one short sentence."></label>
-      <div id="tm_res" class="full" style="display:none;padding:0.75rem;border-radius:var(--radius);font-family:var(--font-mono);font-size:0.78rem;max-height:180px;overflow-y:auto;"></div>
+      <div id="tm_res" class="full test-res-box" style="max-height:280px;overflow-y:auto;"></div>
     </div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runTestModel()">Send Prompt</button></div>
   `, null);
@@ -4037,19 +4383,31 @@ async function runTestModel(){
   const prompt = document.getElementById('tm_prompt').value.trim();
   const resBox = document.getElementById('tm_res');
   resBox.style.display = 'block';
+  resBox.className = 'full test-res-box';
   resBox.style.background = 'var(--surface-subtle)';
+  resBox.style.border = '1px solid var(--border)';
   resBox.style.color = 'var(--text1)';
-  resBox.textContent = 'Sending completion request...';
+  resBox.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem;color:var(--cyan);font-weight:700;">⏳ Mengirim prompt pengujian ke model upstream...</div>';
 
   try{
     const r = await api('/admin/diag/test-model',{method:'POST',body:JSON.stringify({model, provider: prov||undefined, prompt})});
-    resBox.style.background = 'var(--green-soft)';
-    resBox.style.color = 'var(--text1)';
-    resBox.innerHTML = `<strong style="color:var(--green);">Response (${r.latency_ms}ms):</strong><br><div style="margin-top:0.35rem;white-space:pre-wrap;">${esc(r.response)}</div>`;
+    resBox.className = 'full test-res-box test-result-success';
+    resBox.innerHTML = renderTestSuccessHTML('Model Berfungsi Normal', {
+      provider: r.provider || prov || 'Auto-route',
+      model: model,
+      latency: (r.latency_ms || 0) + 'ms',
+      target: r.target
+    }, r.response);
+    if (prov) {
+      _hubModelTestResults[prov + '_' + model] = { status: 'success', latency: r.latency_ms };
+    }
   }catch(e){
-    resBox.style.background = 'var(--red-soft)';
-    resBox.style.color = 'var(--red)';
-    resBox.innerHTML = `<strong>Error:</strong><br>${esc(e.message)}`;
+    resBox.className = 'full test-res-box test-result-failed';
+    const parsed = parseTestErrorDetails(e, { provider: prov, model, targetURL: e.data?.target });
+    resBox.innerHTML = renderTestFailureHTML(parsed);
+    if (prov) {
+      _hubModelTestResults[prov + '_' + model] = { status: 'failed', parsed, raw: e.message };
+    }
   }
 }
 
@@ -4058,7 +4416,7 @@ function showSyncModels(initialProvider){
   openModal('Sync Provider Models', `
     <div class="form-grid">
       <label class="full">Provider<select id="sm_prov">${provOpts}</select></label>
-      <div id="sm_res" class="full" style="display:none;padding:0.75rem;border-radius:var(--radius);font-size:0.78rem;max-height:180px;overflow-y:auto;"></div>
+      <div id="sm_res" class="full test-res-box" style="max-height:280px;overflow-y:auto;"></div>
     </div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="runSyncModels()">Fetch &amp; Sync</button></div>
   `, null);
@@ -4068,20 +4426,25 @@ async function runSyncModels(){
   const prov = document.getElementById('sm_prov').value;
   const resBox = document.getElementById('sm_res');
   resBox.style.display = 'block';
+  resBox.className = 'full test-res-box';
   resBox.style.background = 'var(--surface-subtle)';
+  resBox.style.border = '1px solid var(--border)';
   resBox.style.color = 'var(--text1)';
-  resBox.textContent = 'Fetching models from upstream API...';
+  resBox.innerHTML = '<div style="display:flex;align-items:center;gap:0.5rem;color:var(--cyan);font-weight:700;">⏳ Menghubungi API upstream untuk sinkronisasi katalog model...</div>';
 
   try{
     const r = await api('/admin/diag/fetch-models',{method:'POST',body:JSON.stringify({provider:prov})});
-    resBox.style.background = 'var(--green-soft)';
-    resBox.style.color = 'var(--green)';
-    resBox.innerHTML = `<strong>Successfully synced!</strong><br>Added: ${r.models_added} models<br>Total active: ${r.total_models}`;
+    resBox.className = 'full test-res-box test-result-success';
+    resBox.innerHTML = renderTestSuccessHTML('Sinkronisasi Katalog Berhasil', {
+      provider: prov,
+      modelCount: r.count,
+      target: r.target
+    }, `Berhasil mendeteksi ${r.count} model dari upstream API.`);
     fetchAll();
   }catch(e){
-    resBox.style.background = 'var(--red-soft)';
-    resBox.style.color = 'var(--red)';
-    resBox.innerHTML = `<strong>Failed:</strong> ${esc(e.message)}`;
+    resBox.className = 'full test-res-box test-result-failed';
+    const parsed = parseTestErrorDetails(e, { provider: prov, targetURL: e.data?.target });
+    resBox.innerHTML = renderTestFailureHTML(parsed);
   }
 }
 

@@ -456,8 +456,35 @@ function addSysMessage(text, isError = false) {
   const area = document.getElementById('chatArea');
   const typing = document.getElementById('typing');
   const el = document.createElement('div');
-  el.className = 'sys-msg' + (isError ? ' error' : '');
-  el.textContent = text;
+  if (isError) {
+    el.style.cssText = 'margin: 12px auto; max-width: 650px; padding: 12px 16px; background: rgba(239, 68, 68, 0.1); border: 1.5px solid #ef4444; border-left: 5px solid #ef4444; border-radius: 8px; box-shadow: 0 0 16px rgba(239, 68, 68, 0.2); animation: fadeIn 0.3s;';
+    const lower = text.toLowerCase();
+    let location = 'Gateway Router / Upstream Provider';
+    let tip = 'Periksa model atau API Key yang digunakan.';
+    if (lower.includes('401') || lower.includes('unauthorized')) {
+      location = 'Header Authorization / API Key';
+      tip = 'API Key gateway atau upstream salah / belum diisi.';
+    } else if (lower.includes('404')) {
+      location = 'Model Catalog / Upstream Route';
+      tip = 'Model yang dipilih tidak tersedia di gateway atau provider.';
+    } else if (lower.includes('429')) {
+      location = 'Rate Limit / Quota Provider';
+      tip = 'Batas kuota habis atau terlalu banyak request.';
+    }
+    el.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;font-weight:bold;color:#ef4444;font-size:13px;margin-bottom:6px;">
+        <span>❌ TEST REQUEST GAGAL</span>
+      </div>
+      <div style="font-size:12px;color:var(--text);margin-bottom:6px;">
+        <span style="color:var(--text2);font-weight:600;">📍 Lokasi Masalah:</span> <strong>${location}</strong><br>
+        <span style="color:var(--text2);font-weight:600;">🔍 Detail:</span> <code style="color:#fca5a5;background:rgba(0,0,0,0.3);padding:2px 5px;border-radius:4px;word-break:break-all;">${escapeHtml(text)}</code>
+      </div>
+      <div style="font-size:11px;color:var(--text2);">💡 <strong>Saran:</strong> ${tip}</div>
+    `;
+  } else {
+    el.className = 'sys-msg';
+    el.textContent = text;
+  }
   area.insertBefore(el, typing);
   scrollToBottom();
 }
