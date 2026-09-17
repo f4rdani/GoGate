@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -425,21 +424,4 @@ func extractChatText(api string, body []byte) (string, string) {
 		usage = fmt.Sprintf("[tokens in=%d out=%d]", out.Usage.PromptTokens, out.Usage.CompletionTokens)
 	}
 	return text, usage
-}
-
-// defaultGateway guesses the local gateway URL from config, else localhost.
-func defaultGateway(cfg *config.Config) string {
-	port := cfg.Server.Port
-	if port == 0 {
-		port = 8080
-	}
-	host := cfg.Server.Host
-	if host == "" || host == "0.0.0.0" {
-		host = "localhost"
-	}
-	// Prefer a dialable loopback when bound to all interfaces.
-	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
-		host = "localhost"
-	}
-	return fmt.Sprintf("http://%s:%d", host, port)
 }

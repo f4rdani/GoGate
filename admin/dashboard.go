@@ -11,7 +11,7 @@ var dashboardHTML string
 
 // AppVersion is the single source of truth for the dashboard version badge.
 // Bump this on every release so the sidebar/footer always show the current version.
-const AppVersion = "v1.5.7"
+const AppVersion = "v1.5.8"
 
 // ServeDashboard serves the admin dashboard. Injects the warning box on the login screen
 // and warning banner inside the dashboard only if the password is still the default "123456"

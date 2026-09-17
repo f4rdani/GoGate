@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -440,6 +441,32 @@ func TestHandleResponsesStreamTools(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+type failingWriter struct {
+	*httptest.ResponseRecorder
+	failAfter int
+	writes    int
+}
+
+func (f *failingWriter) Write(p []byte) (int, error) {
+	f.writes++
+	if f.writes > f.failAfter {
+		return 0, fmt.Errorf("client gone")
+	}
+	return f.ResponseRecorder.Write(p)
+}
+
+func (f *failingWriter) Flush() {}
+
+func TestTranslatorDisconnectAborts(t *testing.T) {
+	w := &failingWriter{ResponseRecorder: httptest.NewRecorder(), failAfter: 0}
+	tr := newResponsesStreamTranslator(w, w, "m")
+	// Every underlying client write fails: translation must surface the
+	// error immediately so providers stop draining upstream.
+	if _, err := tr.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n")); err == nil {
+		t.Fatal("write to dead client must error so upstream drains stop")
 	}
 }
 

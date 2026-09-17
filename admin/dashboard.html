@@ -3541,15 +3541,55 @@ function renderStats(stats, usage, providers, models, keys){
   const mc = document.getElementById('modelCount'); if(mc) mc.textContent = models.length;
   const kc = document.getElementById('keyCount'); if(kc) kc.textContent = keys.length;
 
+  // API returns by_model (legacy clients used `models`) — accept both.
+  const byModel = (usage && (usage.by_model || usage.models)) || {};
   let totalTokens = 0;
-  if(usage && usage.models){
-    Object.values(usage.models).forEach(m => totalTokens += (m.total_tokens || 0));
+  Object.values(byModel).forEach(m => totalTokens += (m.total_tokens || 0));
+  if(el('statTokens')){
+    el('statTokens').textContent = fmt(totalTokens);
+    if(usage && usage.estimated_cost_usd > 0){
+      el('statTokens').title = 'Est. cost $' + usage.estimated_cost_usd.toFixed(4);
+    } else {
+      el('statTokens').removeAttribute('title');
+    }
   }
-  if(el('statTokens')) el('statTokens').textContent = fmt(totalTokens);
+  renderBudgetCard(usage);
 
   const c = (usage && usage.cache) || {};
   const hitRate = (c.hit_rate !== undefined) ? c.hit_rate.toFixed(1) + '%' : '0.0%';
   if(el('statCache')) el('statCache').textContent = hitRate;
+}
+
+function renderBudgetCard(usage){
+  const budgets = (usage && usage.budgets) || {};
+  const names = Object.keys(budgets);
+  const cost = (usage && usage.estimated_cost_usd) || 0;
+  let card = document.getElementById('budgetCard');
+  if(!names.length && !(cost > 0)){
+    if(card) card.remove();
+    return;
+  }
+  const badges = names.map(n => {
+    const b = budgets[n] || {};
+    const pct = b.budget > 0 ? Math.min(100, Math.round((b.used || 0) / b.budget * 100)) : 0;
+    const cls = b.over ? 'tag-red' : pct >= 80 ? 'tag-orange' : 'tag-green';
+    return `<span class="tag ${cls}" title="Reset: ${esc(b.resets_in || '-')}">${esc(n)}: ${esc(fmt(b.used || 0))}/${esc(fmt(b.budget || 0))}${b.over ? ' OVER' : ''}</span>`;
+  }).join('');
+  const html = `<div class="card-header"><div class="card-title">💰 Cost &amp; Budgets</div>` +
+    (cost > 0 ? `<span class="tag tag-green">est. $${esc(cost.toFixed(4))}</span>` : '') +
+    `</div><div class="card-body" style="display:flex;gap:0.5rem;flex-wrap:wrap;">${badges || '<span style="color:var(--text3);font-size:0.8rem;">No budgets configured</span>'}</div>`;
+  if(card){
+    card.innerHTML = html;
+    return;
+  }
+  const strip = document.getElementById('statsCards');
+  if(!strip || !strip.parentNode) return;
+  card = document.createElement('div');
+  card.id = 'budgetCard';
+  card.className = 'card';
+  card.style.marginBottom = '1.25rem';
+  card.innerHTML = html;
+  strip.parentNode.insertBefore(card, strip.nextSibling);
 }
 function renderProviders(list){
   const tb = document.getElementById('providerTable');

@@ -1595,7 +1595,7 @@ func (k *KiroProvider) ChatCompletion(ctx context.Context, req *models.ChatCompl
 		return nil, fmt.Errorf("marshal kiro request: %w", err)
 	}
 
-	respBody, err := k.doKiro(ctx, req.Model, raw, false)
+	respBody, err := k.doKiro(ctx, req.Model, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -1730,8 +1730,7 @@ func (s *kiroHTTPStream) close() {
 	}
 }
 
-// kiroAttemptTarget is one surface attempt.
-func (k *KiroProvider) doKiro(ctx context.Context, routeModel string, raw []byte, _ bool) ([]byte, error) {
+func (k *KiroProvider) doKiro(ctx context.Context, routeModel string, raw []byte) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt < k.keyAttempts(); attempt++ {
 		keyObj, err := k.NextAPIKey()

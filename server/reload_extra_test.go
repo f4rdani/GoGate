@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,6 +151,15 @@ func TestHandleUsageStats(t *testing.T) {
 	handleUsageStats(w2, req, srv.admin, srv.handler)
 	if w2.Code != 200 {
 		t.Fatalf("must 200: %d %s", w2.Code, w2.Body.String())
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(w2.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("usage must be JSON: %v", err)
+	}
+	for _, key := range []string{"uptime", "by_model", "by_api_key", "cache", "estimated_cost_usd", "cost_by_provider", "monthly_tokens", "budgets", "token_saver_bytes_saved"} {
+		if _, ok := payload[key]; !ok {
+			t.Fatalf("usage response must include %q: %v", key, payload)
+		}
 	}
 }
 

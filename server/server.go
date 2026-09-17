@@ -332,10 +332,15 @@ func handleUsageStats(w http.ResponseWriter, r *http.Request, adminHandler *admi
 	}
 
 	result := map[string]interface{}{
-		"uptime":    stats.Uptime,
-		"by_model":  stats.ByModel,
-		"by_api_key": stats.ByAPIKey,
-		"cache":     cacheStats,
+		"uptime":             stats.Uptime,
+		"by_model":           stats.ByModel,
+		"by_api_key":         stats.ByAPIKey,
+		"cache":              cacheStats,
+		"estimated_cost_usd": stats.EstimatedCostUSD,
+		"cost_by_provider":   stats.CostByProvider,
+		"monthly_tokens":     stats.MonthlyTokens,
+		"budgets":            stats.Budgets,
+		"token_saver_bytes_saved": stats.TokenSaverSaved,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

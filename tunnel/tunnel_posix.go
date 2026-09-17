@@ -1,4 +1,5 @@
-//go:build !windows
+//go:build !windows && !linux
+
 package tunnel
 
 import (
@@ -8,8 +9,7 @@ import (
 
 func prepareCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid:   true,
-		Pdeathsig: syscall.SIGKILL,
+		Setpgid: true,
 	}
 }
 

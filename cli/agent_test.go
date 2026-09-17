@@ -175,18 +175,6 @@ func TestExtractChatText(t *testing.T) {
 	}
 }
 
-func TestDefaultGateway(t *testing.T) {
-	if got := defaultGateway(&config.Config{}); got != "http://localhost:8080" {
-		t.Fatalf("default: %q", got)
-	}
-	cfg := &config.Config{}
-	cfg.Server.Host = "0.0.0.0"
-	cfg.Server.Port = 9000
-	if got := defaultGateway(cfg); got != "http://localhost:9000" {
-		t.Fatalf("unspecified bind: %q", got)
-	}
-}
-
 func TestAgentResultJSON(t *testing.T) {
 	printAgentJSON(true, map[string]string{"a": "b"}, "")
 	if code := agentFailJSON("x %d", 1); code != 1 {

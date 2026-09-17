@@ -509,6 +509,7 @@ type responsesStreamTranslator struct {
 	upstreamModel string
 	finalized   bool
 	emittedAny  bool
+	writeErr    error
 }
 
 func newResponsesStreamTranslator(w http.ResponseWriter, flusher http.Flusher, model string) *responsesStreamTranslator {
@@ -553,20 +554,27 @@ func (t *responsesStreamTranslator) sendHeaders() {
 	t.headerSent = true
 }
 
-func (t *responsesStreamTranslator) emit(event string, payload interface{}) {
+func (t *responsesStreamTranslator) emit(event string, payload interface{}) error {
+	if t.writeErr != nil {
+		return t.writeErr
+	}
 	data, _ := json.Marshal(payload)
 	t.sendHeaders()
-	fmt.Fprintf(t.w, "event: %s\ndata: %s\n\n", event, data)
+	if _, err := fmt.Fprintf(t.w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		t.writeErr = err
+		return err
+	}
 	t.flusher.Flush()
 	t.emittedAny = true
+	return nil
 }
 
-func (t *responsesStreamTranslator) ensureCreated() {
+func (t *responsesStreamTranslator) ensureCreated() error {
 	if t.createdSent {
-		return
+		return t.writeErr
 	}
 	t.createdSent = true
-	t.emit("response.created", map[string]interface{}{
+	return t.emit("response.created", map[string]interface{}{
 		"type":     "response.created",
 		"response": map[string]interface{}{"id": t.respID, "object": t.Object(), "status": "in_progress", "model": t.model},
 	})
@@ -574,12 +582,12 @@ func (t *responsesStreamTranslator) ensureCreated() {
 
 func (t *responsesStreamTranslator) Object() string { return "response" }
 
-func (t *responsesStreamTranslator) ensureItemAdded() {
+func (t *responsesStreamTranslator) ensureItemAdded() error {
 	if t.itemAdded {
-		return
+		return t.writeErr
 	}
 	t.itemAdded = true
-	t.emit("response.output_item.added", map[string]interface{}{
+	return t.emit("response.output_item.added", map[string]interface{}{
 		"type":         "response.output_item.added",
 		"output_index": 0,
 		"item": map[string]interface{}{
@@ -590,7 +598,12 @@ func (t *responsesStreamTranslator) ensureItemAdded() {
 }
 
 // Write consumes raw upstream SSE bytes and re-emits response events.
+// A disconnected client aborts the translation with an error so the
+// provider stops draining upstream.
 func (t *responsesStreamTranslator) Write(p []byte) (int, error) {
+	if t.writeErr != nil {
+		return 0, t.writeErr
+	}
 	t.buf.Write(p)
 	for {
 		raw := t.buf.String()
@@ -601,7 +614,9 @@ func (t *responsesStreamTranslator) Write(p []byte) (int, error) {
 		frame := raw[:idx]
 		t.buf.Reset()
 		t.buf.WriteString(raw[idx+2:])
-		t.handleFrame(frame)
+		if err := t.handleFrame(frame); err != nil {
+			return 0, err
+		}
 		if t.finalized {
 			// Drain nothing further; provider will see [DONE]/EOF next.
 		}
@@ -609,7 +624,7 @@ func (t *responsesStreamTranslator) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (t *responsesStreamTranslator) handleFrame(frame string) {
+func (t *responsesStreamTranslator) handleFrame(frame string) error {
 	var dataLines []string
 	for _, line := range strings.Split(frame, "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -630,11 +645,14 @@ func (t *responsesStreamTranslator) handleFrame(frame string) {
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
-		t.handleChunk(&chunk)
+		if err := t.handleChunk(&chunk); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (t *responsesStreamTranslator) handleChunk(chunk *models.ChatCompletionChunk) {
+func (t *responsesStreamTranslator) handleChunk(chunk *models.ChatCompletionChunk) error {
 	if chunk.Model != "" {
 		t.upstreamModel = chunk.Model
 	}
@@ -651,33 +669,44 @@ func (t *responsesStreamTranslator) handleChunk(chunk *models.ChatCompletionChun
 		}
 		if choice.Delta != nil {
 			if choice.Delta.Content != "" {
-				t.ensureCreated()
-				t.ensureItemAdded()
+				if err := t.ensureCreated(); err != nil {
+					return err
+				}
+				if err := t.ensureItemAdded(); err != nil {
+					return err
+				}
 				t.text.WriteString(choice.Delta.Content)
-				t.emit("response.output_text.delta", map[string]interface{}{
+				if err := t.emit("response.output_text.delta", map[string]interface{}{
 					"type":          "response.output_text.delta",
 					"item_id":       t.msgID,
 					"output_index":  0,
 					"content_index": 0,
 					"delta":         choice.Delta.Content,
-				})
+				}); err != nil {
+					return err
+				}
 			}
 			if len(choice.Delta.ToolCalls) > 0 {
-				t.handleToolDeltas(choice.Delta.ToolCalls)
+				if err := t.handleToolDeltas(choice.Delta.ToolCalls); err != nil {
+					return err
+				}
 			}
 		}
 		if choice.FinishReason != nil && *choice.FinishReason != "" {
 			t.finalize()
 		}
 	}
+	return nil
 }
 
-func (t *responsesStreamTranslator) handleToolDeltas(raw json.RawMessage) {
+func (t *responsesStreamTranslator) handleToolDeltas(raw json.RawMessage) error {
 	var deltas []map[string]interface{}
 	if err := json.Unmarshal(raw, &deltas); err != nil {
-		return
+		return nil // malformed tool delta never aborts the stream
 	}
-	t.ensureCreated()
+	if err := t.ensureCreated(); err != nil {
+		return err
+	}
 	for _, d := range deltas {
 		idx := 0
 		if f, ok := d["index"].(float64); ok {
@@ -702,25 +731,30 @@ func (t *responsesStreamTranslator) handleToolDeltas(raw json.RawMessage) {
 		}
 		if !acc.addedSent {
 			acc.addedSent = true
-			t.emit("response.output_item.added", map[string]interface{}{
+			if err := t.emit("response.output_item.added", map[string]interface{}{
 				"type":         "response.output_item.added",
 				"output_index": len(t.toolOrder),
 				"item": map[string]interface{}{
 					"id": acc.id, "type": "function_call",
 					"call_id": acc.id, "name": acc.name, "arguments": "",
 				},
-			})
+			}); err != nil {
+				return err
+			}
 		} else if fn, ok := d["function"].(map[string]interface{}); ok {
 			if args, ok := fn["arguments"].(string); ok && args != "" {
-				t.emit("response.function_call_arguments.delta", map[string]interface{}{
+				if err := t.emit("response.function_call_arguments.delta", map[string]interface{}{
 					"type":      "response.function_call_arguments.delta",
 					"item_id":   acc.id,
 					"output_index": len(t.toolOrder),
 					"delta":     args,
-				})
+				}); err != nil {
+					return err
+				}
 			}
 		}
 	}
+	return nil
 }
 
 // finalize emits done/completed events exactly once and returns the built object.
@@ -729,13 +763,13 @@ func (t *responsesStreamTranslator) finalize() *models.ResponsesResponse {
 		return nil
 	}
 	t.finalized = true
-	t.ensureCreated()
+	_ = t.ensureCreated()
 	out := &models.ResponsesResponse{
 		ID: t.respID, Object: "response", CreatedAt: time.Now().Unix(),
 		Model: t.model, Status: "completed", Usage: t.usage,
 	}
 	if t.itemAdded || t.text.Len() > 0 {
-		t.emit("response.output_text.done", map[string]interface{}{
+		_ = t.emit("response.output_text.done", map[string]interface{}{
 			"type":          "response.output_text.done",
 			"item_id":       t.msgID,
 			"output_index":  0,
@@ -751,7 +785,7 @@ func (t *responsesStreamTranslator) finalize() *models.ResponsesResponse {
 	}
 	for _, idx := range t.toolOrder {
 		acc := t.tools[idx]
-		t.emit("response.function_call_arguments.done", map[string]interface{}{
+		_ = t.emit("response.function_call_arguments.done", map[string]interface{}{
 			"type":      "response.function_call_arguments.done",
 			"item_id":   acc.id,
 			"output_index": 0,
@@ -765,7 +799,7 @@ func (t *responsesStreamTranslator) finalize() *models.ResponsesResponse {
 	if out.Output == nil {
 		out.Output = []models.ResponseOutputItem{}
 	}
-	t.emit("response.completed", map[string]interface{}{"type": "response.completed", "response": out})
+	_ = t.emit("response.completed", map[string]interface{}{"type": "response.completed", "response": out})
 	return out
 }
 
@@ -781,7 +815,7 @@ func (t *responsesStreamTranslator) fail(err error) {
 			msg = msg[:300]
 		}
 	}
-	t.emit("response.failed", map[string]interface{}{
+	_ = t.emit("response.failed", map[string]interface{}{
 		"type":     "response.failed",
 		"response": map[string]interface{}{"id": t.respID, "object": t.Object(), "status": "failed", "model": t.model},
 		"error":    map[string]interface{}{"message": msg},
