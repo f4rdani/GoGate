@@ -182,17 +182,53 @@ a:hover { color: var(--accent-hover); }
   position: sticky;
   top: 0;
   z-index: 90;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.25s cubic-bezier(0.16, 1, 0.3, 1), width 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Desktop: sidebar can be collapsed via the topbar toggle (state kept in localStorage).
-   Mobile (<=900px) keeps drawer behavior below and is unaffected by this rule. */
+/* Desktop: sidebar collapses to an icon rail via the topbar toggle (state kept
+   in localStorage). Mobile (<=900px) keeps drawer behavior below and is
+   unaffected by these rules. */
 @media (min-width: 901px) {
   .app-sidebar {
     margin-left: 0;
   }
   body.sidebar-collapsed .app-sidebar {
-    margin-left: -261px;
+    width: 64px;
+    min-width: 64px;
+  }
+  body.sidebar-collapsed .brand-text,
+  body.sidebar-collapsed .nav-group-title,
+  body.sidebar-collapsed .nav-item span,
+  body.sidebar-collapsed .server-status-card,
+  body.sidebar-collapsed #themeLabel {
+    display: none;
+  }
+  body.sidebar-collapsed .sidebar-brand {
+    justify-content: center;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  body.sidebar-collapsed .sidebar-nav {
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    align-items: center;
+  }
+  body.sidebar-collapsed .nav-item {
+    justify-content: center;
+    padding-left: 0;
+    padding-right: 0;
+    width: 100%;
+  }
+  body.sidebar-collapsed .sidebar-footer {
+    align-items: center;
+  }
+  body.sidebar-collapsed .footer-actions-row {
+    flex-direction: column;
+  }
+  body.sidebar-collapsed .theme-toggle-btn {
+    justify-content: center;
+    padding-left: 0.4rem;
+    padding-right: 0.4rem;
   }
 }
 
@@ -1089,6 +1125,24 @@ input:focus, select:focus, textarea:focus {
   background: #10b981;
   color: #000000;
 }
+.loading-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  vertical-align: -2px;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.btn[disabled] {
+  opacity: 0.55;
+  cursor: wait;
+  pointer-events: none;
+}
 .test-diag-grid {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -1812,7 +1866,7 @@ input:focus, select:focus, textarea:focus {
       <a class="nav-item" data-view="managehub" id="navManageHub" onclick="openProviderHub()" title="Manage provider keys, models, routes & egress">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
         <span>Provider Hub</span>
-        <span class="nav-badge-pill" id="navHubBadge" style="background:var(--primary);color:#fff;display:none;max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Hub</span>
+        <span class="nav-badge-pill" id="navHubBadge" style="background:var(--accent);color:#fff;display:none;max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Hub</span>
       </a>
       <a class="nav-item" data-view="models" onclick="switchView('models')">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -2141,7 +2195,35 @@ input:focus, select:focus, textarea:focus {
           </button>
         </div>
 
+        <div class="card" style="margin-bottom:1rem;">
+          <div class="card-header" style="padding:0.7rem 1.25rem;">
+            <div class="card-title" style="font-size:0.88rem;">🔗 Combo Models <span class="badge" id="comboCount">0</span></div>
+            <span style="font-size:0.75rem;color:var(--text3);">Multi-backend routes dengan fallback</span>
+          </div>
+          <div class="table-wrap" style="border:none; border-radius:0;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Model ID</th>
+                  <th>Route / Providers</th>
+                  <th>Upstream Target</th>
+                  <th>Fallbacks</th>
+                  <th>Capabilities</th>
+                  <th style="text-align:right;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="comboModelTable">
+                <tr><td colspan="6" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Loading combo models...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="card">
+          <div class="card-header" style="padding:0.7rem 1.25rem;">
+            <div class="card-title" style="font-size:0.88rem;">▫️ Direct Models <span class="badge" id="directCount">0</span></div>
+            <span style="font-size:0.75rem;color:var(--text3);">Single-provider routes</span>
+          </div>
           <div class="table-wrap" style="border:none; border-radius:0;">
             <table>
               <thead>
@@ -3115,6 +3197,15 @@ function applySidebarState(){
       document.body.classList.add('sidebar-collapsed');
     }
   }catch(e){}
+  // Tooltips for icon-rail mode (collapsed sidebar shows icons only).
+  try{
+    document.querySelectorAll('.nav-item').forEach(el => {
+      const v = el.dataset && el.dataset.view;
+      if(v && !el.getAttribute('title')){
+        el.setAttribute('title', (typeof viewTitles !== 'undefined' && viewTitles[v]) || v);
+      }
+    });
+  }catch(e){}
 }
 
 function handleGlobalSearch(query){
@@ -3639,44 +3730,81 @@ function renderProviders(list){
   }).join('');
 }
 
+function isModelCombo(m){
+  return !!(m && (m.is_combo || m.type === 'combo' || (m.backends && m.backends.length)));
+}
+
+// isModelActive hides disabled models and anything whose provider(s) are all
+// disabled — a disabled provider serves nothing, so its routes vanish here.
+function isModelActive(m, disabledProviders){
+  if(!m || m.disabled) return false;
+  if(isModelCombo(m)){
+    const backends = m.backends || [];
+    if(!backends.length) return false;
+    return backends.some(b => !disabledProviders.has(b.provider));
+  }
+  if(!m.provider) return true;
+  return !disabledProviders.has(m.provider);
+}
+
+function modelRowHTML(m){
+  let routeInfo = '';
+  if(isModelCombo(m)){
+    const n = (m.backends || []).length;
+    routeInfo = `<span class="tag tag-purple">Combo (${n})</span> <span style="font-size:0.75rem;color:var(--text3);">${esc(m.strategy||'rr')}</span>`;
+  } else {
+    routeInfo = `<span class="tag tag-blue">${esc(m.provider||'direct')}</span>`;
+  }
+
+  let fbInfo = '';
+  if(m.fallbacks && m.fallbacks.length){
+    fbInfo = m.fallbacks.map(f => `<span class="tag tag-orange mono" style="font-size:0.68rem;">${esc(f)}</span>`).join(' ');
+  } else {
+    fbInfo = '<span style="color:var(--text3);font-size:0.75rem;">None</span>';
+  }
+
+  let caps = [];
+  if(m.reasoning) caps.push('<span class="tag tag-green">Reasoning</span>');
+  if(!caps.length) caps.push('<span style="color:var(--text3);font-size:0.75rem;">Standard</span>');
+
+  return `<tr>
+    <td><strong class="mono" style="color:var(--text1);">${esc(m.name)}</strong></td>
+    <td>${routeInfo}</td>
+    <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
+    <td>${fbInfo}</td>
+    <td>${caps.join(' ')}</td>
+    <td style="text-align:right;white-space:nowrap;">
+      <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(m.provider||'')}', '${esc(m.name)}')">Test</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(m.name)}')">Delete</button>
+    </td>
+  </tr>`;
+}
+
 function renderModels(list){
   const tb = document.getElementById('modelTable');
-  if(!tb) return;
-  if(!list.length){
-    tb.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No model routes configured yet</td></tr>';
-    return;
+  const cb = document.getElementById('comboModelTable');
+  if(!tb && !cb) return;
+  const all = list || [];
+  const disabledProviders = new Set((_currentProviders || []).filter(p => p.disabled).map(p => p.name));
+  const active = all.filter(m => isModelActive(m, disabledProviders));
+  const combos = active.filter(m => isModelCombo(m));
+  const directs = active.filter(m => !isModelCombo(m));
+
+  const setCount = (id, n) => { const el = document.getElementById(id); if(el) el.textContent = n; };
+  setCount('modelCount', active.length);
+  setCount('comboCount', combos.length);
+  setCount('directCount', directs.length);
+
+  if(cb){
+    cb.innerHTML = combos.length
+      ? combos.map(m => modelRowHTML(m)).join('')
+      : '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No active combo models</td></tr>';
   }
-  tb.innerHTML = list.map(m => {
-    let routeInfo = '';
-    if(m.is_combo && m.backends && m.backends.length){
-      routeInfo = `<span class="tag tag-purple">Combo (${m.backends.length})</span> <span style="font-size:0.75rem;color:var(--text3);">${esc(m.strategy||'rr')}</span>`;
-    } else {
-      routeInfo = `<span class="tag tag-blue">${esc(m.provider||'direct')}</span>`;
-    }
-
-    let fbInfo = '';
-    if(m.fallbacks && m.fallbacks.length){
-      fbInfo = m.fallbacks.map(f => `<span class="tag tag-orange mono" style="font-size:0.68rem;">${esc(f)}</span>`).join(' ');
-    } else {
-      fbInfo = '<span style="color:var(--text3);font-size:0.75rem;">None</span>';
-    }
-
-    let caps = [];
-    if(m.reasoning) caps.push('<span class="tag tag-green">Reasoning</span>');
-    if(!caps.length) caps.push('<span style="color:var(--text3);font-size:0.75rem;">Standard</span>');
-
-    return `<tr>
-      <td><strong class="mono" style="color:var(--text1);">${esc(m.name)}</strong></td>
-      <td>${routeInfo}</td>
-      <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
-      <td>${fbInfo}</td>
-      <td>${caps.join(' ')}</td>
-      <td style="text-align:right;white-space:nowrap;">
-        <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(m.provider||'')}', '${esc(m.name)}')">Test</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(m.name)}')">Delete</button>
-      </td>
-    </tr>`;
-  }).join('');
+  if(tb){
+    tb.innerHTML = directs.length
+      ? directs.map(m => modelRowHTML(m)).join('')
+      : '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No active direct models</td></tr>';
+  }
 }
 
 function renderKeys(list){
@@ -4013,7 +4141,7 @@ function renderProviderHubPage(provName){
     <div class="hub-section">
       <div class="hub-header">
         <div class="hub-title">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           <span>Provider Settings &amp; Egress Strategy</span>
         </div>
         <button class="btn btn-sm btn-primary" onclick="saveHubProviderSettings('${esc(p.name)}')">Save Settings</button>
@@ -4182,14 +4310,19 @@ function renderHubKeysList(p, filtered){
         const isChecked = _hubSelectedKeys.has(item.key);
         const testRes = _hubKeyTestResults[p.name + '_' + item.key] || _hubKeyTestResults[p.name + '_' + idx];
 
-        let borderStyle = isChecked ? 'border: 1.5px solid var(--primary);' : 'border: 1px solid var(--border);';
+        let borderStyle = isChecked ? 'border: 1.5px solid var(--accent);' : 'border: 1px solid var(--border);';
         let bgStyle = isChecked ? 'background: rgba(99, 102, 241, 0.05);' : 'background: var(--surface-subtle);';
         let statusBadge = item.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>';
         let testBadge = '';
         let errorDetailBox = '';
 
+        const isKeyTesting = !!(testRes && testRes.status === 'testing');
         if(testRes){
-          if(testRes.status === 'failed'){
+          if(testRes.status === 'testing'){
+            borderStyle = 'border: 1.5px solid var(--accent); border-left: 4px solid var(--accent);';
+            bgStyle = 'background: rgba(99, 102, 241, 0.08);';
+            testBadge = '<span class="test-succ-badge" style="background:var(--accent);color:#fff;"><span class="loading-spinner" style="width:11px;height:11px;border-width:2px;"></span> TESTING...</span>';
+          } else if(testRes.status === 'failed'){
             borderStyle = 'border: 1.5px solid #ef4444; border-left: 4px solid #ef4444;';
             bgStyle = 'background: rgba(239, 68, 68, 0.08); box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);';
             testBadge = '<span class="test-err-badge">❌ GAGAL</span>';
@@ -4220,7 +4353,7 @@ function renderHubKeysList(p, filtered){
                 ${testBadge}
               </div>
               <div style="display:flex;gap:0.35rem;" id="key_actions_${idx}">
-                <button class="btn btn-sm btn-primary" onclick="testHubDirectKey('${esc(p.name)}', '${esc(item.key)}')">Test</button>
+                <button class="btn btn-sm btn-primary" ${isKeyTesting ? 'disabled' : ''} onclick="testHubDirectKey('${esc(p.name)}', '${esc(item.key)}')">${isKeyTesting ? '<span class="loading-spinner" style="width:11px;height:11px;border-width:2px;"></span> Testing...' : 'Test'}</button>
                 <button class="btn btn-sm" onclick="toggleHubKeyDisabled('${esc(p.name)}', '${esc(item.key)}', ${!item.disabled})">${item.disabled ? 'Aktifkan' : 'Disable'}</button>
                 <button class="btn btn-sm" onclick="editHubKeyDirectPrompt('${esc(p.name)}', '${esc(item.key)}')">Edit</button>
                 <button class="btn btn-sm btn-danger" onclick="deleteHubKeyDirect('${esc(p.name)}', '${esc(item.key)}')">Delete</button>
@@ -4499,12 +4632,16 @@ function renderHubModelsTable(p, filtered){
             const isChecked = _hubSelectedModels.has(itemKey);
             const testKey = p.name + '_' + item.upstreamTarget;
             const testRes = _hubModelTestResults[testKey] || _hubModelTestResults[p.name + '_' + item.routeName];
+            const isTesting = !!(testRes && testRes.status === 'testing');
             let rowStyle = isChecked ? 'background: rgba(99, 102, 241, 0.05);' : '';
             let testResultCol = '<span style="color:var(--text3);font-size:0.75rem;">--</span>';
             let errorRow = '';
 
             if (testRes) {
-              if (testRes.status === 'failed') {
+              if (testRes.status === 'testing') {
+                rowStyle = 'background: rgba(99, 102, 241, 0.08) !important;';
+                testResultCol = '<span class="test-succ-badge" style="background:var(--accent);color:#fff;"><span class="loading-spinner" style="width:11px;height:11px;border-width:2px;"></span> TESTING...</span>';
+              } else if (testRes.status === 'failed') {
                 rowStyle = 'background: rgba(239, 68, 68, 0.12) !important;';
                 testResultCol = '<span class="test-err-badge">❌ GAGAL</span>';
                 const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, model: item.upstreamTarget });
@@ -4543,7 +4680,7 @@ function renderHubModelsTable(p, filtered){
                 <td>${item.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}</td>
                 <td>${testResultCol}</td>
                 <td style="text-align:right;white-space:nowrap;">
-                  <button class="btn btn-sm btn-primary" onclick="testHubSingleModel('${esc(p.name)}', '${esc(item.upstreamTarget)}', '${esc(item.routeName)}')">Test</button>
+                  <button class="btn btn-sm btn-primary" ${isTesting ? 'disabled' : ''} onclick="testHubSingleModel('${esc(p.name)}', '${esc(item.upstreamTarget)}', '${esc(item.routeName)}')">${isTesting ? '<span class="loading-spinner" style="width:11px;height:11px;border-width:2px;"></span> Testing...' : 'Test'}</button>
                   <button class="btn btn-sm" onclick="toggleHubModelDisabled('${esc(p.name)}', '${esc(item.routeName)}', '${esc(item.upstreamTarget)}', ${!item.disabled})">${item.disabled?'Enable':'Disable'}</button>
                   <button class="btn btn-sm btn-danger" onclick="deleteHubModel('${esc(p.name)}', '${esc(item.routeName)}', '${esc(item.upstreamTarget)}')">Delete</button>
                 </td>
@@ -4887,6 +5024,10 @@ async function toggleHubKeyDisabled(provName, keyVal, setDisabled){
 
 async function testHubDirectKey(provName, keyVal){
   toast(`Menguji key untuk ${provName}...`,'info');
+  // Loading state: spinner badge + disabled Test button while in flight.
+  _hubKeyTestResults[provName + '_' + keyVal] = { status: 'testing', time: Date.now() };
+  const _kbP = _currentProviders.find(x => x.name === provName);
+  if(_kbP) updateHubKeysViews(_kbP);
   try{
     const r = await api('/admin/diag/test-key', {
       method:'POST',
@@ -5297,6 +5438,12 @@ async function bulkTestHubModels(provName){
 async function testHubSingleModel(provName, upstreamTarget, routeName){
   const testKey = provName + '_' + upstreamTarget;
   toast(`Menguji model ${upstreamTarget}...`, 'info');
+  // Loading state: spinner badge + disabled Test button while in flight.
+  _hubModelTestResults[testKey] = { status: 'testing', time: Date.now() };
+  if(routeName && routeName !== upstreamTarget){
+    _hubModelTestResults[provName + '_' + routeName] = _hubModelTestResults[testKey];
+  }
+  refreshHubModelsList(provName);
   try{
     const r = await api('/admin/diag/test-model', {
       method: 'POST',
@@ -5313,12 +5460,18 @@ async function testHubSingleModel(provName, upstreamTarget, routeName){
       key_number: r.key_number,
       key_masked: r.key_masked,
       attempts: r.attempts,
-      fallback_used: !!r.fallback_used
+      fallback_used: !!r.fallback_used,
+      reasoning_detected: !!r.reasoning_detected
     };
     if(routeName && routeName !== upstreamTarget){
       _hubModelTestResults[provName + '_' + routeName] = _hubModelTestResults[testKey];
     }
     toast(`${upstreamTarget}: ${r.latency_ms}ms [BERFUNGSI]${keyDetail}${fallbackDetail}`, 'success');
+    // Auto-mark reasoning: if the test detected a thinking model, update the
+    // route's feature flag so the Features/Mode column stays accurate.
+    if(r.reasoning_detected && routeName){
+      await autoMarkReasoning(routeName);
+    }
   }catch(e){
     const parsed = parseTestErrorDetails(e, { provider: provName, model: upstreamTarget, targetURL: e.data?.target });
     // If backend tried multiple keys and all failed, surface that info.
@@ -5341,6 +5494,39 @@ async function testHubSingleModel(provName, upstreamTarget, routeName){
   const curP = _currentProviders.find(x => x.name === provName);
   if(curP && document.getElementById('hubModelsList')){
     document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+  }
+}
+
+function refreshHubModelsList(provName){
+  const curP = _currentProviders.find(x => x.name === provName);
+  if(curP && document.getElementById('hubModelsList')){
+    const listEl = document.getElementById('hubModelsList');
+    if(listEl){
+      // Re-render table only (keeps search input + filter select state).
+      const tableContainer = document.getElementById('hubModelsTableContainer');
+      if(tableContainer){
+        updateHubModelsViews(curP);
+      } else {
+        listEl.innerHTML = renderHubModels(curP);
+      }
+    }
+  }
+}
+
+// autoMarkReasoning flips a route's reasoning flag when a test detected a
+// thinking model. Best-effort: failures never break the test result.
+async function autoMarkReasoning(routeName){
+  try{
+    const route = (_currentModels || []).find(m => m.name === routeName);
+    if(!route || route.reasoning) return;
+    await api('/admin/models/' + encodeURIComponent(routeName), {
+      method: 'PUT',
+      body: JSON.stringify({ reasoning: true })
+    });
+    route.reasoning = true;
+    toast(`🧠 ${routeName}: terdeteksi model reasoning — otomatis ditandai Thinking`, 'success');
+  }catch(e){
+    toast(`Deteksi reasoning ${routeName}, tapi gagal auto-update flag: ` + e.message, 'warn');
   }
 }
 
@@ -5848,6 +6034,9 @@ async function runTestModel(){
     }, r.response);
     if (prov) {
       _hubModelTestResults[prov + '_' + model] = { status: 'success', latency: r.latency_ms, key_label: r.key_label, key_number: r.key_number, key_masked: r.key_masked, attempts: r.attempts, fallback_used: !!r.fallback_used };
+    }
+    if(r.reasoning_detected){
+      await autoMarkReasoning(model);
     }
   }catch(e){
     resBox.className = 'full test-res-box test-result-failed';

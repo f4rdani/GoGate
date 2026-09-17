@@ -34,6 +34,66 @@ func setupTestAdmin() *AdminHandler {
 	return NewAdminHandler(ks, cfg.Server.AdminSecret, stats, nil, "", cfg, nil, tunnelMgr, proxyPool)
 }
 
+func TestDetectReasoning(t *testing.T) {
+	// Response evidence wins.
+	if !detectReasoning("plain-model", `{"choices":[{"message":{"content":"ok","reasoning_content":"because"}}]}`) {
+		t.Error("reasoning_content in body must detect")
+	}
+	if !detectReasoning("plain-model", `<think>hmm</thinking>ok`) {
+		t.Error("<think> tag must detect")
+	}
+	if !detectReasoning("plain-model", `{"content":[{"type":"thinking","thinking":"..."}]}`) {
+		t.Error("thinking block must detect")
+	}
+	// Model-ID keywords (mirror cli.isReasoningModelID).
+	for _, id := range []string{"deepseek-r1", "o1-mini", "gpt-oss-120b", "qwen3-32b", "claude-thinking", "qwq-32b"} {
+		if !detectReasoning(id, `{"choices":[{"message":{"content":"ok"}}]}`) {
+			t.Errorf("model id %q must detect", id)
+		}
+	}
+	// Gemini thinks by default — except Gemma and embedding variants.
+	for _, id := range []string{"google/gemini-2.5-flash", "models/gemini-3-flash-preview", "gemini-3.5-flash"} {
+		if !detectReasoning(id, `{"choices":[{"message":{"content":"ok"}}]}`) {
+			t.Errorf("gemini model %q must detect", id)
+		}
+	}
+	for _, id := range []string{"google/gemma-4-26b-a4b-it", "gemini-embedding-001", "text-embedding-3"} {
+		if detectReasoning(id, `{"choices":[{"message":{"content":"ok"}}]}`) {
+			t.Errorf("non-reasoning model %q must not detect", id)
+		}
+	}
+	// Plain model, plain response → false.
+	if detectReasoning("mistral-small-latest", `{"choices":[{"message":{"content":"OK"}}]}`) {
+		t.Error("plain model must not detect")
+	}
+}
+
+func TestDiagTestModelReasoningFlag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"choices":[{"message":{"content":"ok","reasoning_content":"let me think"}}]}`))
+	}))
+	defer srv.Close()
+
+	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "k", "my-reasoner", "openai")
+	if err != nil {
+		t.Fatalf("diag test failed: %v", err)
+	}
+	if text != "ok" || latency < 0 {
+		t.Fatalf("unexpected result: %q %d", text, latency)
+	}
+	if !reasoning {
+		t.Error("reasoning flag must be true")
+	}
+
+	text2, _, reasoning2, err := diagTestModel(nil, srv.URL, "k", "plain", "openai")
+	if err != nil || text2 != "ok" || !reasoning2 {
+		// NOTE: body still carries reasoning_content, so detection stays true
+		// regardless of model id — this asserts body-evidence wins.
+		t.Fatalf("body evidence must win: %q %v %v", text2, reasoning2, err)
+	}
+}
+
 func TestAdminHandler_CheckAuth(t *testing.T) {
 	adm := setupTestAdmin()
 

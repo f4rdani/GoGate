@@ -586,7 +586,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 
 		reqCopy := *req
 		reqCopy.Model = backend.Model
-		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+		slog.Info(fmt.Sprintf("🔀 [COMBO] %s trying backend %d/%d: %s/%s (round-robin)", modelName, attempt+1, total, backend.Provider.Name(), backend.Model))
 
 		resp, backendName, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
 		if err == nil {
@@ -653,6 +653,7 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 			// Try this backend with retry
 			reqCopy := *req
 			reqCopy.Model = backend.Model
+			slog.Info(fmt.Sprintf("🔀 [COMBO] %s trying backend %d/%d: %s/%s (tier %d)", modelName, i+1, len(route.Backends), backend.Provider.Name(), backend.Model, backend.Tier))
 
 		var successResp *models.ChatCompletionResponse
 		successProv := ""
@@ -858,7 +859,7 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 
 			reqCopy := *req
 			reqCopy.Model = backend.Model
-			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+			slog.Info(fmt.Sprintf("🔀 [COMBO] %s trying backend %d/%d: %s/%s (round-robin, stream)", modelName, attempt+1, total, backend.Provider.Name(), backend.Model))
 
 			err := r.executeBackendStream(ctx, backend.Provider, backend.Model, &reqCopy, w, flusher)
 			if err == nil {
@@ -932,6 +933,7 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 
 			reqCopy := *req
 			reqCopy.Model = backend.Model
+			slog.Info(fmt.Sprintf("🔀 [COMBO] %s trying backend %d/%d: %s/%s (tier %d, stream)", modelName, i+1, len(route.Backends), backend.Provider.Name(), backend.Model, backend.Tier))
 
 			err := r.executeBackendStream(ctx, backend.Provider, backend.Model, &reqCopy, w, flusher)
 			if err == nil {

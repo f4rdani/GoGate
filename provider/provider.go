@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -55,6 +56,7 @@ type UpstreamConfigProvider interface {
 // UpstreamKey wraps an API key with circuit-breaking state.
 type UpstreamKey struct {
 	Key           string
+	Index         int          // 0-based position in the provider key list
 	DisabledUntil atomic.Int64 // UnixNano timestamp
 }
 
@@ -238,6 +240,69 @@ func markKeyExhausted(err error) error {
 		pe.KeyExhausted = true
 	}
 	return err
+}
+
+// maskKeyShort renders a masked key fingerprint like "abcd...wxyz".
+func maskKeyShort(k string) string {
+	k = strings.TrimSpace(k)
+	if k == "" {
+		return "-"
+	}
+	if len(k) <= 8 {
+		return "****"
+	}
+	return k[:4] + "..." + k[len(k)-4:]
+}
+
+// keyLabel identifies which upstream credential serves a request, e.g.
+// "#2 abcd...wxyz". Keyless/token auth shows as "token".
+func (b *BaseProvider) keyLabel(key *UpstreamKey) string {
+	if key == nil || strings.TrimSpace(key.Key) == "" {
+		return "token"
+	}
+	if len(b.apiKeys) > 1 && key.Index >= 0 {
+		return fmt.Sprintf("#%d %s", key.Index+1, maskKeyShort(key.Key))
+	}
+	return maskKeyShort(key.Key)
+}
+
+// formatTag describes the wire translation, e.g. "openai→anthropic".
+func (b *BaseProvider) formatTag() string {
+	switch b.providerType {
+	case "anthropic":
+		return "openai→anthropic"
+	case "kiro":
+		return "openai→kiro"
+	default:
+		return "openai→openai"
+	}
+}
+
+// describeChatRequest counts messages and tool definitions for log lines.
+func describeChatRequest(req *models.ChatCompletionRequest) (msgs, tools int) {
+	if req == nil {
+		return 0, 0
+	}
+	msgs = len(req.Messages)
+	if len(req.Tools) > 0 {
+		var arr []json.RawMessage
+		if json.Unmarshal(req.Tools, &arr) == nil {
+			tools = len(arr)
+		}
+	}
+	return msgs, tools
+}
+
+// logAttempt emits one 9router-style request line showing exactly which
+// provider, model, format, mode, and key serve the attempt.
+func (b *BaseProvider) logAttempt(model string, req *models.ChatCompletionRequest, key *UpstreamKey, stream bool) {
+	msgs, tools := describeChatRequest(req)
+	mode := "UNARY"
+	if stream {
+		mode = "STREAM"
+	}
+	slog.Info(fmt.Sprintf("▶ POST %s/%s · FMT:%s · %s · %d MSG · %d TOOL · KEY:%s",
+		b.name, model, b.formatTag(), mode, msgs, tools, b.keyLabel(key)))
 }
 
 // IsSaturationError reports whether err is a per-provider concurrency
@@ -487,7 +552,7 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 
 	keys := make([]*UpstreamKey, len(cfg.APIKeys))
 	for i, k := range cfg.APIKeys {
-		keys[i] = &UpstreamKey{Key: k}
+		keys[i] = &UpstreamKey{Key: k, Index: i}
 	}
 
 	if cfg.Type == "cloudflare" {

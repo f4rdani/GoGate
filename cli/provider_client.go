@@ -274,8 +274,12 @@ func testAPIKey(baseURL, apiKey, providerType string, candidates []string) (bool
 }
 
 // isReasoningModelID checks if the model ID matches common reasoning keywords.
+// Gemini (2.5/3.x) thinks by default — except Gemma and embedding models.
 func isReasoningModelID(modelID string) bool {
 	m := strings.ToLower(modelID)
+	if strings.Contains(m, "gemini") && !strings.Contains(m, "gemma") && !strings.Contains(m, "embed") {
+		return true
+	}
 	return strings.Contains(m, "r1") ||
 		strings.Contains(m, "reasoning") ||
 		strings.Contains(m, "o1") ||

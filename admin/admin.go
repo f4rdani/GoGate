@@ -1330,8 +1330,38 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) 
 	return nil, fmt.Errorf("unrecognized response format")
 }
 
+// detectReasoning reports whether a model looks like a reasoning/thinking model,
+// from response evidence (reasoning blocks in the raw payload) or well-known
+// model-ID keywords (mirrors cli.isReasoningModelID).
+func detectReasoning(modelID, rawBody string) bool {
+	lowerBody := strings.ToLower(rawBody)
+	if strings.Contains(lowerBody, `"reasoning_content"`) ||
+		strings.Contains(lowerBody, `"reasoning":`) ||
+		strings.Contains(lowerBody, "<think") ||
+		strings.Contains(lowerBody, `"type":"thinking"`) ||
+		strings.Contains(lowerBody, `"thinking":`) {
+		return true
+	}
+	m := strings.ToLower(modelID)
+	// Gemini (2.5/3.x) thinks by default — except Gemma and embedding models.
+	if strings.Contains(m, "gemini") && !strings.Contains(m, "gemma") && !strings.Contains(m, "embed") {
+		return true
+	}
+	return strings.Contains(m, "r1") ||
+		strings.Contains(m, "reasoning") ||
+		strings.Contains(m, "o1") ||
+		strings.Contains(m, "o3") ||
+		strings.Contains(m, "thinking") ||
+		strings.Contains(m, "qwen3") ||
+		strings.Contains(m, "qwq") ||
+		strings.Contains(m, "gpt-oss") ||
+		strings.Contains(m, "command-a") ||
+		strings.Contains(m, "north-mini")
+}
+
 // diagTestModel sends a minimal chat completion request to verify the model works.
-func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType string) (string, int64, error) {
+// Returns the response text, latency, whether reasoning was detected, and error.
+func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType string) (string, int64, bool, error) {
 	var url string
 	var reqBody []byte
 	headers := make(map[string]string)
@@ -1359,7 +1389,7 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -1371,29 +1401,30 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		return "", latency, err
+		return "", latency, false, err
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", latency, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)[:min(len(respBody), 300)])
+		return "", latency, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)[:min(len(respBody), 300)])
 	}
+	reasoning := detectReasoning(modelID, string(respBody))
 	if providerType == "anthropic" {
 		var r struct{ Content []struct{ Type, Text string } }
 		json.Unmarshal(respBody, &r)
 		for _, c := range r.Content {
 			if c.Type == "text" {
-				return c.Text, latency, nil
+				return c.Text, latency, reasoning, nil
 			}
 		}
 	} else {
 		var r struct{ Choices []struct{ Message struct{ Content string } } }
 		json.Unmarshal(respBody, &r)
 		if len(r.Choices) > 0 {
-			return r.Choices[0].Message.Content, latency, nil
+			return r.Choices[0].Message.Content, latency, reasoning, nil
 		}
 	}
-	return "(empty)", latency, nil
+	return "(empty)", latency, reasoning, nil
 }
 
 // maskDiagKey returns a masked representation of an API key for display (e.g. "abcd1234...wxyz").
@@ -1575,12 +1606,14 @@ func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request,
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	start := time.Now()
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → kiro rotation", providerName, model))
 	resp, err := p.ChatCompletion(ctx, &models.ChatCompletionRequest{
 		Model:    model,
 		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"Say OK"`)}},
 	})
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
+		slog.Warn("diagnostic kiro model test failed", "provider", providerName, "model", model, "error", err)
 		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
 			"provider": providerName, "model": model, "type": "kiro",
 			"target": "kiro-generateAssistantResponse", "latency_ms": latency,
@@ -1591,12 +1624,14 @@ func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request,
 	if len(resp.Choices) > 0 && resp.Choices[0].Message != nil {
 		text = resp.Choices[0].Message.ContentString()
 	}
+	slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via kiro rotation · %dms", providerName, model, latency))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok": true, "response": text, "latency_ms": latency, "status": "OK",
 		"provider": providerName, "model": model, "type": "kiro",
-		"target":    "kiro-generateAssistantResponse",
-		"key_label": "auto (kiro rotation)",
+		"target":              "kiro-generateAssistantResponse",
+		"key_label":           "auto (kiro rotation)",
+		"reasoning_detected":  detectReasoning(model, text),
 	})
 }
 
@@ -1781,19 +1816,25 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	}
 	failures := make([]keyFailure, 0, len(candidates))
 	var lastLatency int64
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → trying %d key(s)", req.Provider, req.Model, len(candidates)))
 	for i, cand := range candidates {
-		response, latency, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type)
+		keyTag := "custom key"
+		if cand.Index >= 0 {
+			keyTag = fmt.Sprintf("key #%d (%s)", cand.Index+1, maskDiagKey(cand.Key))
+		}
+		response, latency, reasoning, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type)
 		if err == nil {
 			resp := map[string]interface{}{
-				"ok":         true,
-				"response":   response,
-				"latency_ms": latency,
-				"status":     "OK",
-				"provider":   req.Provider,
-				"model":      req.Model,
-				"target":     targetURL,
-				"attempts":   i + 1,
-				"key_count":  len(candidates),
+				"ok":                 true,
+				"response":           response,
+				"latency_ms":         latency,
+				"status":             "OK",
+				"provider":           req.Provider,
+				"model":              req.Model,
+				"target":             targetURL,
+				"attempts":           i + 1,
+				"key_count":          len(candidates),
+				"reasoning_detected": reasoning,
 			}
 			if cand.Index >= 0 {
 				resp["key_index"] = cand.Index
@@ -1805,6 +1846,7 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 			if len(failures) > 0 {
 				resp["failed_attempts"] = failures
 			}
+			slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via %s · %dms", req.Provider, req.Model, keyTag, latency))
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 			return
@@ -1815,6 +1857,8 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 			idx = cand.Index
 		}
 		failures = append(failures, keyFailure{KeyIndex: idx, KeyMasked: maskDiagKey(cand.Key), Error: err.Error()})
+		slog.Warn("diagnostic model test attempt failed",
+			"provider", req.Provider, "model", req.Model, "key", keyTag, "error", err)
 		if i < len(candidates)-1 {
 			if !isDiagFallbackRetryable(err) {
 				break

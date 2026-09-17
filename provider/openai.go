@@ -90,17 +90,10 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		keyMasked := "-"
-		if len(apiKey) > 8 {
-			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-		} else if len(apiKey) > 0 {
-			keyMasked = "****"
-		}
-		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
-		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+		o.logAttempt(req.Model, req, keyObj, false)
 
+		start := time.Now()
 		resp, err := o.client.Do(httpReq)
-		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
 		if err != nil {
 			o.reportEgress(egressProxy, true)
 			// A dead egress proxy must not sink the request while other
@@ -138,6 +131,12 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			return nil, fmt.Errorf("unmarshal response: %w", err)
 		}
 
+		if chatResp.Usage != nil {
+			slog.Info(fmt.Sprintf("✓ DONE %s/%s · IN=%d OUT=%d · %dms", o.name, req.Model,
+				chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, time.Since(start).Milliseconds()))
+		} else {
+			slog.Info(fmt.Sprintf("✓ DONE %s/%s · %dms", o.name, req.Model, time.Since(start).Milliseconds()))
+		}
 		return &chatResp, nil
 	}
 
@@ -168,6 +167,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 
 	var lastErr error
 	var resp *http.Response
+	var streamStart time.Time
 	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
 		keyObj, keyErr := o.NextAPIKey()
 		if keyErr != nil {
@@ -213,17 +213,10 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		keyMasked := "-"
-		if len(apiKey) > 8 {
-			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-		} else if len(apiKey) > 0 {
-			keyMasked = "****"
-		}
-		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
-		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+		o.logAttempt(req.Model, req, keyObj, true)
 
+		streamStart = time.Now()
 		resp, err = o.client.Do(httpReq)
-		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
 		if err != nil {
 			resp = nil
 			o.reportEgress(egressProxy, true)
@@ -289,6 +282,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		}
 	}
 
+	slog.Info(fmt.Sprintf("■ STREAM-END %s/%s · %dms", o.name, req.Model, time.Since(streamStart).Milliseconds()))
 	return nil
 }
 
@@ -347,17 +341,11 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		keyMasked := "-"
-		if len(apiKey) > 8 {
-			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-		} else if len(apiKey) > 0 {
-			keyMasked = "****"
-		}
-		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", o.name, keyMasked, attempt+1))
-		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", o.name, req.Model))
+		slog.Info(fmt.Sprintf("▶ POST %s/%s · FMT:%s · UNARY · KEY:%s",
+			o.name, req.Model, o.formatTag(), o.keyLabel(keyObj)))
 
+		start := time.Now()
 		resp, err := o.client.Do(httpReq)
-		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", o.name, req.Model))
 		if err != nil {
 			o.reportEgress(egressProxy, true)
 			if egressProxy != "" && ctx.Err() == nil {
@@ -393,6 +381,8 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 			return nil, fmt.Errorf("unmarshal response: %w", err)
 		}
 
+		slog.Info(fmt.Sprintf("✓ DONE %s/%s · IN=%d · %dms", o.name, req.Model,
+			embedResp.Usage.PromptTokens, time.Since(start).Milliseconds()))
 		return &embedResp, nil
 	}
 

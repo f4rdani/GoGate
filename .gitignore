@@ -13,8 +13,9 @@ cloudflared.exe.tmp
 config.yaml
 config.yml
 
-# Logs
+# Logs & runtime state
 *.log
+usage.json
 
 # Personal/Agent/IDE folders
 .agents/

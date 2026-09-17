@@ -360,17 +360,10 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *models.Chat
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		keyMasked := "-"
-		if len(apiKey) > 8 {
-			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-		} else if len(apiKey) > 0 {
-			keyMasked = "****"
-		}
-		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", a.name, keyMasked, attempt+1))
-		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
+		a.logAttempt(req.Model, req, keyObj, false)
 
+		start := time.Now()
 		resp, err := a.client.Do(httpReq)
-		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
 		if err != nil {
 			a.reportEgress(egressProxy, true)
 			if egressProxy != "" && ctx.Err() == nil {
@@ -406,7 +399,14 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *models.Chat
 			return nil, fmt.Errorf("unmarshal response: %w", err)
 		}
 
-		return a.translateResponse(&anthResp), nil
+		translated := a.translateResponse(&anthResp)
+		if translated.Usage != nil {
+			slog.Info(fmt.Sprintf("✓ DONE %s/%s · IN=%d OUT=%d · %dms", a.name, req.Model,
+				translated.Usage.PromptTokens, translated.Usage.CompletionTokens, time.Since(start).Milliseconds()))
+		} else {
+			slog.Info(fmt.Sprintf("✓ DONE %s/%s · %dms", a.name, req.Model, time.Since(start).Milliseconds()))
+		}
+		return translated, nil
 	}
 
 	if lastErr != nil {
@@ -433,6 +433,7 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 
 	var lastErr error
 	var resp *http.Response
+	var streamStart time.Time
 	for attempt := 0; attempt < a.keyAttempts(); attempt++ {
 		egressProxy := a.checkoutEgress()
 		attemptCtx := ctx
@@ -461,17 +462,10 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		keyMasked := "-"
-		if len(apiKey) > 8 {
-			keyMasked = apiKey[:4] + "..." + apiKey[len(apiKey)-4:]
-		} else if len(apiKey) > 0 {
-			keyMasked = "****"
-		}
-		slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s key: %s (attempt %d)", a.name, keyMasked, attempt+1))
-		slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s", a.name, req.Model))
+		a.logAttempt(req.Model, req, keyObj, true)
 
+		streamStart = time.Now()
 		resp, err = a.client.Do(httpReq)
-		slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", a.name, req.Model))
 		if err != nil {
 			resp = nil
 			a.reportEgress(egressProxy, true)
@@ -482,6 +476,7 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 			return fmt.Errorf("do request: %w", err)
 		}
 		a.reportEgress(egressProxy, false)
+		streamStart = time.Now()
 
 		// Check status BEFORE writing to ResponseWriter
 		if resp.StatusCode != http.StatusOK {
@@ -705,7 +700,11 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 		}
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	slog.Info(fmt.Sprintf("■ STREAM-END %s/%s · %dms", a.name, req.Model, time.Since(streamStart).Milliseconds()))
+	return nil
 }
 
 // Embeddings is not supported by Anthropic.
