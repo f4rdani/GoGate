@@ -1701,6 +1701,11 @@ input:focus, select:focus, textarea:focus {
         <span>Providers</span>
         <span class="nav-count" id="navProvCount">0</span>
       </a>
+      <a class="nav-item" data-view="managehub" id="navManageHub" onclick="openProviderHub()" title="Manage provider keys, models, routes & egress">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        <span>Provider Hub</span>
+        <span class="nav-badge-pill" id="navHubBadge" style="background:var(--primary);color:#fff;display:none;max-width:85px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Hub</span>
+      </a>
       <a class="nav-item" data-view="models" onclick="switchView('models')">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         <span>Models &amp; Combos</span>
@@ -2001,6 +2006,13 @@ input:focus, select:focus, textarea:focus {
               </tbody>
             </table>
           </div>
+        </div>
+      </section>
+
+      <!-- ================= 2B. MANAGE HUB VIEW (DEDICATED FULL PAGE) ================= -->
+      <section class="view-panel" id="view-managehub">
+        <div id="manageHubPageContainer">
+          <!-- Populated dynamically by renderProviderHubPage() -->
         </div>
       </section>
 
@@ -2883,9 +2895,12 @@ function updateThemeUI(theme){
 }
 
 /* ===== Client-Side View Navigation ===== */
+let _activeHubProvider = '';
+
 const viewTitles = {
   overview: 'Overview',
   providers: 'Upstream Providers',
+  managehub: 'Provider Hub',
   models: 'Models & Combos',
   keys: 'API Keys & CLI',
   tokensaver: 'Token Saver (RTK)',
@@ -2912,12 +2927,33 @@ function switchView(viewName, updateHash = true){
   });
 
   const crumb = document.getElementById('viewBreadcrumb');
-  if(crumb) crumb.textContent = viewTitles[viewName];
+  if(crumb){
+    if(viewName === 'managehub'){
+      const pLabel = _activeHubProvider || 'Manage Hub';
+      crumb.innerHTML = `<span class="crumb-root" style="cursor:pointer;" onclick="switchView('providers')">Providers</span> <span class="crumb-sep">/</span> <span class="crumb-current">${esc(pLabel)} Hub</span>`;
+    } else {
+      crumb.innerHTML = `<span class="crumb-root">GoGate</span> <span class="crumb-sep">/</span> <span class="crumb-current">${esc(viewTitles[viewName])}</span>`;
+    }
+  }
 
   toggleMobileSidebar(false);
 
-  if(updateHash && window.location.hash.replace('#','') !== viewName){
-    window.location.hash = viewName;
+  if(viewName === 'managehub'){
+    if(!_activeHubProvider && _currentProviders && _currentProviders.length){
+      _activeHubProvider = _currentProviders[0].name;
+    }
+    if(_activeHubProvider && document.getElementById('manageHubPageContainer')){
+      renderProviderHubPage(_activeHubProvider);
+    }
+  }
+
+  if(updateHash){
+    const targetHash = (viewName === 'managehub' && _activeHubProvider)
+      ? 'managehub?provider=' + encodeURIComponent(_activeHubProvider)
+      : viewName;
+    if(window.location.hash.replace('#','') !== targetHash){
+      window.location.hash = targetHash;
+    }
   }
   if(viewName === 'logs' && _consoleAutoScroll){
     const b = document.getElementById('consoleBody');
@@ -3116,6 +3152,10 @@ async function fetchAll(){
     renderUsage(usage);
     renderCache(usage.cache||{});
     renderConfig(config);
+
+    if(_currentView === 'managehub' && _activeHubProvider && document.getElementById('manageHubPageContainer')){
+      renderProviderHubPage(_activeHubProvider);
+    }
 
     const dot = document.getElementById('connDot');
     if(dot) dot.className = 'status-dot ok';
@@ -3657,10 +3697,16 @@ async function deleteProvider(name){
   }catch(e){toast('Error: '+e.message,'error');}
 }
 
-function openProviderHub(provName){
-  const p = _currentProviders.find(x => x.name === provName);
-  if(!p) return;
+function openProviderHub(provName, updateHash = true){
+  if(!provName && _activeHubProvider){
+    provName = _activeHubProvider;
+  }
+  if(!provName && _currentProviders && _currentProviders.length){
+    provName = _currentProviders[0].name;
+  }
+  _activeHubProvider = provName || '';
 
+  // Reset search and filters on provider switch
   _revealedKeys = {};
   _hubModelSearchQuery = '';
   _hubModelFilter = 'all';
@@ -3669,27 +3715,91 @@ function openProviderHub(provName){
   _hubKeyFilter = 'all';
   _hubSelectedKeys.clear();
 
+  closeModal();
+  renderProviderHubPage(_activeHubProvider);
+  switchView('managehub', false);
+
+  if(updateHash){
+    const targetHash = _activeHubProvider ? 'managehub?provider=' + encodeURIComponent(_activeHubProvider) : 'managehub';
+    if(window.location.hash.replace('#','') !== targetHash){
+      window.location.hash = targetHash;
+    }
+  }
+}
+
+function renderProviderHubPage(provName){
+  const container = document.getElementById('manageHubPageContainer');
+  if(!container) return;
+
+  if(!_currentProviders || !_currentProviders.length){
+    container.innerHTML = `
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:3rem 1.5rem;text-align:center;">
+        <div style="font-size:1.15rem;font-weight:700;color:var(--text1);margin-bottom:0.5rem;">Belum Ada Provider Terdaftar</div>
+        <p style="font-size:0.85rem;color:var(--text3);margin-bottom:1.5rem;max-width:480px;margin-left:auto;margin-right:auto;">
+          Tambahkan provider AI upstream pertama Anda untuk mengelola hub model, API key, dan egress routing proxy.
+        </p>
+        <button class="btn btn-primary" onclick="showAddProvider()">+ Add Provider</button>
+      </div>
+    `;
+    return;
+  }
+
+  let p = _currentProviders.find(x => x.name === provName);
+  if(!p){
+    p = _currentProviders[0];
+  }
+  if(!p) return;
+  _activeHubProvider = p.name;
+
   const isFreeProxy = p.proxy_url === 'auto' || p.proxy_url === 'pool';
   const isRelay = !isFreeProxy && !!p.relay_url;
   const isCustom = !isFreeProxy && !isRelay && !!p.proxy_url;
   const isDirect = !isFreeProxy && !isRelay && !isCustom;
   _hubEgressMode = isFreeProxy ? 'pool' : isRelay ? 'relay' : isCustom ? 'custom' : 'direct';
 
+  const navBadge = document.getElementById('navHubBadge');
+  if(navBadge){
+    navBadge.textContent = p.name;
+    navBadge.style.display = 'inline-block';
+  }
+
+  const crumb = document.getElementById('viewBreadcrumb');
+  if(crumb && _currentView === 'managehub'){
+    crumb.innerHTML = `<span class="crumb-root" style="cursor:pointer;" onclick="switchView('providers')">Providers</span> <span class="crumb-sep">/</span> <span class="crumb-current">${esc(p.name)} Hub</span>`;
+  }
+
   const html = `
     <input type="hidden" id="hub_provider_name" value="${esc(p.name)}">
     
-    <!-- Top Status Banner -->
-    <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface-subtle);padding:0.75rem 1rem;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem;">
-      <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+    <!-- Top Status & Navigation Banner -->
+    <div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);padding:0.9rem 1.25rem;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:1.25rem;flex-wrap:wrap;gap:0.75rem;box-shadow:var(--shadow-sm);">
+      <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+        <button class="btn btn-sm" onclick="switchView('providers')" title="Kembali ke Daftar Providers" style="display:flex;align-items:center;gap:0.4rem;font-weight:600;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          <span>Providers</span>
+        </button>
+        <div style="height:22px;width:1px;background:var(--border);"></div>
+        
+        <!-- Provider Switcher Dropdown -->
+        <div style="display:flex;align-items:center;gap:0.45rem;">
+          <span style="font-size:0.75rem;color:var(--text3);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Provider Hub:</span>
+          <select id="hubProviderSwitcher" onchange="openProviderHub(this.value)" style="padding:0.35rem 0.65rem;font-weight:700;font-size:0.88rem;color:var(--text1);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;">
+            ${_currentProviders.map(pr => `<option value="${esc(pr.name)}" ${pr.name===p.name?'selected':''}>${esc(pr.name)} (${esc(pr.type)} &bull; Tier ${pr.tier})</option>`).join('')}
+          </select>
+        </div>
+
         <span class="health-dot ${p.disabled ? 'disabled' : p.healthy ? 'up' : 'down'}" style="width:10px;height:10px;"></span>
-        <span style="font-size:1.15rem;font-weight:700;color:var(--text1);">${esc(p.name)}</span>
         <span class="tag tag-blue">${esc(p.type)}</span>
         <span class="tag ${p.tier===1?'tag-green':p.tier===2?'tag-orange':'tag-purple'}">Tier ${p.tier}</span>
         ${p.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}
       </div>
-      <div style="display:flex;align-items:center;gap:0.6rem;">
+      <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
         <button class="toggle-btn ${p.disabled ? 'off' : 'on'}" onclick="toggleProviderStatus('${esc(p.name)}', ${!p.disabled})">
-          ${p.disabled ? 'Turn ON' : 'Turn OFF'}
+          ${p.disabled ? 'Turn ON Provider' : 'Turn OFF Provider'}
+        </button>
+        <button class="btn btn-primary" onclick="saveHubProviderSettings('${esc(p.name)}')">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+          Save Settings
         </button>
       </div>
     </div>
@@ -3697,7 +3807,10 @@ function openProviderHub(provName){
     <!-- 1. Settings & Egress -->
     <div class="hub-section">
       <div class="hub-header">
-        <div class="hub-title">Provider Settings &amp; Egress Strategy</div>
+        <div class="hub-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>Provider Settings &amp; Egress Strategy</span>
+        </div>
         <button class="btn btn-sm btn-primary" onclick="saveHubProviderSettings('${esc(p.name)}')">Save Settings</button>
       </div>
       <div class="form-grid">
@@ -3707,9 +3820,9 @@ function openProviderHub(provName){
       </div>
 
       <!-- Egress Strategy Switcher -->
-      <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:0.75rem 0.85rem; margin-top:0.75rem;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.6rem; flex-wrap:wrap; gap:0.4rem;">
-          <div style="font-size:0.8rem; font-weight:700; color:var(--text1);">Proxy / Egress Routing Mode</div>
+      <div style="background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:0.85rem 1rem; margin-top:0.85rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.65rem; flex-wrap:wrap; gap:0.4rem;">
+          <div style="font-size:0.82rem; font-weight:700; color:var(--text1);">Proxy / Egress Routing Mode</div>
           <div id="hubActiveStrategyBadge">
             ${isFreeProxy ? '<span class="tag tag-green">Free Rotating Proxy Pool</span>' : isRelay ? '<span class="tag tag-purple">Cloudflare Relay</span>' : isCustom ? '<span class="tag tag-blue">Custom Proxy</span>' : '<span class="tag tag-gray">Direct Connection</span>'}
           </div>
@@ -3723,13 +3836,13 @@ function openProviderHub(provName){
         </div>
 
         <div id="hubEgressConfigFields">
-          <div id="hubFieldDirect" style="display:${isDirect ? 'block' : 'none'}; font-size:0.76rem; color:var(--text3);">Sends requests directly from server IP without proxying.</div>
-          <div id="hubFieldPool" style="display:${isFreeProxy ? 'block' : 'none'}; font-size:0.76rem; color:var(--green);">Automatically routes requests through healthy free rotating public proxies.</div>
+          <div id="hubFieldDirect" style="display:${isDirect ? 'block' : 'none'}; font-size:0.78rem; color:var(--text3);">Sends requests directly from server IP without proxying.</div>
+          <div id="hubFieldPool" style="display:${isFreeProxy ? 'block' : 'none'}; font-size:0.78rem; color:var(--green);">Automatically routes requests through healthy free rotating public proxies.</div>
           <div id="hubFieldRelay" style="display:${isRelay ? 'block' : 'none'};">
-            <label style="font-size:0.75rem;">Worker Relay URL<input id="hub_relay_url" placeholder="https://my-relay.workers.dev" value="${esc(p.relay_url||'')}"></label>
+            <label style="font-size:0.78rem;">Worker Relay URL<input id="hub_relay_url" placeholder="https://my-relay.workers.dev" value="${esc(p.relay_url||'')}"></label>
           </div>
           <div id="hubFieldCustom" style="display:${isCustom ? 'block' : 'none'};">
-            <label style="font-size:0.75rem;">Custom Proxy URL<input id="hub_custom_proxy" placeholder="http://user:pass@host:port" value="${esc(isCustom ? (p.proxy_url||'') : '')}"></label>
+            <label style="font-size:0.78rem;">Custom Proxy URL<input id="hub_custom_proxy" placeholder="http://user:pass@host:port" value="${esc(isCustom ? (p.proxy_url||'') : '')}"></label>
           </div>
         </div>
       </div>
@@ -3738,7 +3851,10 @@ function openProviderHub(provName){
     <!-- 2. API Keys Rotation -->
     <div class="hub-section">
       <div class="hub-header">
-        <div class="hub-title" id="hubKeysCountTitle">Upstream API Keys (${getProviderKeyEntries(p).length})</div>
+        <div class="hub-title" id="hubKeysCountTitle">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><path d="M21 2l-2 2m-1.5 1.5L14 9M3 21l8-8m0 0l4 4-2 2-2-2-4 4"/></svg>
+          <span>Upstream API Keys (${getProviderKeyEntries(p).length})</span>
+        </div>
         <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
           <button class="btn btn-sm btn-primary" onclick="showAddKeyPrompt('${esc(p.name)}')">+ Add Key</button>
           <button class="btn btn-sm" onclick="testAllProviderKeys('${esc(p.name)}')">Test All Keys</button>
@@ -3750,7 +3866,10 @@ function openProviderHub(provName){
     <!-- 3. Models List -->
     <div class="hub-section">
       <div class="hub-header">
-        <div class="hub-title" id="hubModelsCountTitle">Upstream Models &amp; Routes (${getProviderModelEntries(p).length})</div>
+        <div class="hub-title" id="hubModelsCountTitle">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Upstream Models &amp; Routes (${getProviderModelEntries(p).length})</span>
+        </div>
         <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
           <button class="btn btn-sm btn-primary" onclick="showAddHubModelModal('${esc(p.name)}')">+ Add Model</button>
           <button class="btn btn-sm" onclick="showSyncModelsModal('${esc(p.name)}')">Sync from API</button>
@@ -3761,7 +3880,7 @@ function openProviderHub(provName){
     </div>
   `;
 
-  openModal(`Provider Hub: ${p.name}`, html, null, 'modal-xl');
+  container.innerHTML = html;
 }
 
 function getProviderKeyEntries(p){
@@ -5798,17 +5917,32 @@ function downloadConsoleLogs(){
 (async function init(){
   initTheme();
 
-  // Route by hash
-  const initialHash = window.location.hash.replace('#','');
-  if(initialHash && viewTitles[initialHash]){
-    switchView(initialHash, false);
-  } else {
-    switchView('overview', false);
+  function resolveHashRoute(hashStr){
+    const h = (hashStr || '').replace('#','').trim();
+    if(h.startsWith('managehub')){
+      let prov = '';
+      if(h.includes('?provider=')){
+        prov = decodeURIComponent(h.split('?provider=')[1].split('&')[0]);
+      } else if(h.includes('/')){
+        prov = decodeURIComponent(h.split('/')[1]);
+      } else if(h.includes(':')){
+        prov = decodeURIComponent(h.split(':')[1]);
+      }
+      openProviderHub(prov, false);
+      return;
+    }
+    if(h && viewTitles[h]){
+      switchView(h, false);
+    } else {
+      switchView('overview', false);
+    }
   }
 
+  // Route by hash
+  resolveHashRoute(window.location.hash);
+
   window.addEventListener('hashchange', () => {
-    const h = window.location.hash.replace('#','');
-    if(h && viewTitles[h]) switchView(h, false);
+    resolveHashRoute(window.location.hash);
   });
 
     // Setup login keyboard Enter listener
