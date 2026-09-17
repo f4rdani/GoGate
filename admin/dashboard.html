@@ -3611,18 +3611,27 @@ async function submitAddProvider(){
   const cf_acc=document.getElementById('mp_cf_acc')?document.getElementById('mp_cf_acc').value.trim():'';
   const api_keys=document.getElementById('mp_keys').value.split('\n').map(k=>k.trim()).filter(Boolean);
   const modelLines=document.getElementById('mp_models').value.split('\n').map(m=>m.trim()).filter(Boolean);
-  const models=modelLines.map(line=>{
+  const upstreamModels=[];
+  const routesToCreate=[];
+  modelLines.forEach(line=>{
     const parts=line.split(',');
-    return {name:parts[0].trim(),model:(parts[1]||parts[0]).trim()};
+    const routeName=parts[0].trim();
+    const upstream=(parts[1]||parts[0]).trim();
+    if(upstream && !upstreamModels.includes(upstream)) upstreamModels.push(upstream);
+    if(routeName) routesToCreate.push({name:routeName, provider:name, model:upstream});
   });
   if(!name){toast('Provider name is required','error');return;}
   try{
-    await api('/admin/providers',{method:'POST',body:JSON.stringify({name,type,base_url,api_keys,models,tier,account_id:cf_acc})});
+    await api('/admin/providers',{method:'POST',body:JSON.stringify({name,type,base_url,api_keys,models:upstreamModels,tier,account_id:cf_acc})});
+    for(const r of routesToCreate){
+      try{ await api('/admin/models',{method:'POST',body:JSON.stringify(r)}); }catch(_){}
+    }
     closeModal();
     toast('Provider added: '+name,'success');
     fetchAll();
   }catch(e){toast('Error: '+e.message,'error');}
 }
+
 
 async function toggleProviderStatus(name, disable){
   try{
@@ -3727,9 +3736,10 @@ function openProviderHub(provName){
     <!-- 3. Models List -->
     <div class="hub-section">
       <div class="hub-header">
-        <div class="hub-title">Upstream Models (${(p.models||[]).length})</div>
-        <div style="display:flex; gap:0.4rem;">
-          <button class="btn btn-sm btn-primary" onclick="showAddModelPrompt('${esc(p.name)}')">+ Add Model</button>
+        <div class="hub-title" id="hubModelsCountTitle">Upstream Models &amp; Routes (${getProviderModelEntries(p).length})</div>
+        <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+          <button class="btn btn-sm btn-primary" onclick="showAddHubModelModal('${esc(p.name)}')">+ Add Model</button>
+          <button class="btn btn-sm" onclick="showSyncModelsModal('${esc(p.name)}')">Sync from API</button>
           <button class="btn btn-sm" onclick="testAllProviderModels('${esc(p.name)}')">Test All Models</button>
         </div>
       </div>
@@ -3801,19 +3811,75 @@ function toggleKeyReveal(i){
   if(p) document.getElementById('hubKeysList').innerHTML = renderHubKeys(p);
 }
 
+function getProviderModelEntries(p){
+  if(!p) return [];
+  const rawModels = (p.models || []).map(m => {
+    if(typeof m === 'string') return m.trim();
+    if(m && typeof m === 'object') return (m.model || m.name || '').trim();
+    return '';
+  }).filter(Boolean);
+
+  const directRoutes = (_currentModels || []).filter(m => m.provider === p.name);
+  const entries = [];
+  const handledUpstream = new Set();
+  const handledRoutes = new Set();
+
+  for(const r of directRoutes){
+    const upstreamTarget = r.model || r.name;
+    entries.push({
+      routeName: r.name,
+      upstreamTarget: upstreamTarget,
+      isExplicitRoute: true,
+      reasoning: !!r.reasoning,
+      vision: !!r.vision,
+      disabled: !!r.disabled,
+      fallbacks: r.fallbacks || [],
+      raw: r
+    });
+    handledRoutes.add(r.name);
+    handledUpstream.add(upstreamTarget);
+  }
+
+  for(const mId of rawModels){
+    if(!handledUpstream.has(mId) && !handledRoutes.has(mId)){
+      entries.push({
+        routeName: mId,
+        upstreamTarget: mId,
+        isExplicitRoute: false,
+        reasoning: false,
+        vision: false,
+        disabled: false,
+        fallbacks: [],
+        raw: null
+      });
+      handledUpstream.add(mId);
+    }
+  }
+
+  return entries;
+}
+
 function renderHubModels(p){
-  const models = p.models || [];
-  if(!models.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.5rem 0;">No models defined for this provider.</div>';
+  const entries = getProviderModelEntries(p);
+  if(!entries.length) return '<div style="font-size:0.8rem;color:var(--text3);padding:0.75rem 0;">No upstream models or routes registered for this provider. Click <strong>+ Add Model</strong> or <strong>Sync from API</strong> to import.</div>';
 
   return `
-    <div class="table-wrap" style="border-radius:var(--radius);">
+    <div class="table-wrap" style="border-radius:var(--radius);overflow-x:auto;">
       <table>
         <thead>
-          <tr><th>Route Name</th><th>Upstream Target</th><th>Status</th><th>Hasil Test</th><th style="text-align:right;">Actions</th></tr>
+          <tr>
+            <th>Route Name</th>
+            <th>Upstream Target</th>
+            <th>Features / Mode</th>
+            <th>Status</th>
+            <th>Hasil Test</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
         </thead>
         <tbody>
-          ${models.map(m => {
-            const testRes = _hubModelTestResults[p.name + '_' + m.name];
+          ${entries.map(item => {
+            const testKey = p.name + '_' + item.upstreamTarget;
+            const testRes = _hubModelTestResults[testKey] || _hubModelTestResults[p.name + '_' + item.routeName];
             let rowStyle = '';
             let testResultCol = '<span style="color:var(--text3);font-size:0.75rem;">--</span>';
             let errorRow = '';
@@ -3822,10 +3888,10 @@ function renderHubModels(p){
               if (testRes.status === 'failed') {
                 rowStyle = 'background: rgba(239, 68, 68, 0.12) !important;';
                 testResultCol = '<span class="test-err-badge">❌ GAGAL</span>';
-                const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, model: m.name });
+                const parsed = testRes.parsed || parseTestErrorDetails({ message: testRes.raw || testRes.error }, { provider: p.name, model: item.upstreamTarget });
                 errorRow = `
                   <tr style="background: rgba(239, 68, 68, 0.08) !important;">
-                    <td colspan="5" style="padding: 0.45rem 0.75rem; font-size: 0.75rem; border-top: 1px dashed rgba(239,68,68,0.35);">
+                    <td colspan="6" style="padding: 0.45rem 0.75rem; font-size: 0.75rem; border-top: 1px dashed rgba(239,68,68,0.35);">
                       <div style="color:var(--red);">
                         <strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong>
                       </div>
@@ -3840,16 +3906,22 @@ function renderHubModels(p){
               }
             }
 
+            const badges = [];
+            if (item.reasoning) badges.push('<span class="tag tag-purple">🧠 Thinking</span>');
+            if (item.vision) badges.push('<span class="tag tag-blue">👁️ Vision</span>');
+            if (!item.isExplicitRoute) badges.push('<span class="tag tag-gray" title="Auto-routed directly from provider models list">Auto-Route</span>');
+
             return `
               <tr style="${rowStyle}">
-                <td><strong class="mono">${esc(m.name)}</strong></td>
-                <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
-                <td>${m.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}</td>
+                <td><strong class="mono" style="color:var(--text1);font-size:0.82rem;">${esc(item.routeName)}</strong></td>
+                <td class="mono" style="font-size:0.78rem;color:var(--text2);">${esc(item.upstreamTarget)}</td>
+                <td><div style="display:flex;gap:0.3rem;flex-wrap:wrap;">${badges.length ? badges.join('') : '<span style="color:var(--text3);font-size:0.75rem;">Standard</span>'}</div></td>
+                <td>${item.disabled ? '<span class="tag tag-red">DISABLED</span>' : '<span class="tag tag-green">ACTIVE</span>'}</td>
                 <td>${testResultCol}</td>
                 <td style="text-align:right;white-space:nowrap;">
-                  <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(p.name)}', '${esc(m.name)}')">Test</button>
-                  <button class="btn btn-sm" onclick="toggleHubModelDisabled('${esc(p.name)}', '${esc(m.name)}', ${!m.disabled})">${m.disabled?'Enable':'Disable'}</button>
-                  <button class="btn btn-sm btn-danger" onclick="deleteHubModel('${esc(p.name)}', '${esc(m.name)}')">Delete</button>
+                  <button class="btn btn-sm btn-primary" onclick="testHubSingleModel('${esc(p.name)}', '${esc(item.upstreamTarget)}', '${esc(item.routeName)}')">Test</button>
+                  <button class="btn btn-sm" onclick="toggleHubModelDisabled('${esc(p.name)}', '${esc(item.routeName)}', '${esc(item.upstreamTarget)}', ${!item.disabled})">${item.disabled?'Enable':'Disable'}</button>
+                  <button class="btn btn-sm btn-danger" onclick="deleteHubModel('${esc(p.name)}', '${esc(item.routeName)}', '${esc(item.upstreamTarget)}')">Delete</button>
                 </td>
               </tr>
               ${errorRow}
@@ -3860,6 +3932,7 @@ function renderHubModels(p){
     </div>
   `;
 }
+
 
 function selectHubEgressMode(mode){
   _hubEgressMode = mode;
@@ -4005,82 +4078,367 @@ async function testAllProviderKeys(provName){
   }
 }
 
-function showAddModelPrompt(provName){
-  const name = prompt('Enter model route name (e.g. gpt-4o):');
-  if(!name || !name.trim()) return;
-  const upstream = prompt('Enter upstream model ID (leave blank to match route name):', name.trim());
-  submitAddModel(provName, name.trim(), upstream ? upstream.trim() : name.trim());
+function showAddHubModelModal(provName){
+  openModal(`Add Model for ${provName}`, `
+    <div class="form-grid">
+      <label class="full">Upstream Model ID <span style="color:var(--red)">*</span>
+        <input id="hm_upstream" placeholder="e.g. llama-3.3-70b-versatile or qwen/qwen3.6-27b" oninput="syncAddHubRouteName(this.value)">
+      </label>
+      <label class="full">Route Name (Alias for Clients)
+        <input id="hm_route" placeholder="e.g. llama-3.3 or leave blank to match upstream">
+      </label>
+      <label class="full">Reasoning / Thinking Model?
+        <select id="hm_reasoning">
+          <option value="false">False (Standard LLM)</option>
+          <option value="true">True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option>
+        </select>
+      </label>
+      <label class="full">Vision / Multimodal Image Support?
+        <select id="hm_vision">
+          <option value="false">False (Text-only)</option>
+          <option value="true">True (Supports image inputs)</option>
+        </select>
+      </label>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAddHubModel('${esc(provName)}')">Add Model &amp; Route</button>
+    </div>
+  `, null, 'modal-md');
 }
-async function submitAddModel(provName, modelName, upstreamModel){
+
+function syncAddHubRouteName(val){
+  const r = document.getElementById('hm_route');
+  if(r && (!r.dataset.customized || r.dataset.customized === 'false')){
+    r.value = val.trim();
+  }
+}
+
+async function submitAddHubModel(provName){
+  const upstream = (document.getElementById('hm_upstream')?.value || '').trim();
+  let routeName = (document.getElementById('hm_route')?.value || '').trim();
+  const reasoning = document.getElementById('hm_reasoning')?.value === 'true';
+  const vision = document.getElementById('hm_vision')?.value === 'true';
+
+  if(!upstream){
+    toast('Upstream Model ID is required', 'error');
+    return;
+  }
+  if(!routeName) routeName = upstream;
+
   const p = _currentProviders.find(x => x.name === provName);
   if(!p) return;
-  const models = [...(p.models||[]), {name:modelName, model:upstreamModel}];
+
   try{
-    await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({models})});
-    toast('Model added: '+modelName,'success');
-    p.models = models;
-    document.getElementById('hubModelsList').innerHTML = renderHubModels(p);
-    fetchAll();
-  }catch(e){toast('Error: '+e.message,'error');}
+    // 1. Create model route
+    await api('/admin/models', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: routeName,
+        provider: provName,
+        model: upstream,
+        reasoning,
+        vision
+      })
+    });
+
+    // 2. Ensure upstream model string is in provider.models
+    const currentList = (p.models || []).map(m => typeof m === 'string' ? m : (m.model || m.name)).filter(Boolean);
+    if(!currentList.includes(upstream)){
+      currentList.push(upstream);
+      await api('/admin/providers/' + encodeURIComponent(provName), {
+        method: 'PUT',
+        body: JSON.stringify({ models: currentList })
+      });
+      p.models = currentList;
+    }
+
+    closeModal();
+    toast(`Model ${routeName} added successfully!`, 'success');
+    await fetchAll();
+    openProviderHub(provName);
+  }catch(e){
+    toast('Error adding model: ' + e.message, 'error');
+  }
 }
 
-async function deleteHubModel(provName, modelName){
-  if(!await confirm(`Delete model "${modelName}" from ${provName}?`)) return;
+async function deleteHubModel(provName, routeName, upstreamTarget){
+  const targetLabel = routeName || upstreamTarget;
+  if(!await confirm(`Delete model "${targetLabel}" from ${provName}?`)) return;
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.models) return;
-  const models = p.models.filter(m => m.name !== modelName);
+  if(!p) return;
+
   try{
-    await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({models})});
-    toast('Model deleted: '+modelName,'info');
-    p.models = models;
-    document.getElementById('hubModelsList').innerHTML = renderHubModels(p);
-    fetchAll();
-  }catch(e){toast('Error: '+e.message,'error');}
+    // 1. Delete route if it exists
+    const hasRoute = (_currentModels || []).some(m => m.name === routeName);
+    if(hasRoute){
+      await api('/admin/models/' + encodeURIComponent(routeName), { method: 'DELETE' });
+    }
+
+    // 2. Remove from provider.models array
+    const rawModels = (p.models || []).map(m => typeof m === 'string' ? m : (m.model || m.name)).filter(Boolean);
+    const updated = rawModels.filter(m => m !== upstreamTarget && m !== routeName);
+    await api('/admin/providers/' + encodeURIComponent(provName), {
+      method: 'PUT',
+      body: JSON.stringify({ models: updated })
+    });
+    p.models = updated;
+
+    toast(`Model deleted: ${targetLabel}`, 'info');
+    await fetchAll();
+    const curP = _currentProviders.find(x => x.name === provName);
+    if(curP && document.getElementById('hubModelsList')){
+      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+    }
+  }catch(e){
+    toast('Error deleting model: ' + e.message, 'error');
+  }
 }
 
-async function toggleHubModelDisabled(provName, modelName, setDisabled){
+async function toggleHubModelDisabled(provName, routeName, upstreamTarget, setDisabled){
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.models) return;
-  const models = p.models.map(m => m.name === modelName ? {...m, disabled:setDisabled} : m);
+  if(!p) return;
+
+  const existingRoute = (_currentModels || []).find(m => m.name === routeName);
+
   try{
-    await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({models})});
-    toast(`Model ${modelName} ${setDisabled?'disabled':'enabled'}`,'info');
-    p.models = models;
-    document.getElementById('hubModelsList').innerHTML = renderHubModels(p);
-    fetchAll();
-  }catch(e){toast('Error: '+e.message,'error');}
+    if(existingRoute){
+      await api('/admin/models/' + encodeURIComponent(routeName), {
+        method: 'PUT',
+        body: JSON.stringify({ disabled: setDisabled })
+      });
+    } else {
+      await api('/admin/models', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: routeName || upstreamTarget,
+          provider: provName,
+          model: upstreamTarget,
+          disabled: setDisabled
+        })
+      });
+    }
+    toast(`Model ${routeName || upstreamTarget} ${setDisabled ? 'disabled' : 'enabled'}`, 'info');
+    await fetchAll();
+    const curP = _currentProviders.find(x => x.name === provName);
+    if(curP && document.getElementById('hubModelsList')){
+      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+    }
+  }catch(e){
+    toast('Error toggling model: ' + e.message, 'error');
+  }
+}
+
+async function testHubSingleModel(provName, upstreamTarget, routeName){
+  const testKey = provName + '_' + upstreamTarget;
+  toast(`Menguji model ${upstreamTarget}...`, 'info');
+  try{
+    const r = await api('/admin/diag/test-model', {
+      method: 'POST',
+      body: JSON.stringify({ provider: provName, model: upstreamTarget })
+    });
+    _hubModelTestResults[testKey] = {
+      status: 'success',
+      latency: r.latency_ms || 0,
+      time: Date.now()
+    };
+    if(routeName && routeName !== upstreamTarget){
+      _hubModelTestResults[provName + '_' + routeName] = _hubModelTestResults[testKey];
+    }
+    toast(`${upstreamTarget}: ${r.latency_ms}ms [BERFUNGSI]`, 'success');
+  }catch(e){
+    const parsed = parseTestErrorDetails(e, { provider: provName, model: upstreamTarget, targetURL: e.data?.target });
+    _hubModelTestResults[testKey] = {
+      status: 'failed',
+      error: e.message,
+      parsed: parsed,
+      raw: e.message,
+      time: Date.now()
+    };
+    if(routeName && routeName !== upstreamTarget){
+      _hubModelTestResults[provName + '_' + routeName] = _hubModelTestResults[testKey];
+    }
+    toast(`${upstreamTarget} GAGAL: ` + parsed.title, 'error');
+  }
+  const curP = _currentProviders.find(x => x.name === provName);
+  if(curP && document.getElementById('hubModelsList')){
+    document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
+  }
 }
 
 async function testAllProviderModels(provName){
-  toast(`Menguji semua model untuk ${provName}...`,'info');
   const p = _currentProviders.find(x => x.name === provName);
-  if(!p || !p.models) return;
-  for(const m of p.models){
-    try{
-      const r = await api('/admin/diag/test-model',{method:'POST',body:JSON.stringify({provider:provName,model:m.name})});
-      _hubModelTestResults[provName + '_' + m.name] = {
-        status: 'success',
-        latency: r.latency_ms || 0,
-        time: Date.now()
-      };
-      toast(`${m.name}: ${r.latency_ms}ms [BERFUNGSI]`,'success');
-    }catch(e){
-      const parsed = parseTestErrorDetails(e, { provider: provName, model: m.name, targetURL: e.data?.target });
-      _hubModelTestResults[provName + '_' + m.name] = {
-        status: 'failed',
-        error: e.message,
-        parsed: parsed,
-        raw: e.message,
-        time: Date.now()
-      };
-      toast(`${m.name} GAGAL: ` + parsed.title,'error');
-    }
-    const curP = _currentProviders.find(x => x.name === provName);
-    if(curP && document.getElementById('hubModelsList')) {
-      document.getElementById('hubModelsList').innerHTML = renderHubModels(curP);
-    }
+  if(!p) return;
+  const entries = getProviderModelEntries(p);
+  if(!entries.length){
+    toast('Tidak ada model untuk diuji pada provider ini.', 'warn');
+    return;
+  }
+  toast(`Menguji semua (${entries.length}) model untuk ${provName}...`, 'info');
+  for(const item of entries){
+    await testHubSingleModel(provName, item.upstreamTarget, item.routeName);
   }
 }
+
+let _fetchedApiModels = [];
+async function showSyncModelsModal(provName){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  openModal(`Sync Models from API: ${provName}`, `
+    <div style="font-size:0.85rem;color:var(--text2);margin-bottom:0.75rem;">
+      Menghubungi endpoint <code>${esc(p.base_url)}/models</code> menggunakan API key provider...
+    </div>
+    <div id="syncModelsContent" style="min-height:120px;display:flex;align-items:center;justify-content:center;">
+      <span class="loading-spinner"></span> <span style="margin-left:0.5rem;color:var(--text3);">Mengambil daftar model dari upstream API...</span>
+    </div>
+  `, null, 'modal-lg');
+
+  try{
+    const res = await api('/admin/diag/fetch-models', {
+      method: 'POST',
+      body: JSON.stringify({ provider: provName })
+    });
+
+    const models = res.models || [];
+    _fetchedApiModels = models;
+
+    if(!models.length){
+      document.getElementById('syncModelsContent').innerHTML = `
+        <div style="text-align:center;color:var(--text3);padding:1.5rem 0;">
+          ⚠️ Upstream provider mengembalikan 0 model dari <code>/models</code>.
+        </div>
+      `;
+      return;
+    }
+
+    const existingEntries = getProviderModelEntries(p);
+    const existingUpstreamSet = new Set(existingEntries.map(e => e.upstreamTarget));
+
+    const rows = models.map((mId) => {
+      const alreadyExists = existingUpstreamSet.has(mId);
+      return `
+        <tr style="${alreadyExists ? 'opacity:0.65;' : ''}">
+          <td style="width:40px;text-align:center;">
+            <input type="checkbox" class="sync-model-cb" value="${esc(mId)}" ${alreadyExists ? '' : 'checked'}>
+          </td>
+          <td>
+            <strong class="mono" style="font-size:0.8rem;">${esc(mId)}</strong>
+          </td>
+          <td>
+            ${alreadyExists ? '<span class="tag tag-gray">Sudah Terdaftar</span>' : '<span class="tag tag-green">Model Baru</span>'}
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    document.getElementById('syncModelsContent').innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.4rem;">
+        <div style="font-size:0.8rem;color:var(--text1);font-weight:600;">
+          Ditemukan <strong>${models.length}</strong> model dari upstream:
+        </div>
+        <div style="display:flex;gap:0.4rem;">
+          <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(true)">Pilih Semua</button>
+          <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(false)">Batal Pilih</button>
+        </div>
+      </div>
+      <div class="table-wrap" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:40px;text-align:center;">✓</th>
+              <th>Upstream Model ID</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
+      <div class="form-actions">
+        <button class="btn" onclick="closeModal()">Batal</button>
+        <button class="btn btn-primary" onclick="submitImportSyncedModels('${esc(provName)}')">Import Selected Models</button>
+      </div>
+    `;
+  }catch(e){
+    const parsed = parseTestErrorDetails(e, { provider: provName, targetURL: e.data?.target });
+    document.getElementById('syncModelsContent').innerHTML = `
+      <div style="padding:0.75rem;background:rgba(239,68,68,0.1);border-radius:var(--radius);border:1px solid rgba(239,68,68,0.3);color:var(--red);font-size:0.8rem;">
+        <div style="font-weight:700;">❌ Gagal Mengambil Model dari Upstream</div>
+        <div style="margin-top:0.3rem;"><strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);">${esc(parsed.location)}</span></div>
+        <div style="margin-top:0.25rem;font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;">${esc(parsed.raw)}</div>
+        <div style="margin-top:0.35rem;color:var(--text2);">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
+      </div>
+      <div class="form-actions" style="margin-top:1rem;">
+        <button class="btn" onclick="closeModal()">Tutup</button>
+        <button class="btn btn-primary" onclick="showSyncModelsModal('${esc(provName)}')">Coba Lagi</button>
+      </div>
+    `;
+  }
+}
+
+function toggleSelectAllSyncModels(selectAll){
+  document.querySelectorAll('.sync-model-cb').forEach(cb => cb.checked = selectAll);
+}
+
+async function submitImportSyncedModels(provName){
+  const p = _currentProviders.find(x => x.name === provName);
+  if(!p) return;
+
+  const checkedBoxes = Array.from(document.querySelectorAll('.sync-model-cb:checked'));
+  const selectedModels = checkedBoxes.map(cb => cb.value.trim()).filter(Boolean);
+
+  if(!selectedModels.length){
+    toast('Pilih minimal satu model untuk diimpor', 'warn');
+    return;
+  }
+
+  toast(`Mengimpor ${selectedModels.length} model ke ${provName}...`, 'info');
+  try{
+    // 1. Update provider's model list
+    const currentList = (p.models || []).map(m => typeof m === 'string' ? m : (m.model || m.name)).filter(Boolean);
+    for(const m of selectedModels){
+      if(!currentList.includes(m)){
+        currentList.push(m);
+      }
+    }
+    await api('/admin/providers/' + encodeURIComponent(provName), {
+      method: 'PUT',
+      body: JSON.stringify({ models: currentList })
+    });
+    p.models = currentList;
+
+    // 2. Automatically create default direct model routes for newly imported models
+    const existingRouteNames = new Set((_currentModels || []).map(m => m.name));
+    for(const m of selectedModels){
+      if(!existingRouteNames.has(m)){
+        const isReasoning = m.toLowerCase().includes('reasoning') || m.toLowerCase().includes('thinking') || m.toLowerCase().includes('r1') || m.toLowerCase().includes('deepseek-r');
+        const isVision = m.toLowerCase().includes('vision') || m.toLowerCase().includes('vl');
+        try{
+          await api('/admin/models', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: m,
+              provider: provName,
+              model: m,
+              reasoning: isReasoning,
+              vision: isVision
+            })
+          });
+        }catch(_){}
+      }
+    }
+
+    closeModal();
+    toast(`Berhasil mengimpor ${selectedModels.length} model!`, 'success');
+    await fetchAll();
+    openProviderHub(provName);
+  }catch(e){
+    toast('Gagal mengimpor model: ' + e.message, 'error');
+  }
+}
+
 /* ===== Model Routing CRUD ===== */
 function showAddModel(){
   const provOpts = _currentProviders.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.type)})</option>`).join('');
