@@ -49,7 +49,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", sw.status,
-			"duration", time.Since(start).String(),
+			"duration", time.Since(start),
 			"remote", r.RemoteAddr,
 		)
 	})

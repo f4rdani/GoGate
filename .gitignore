@@ -1,6 +1,9 @@
 # Binaries
 aigateway
 aigateway.exe
+gogate
+gogate.exe
+*.exe
 cloudflared
 cloudflared.exe
 cloudflared.exe.tmp

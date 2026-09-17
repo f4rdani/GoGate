@@ -56,6 +56,17 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	if o.RelaySecret() != "" {
+		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+	}
+	if o.RelayURL() != "" && o.baseURL != "" {
+		httpReq.Header.Set("X-Target-URL", o.baseURL)
+	}
+	if o.providerType == "opencode" {
+		sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+		httpReq.Header.Set("x-opencode-session", sessionID)
+		httpReq.Header.Set("X-Session-ID", sessionID)
+	}
 
 	keyMasked := "-"
 	if len(apiKey) > 8 {
@@ -131,6 +142,17 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if o.RelaySecret() != "" {
+		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+	}
+	if o.RelayURL() != "" && o.baseURL != "" {
+		httpReq.Header.Set("X-Target-URL", o.baseURL)
+	}
+	if o.providerType == "opencode" {
+		sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+		httpReq.Header.Set("x-opencode-session", sessionID)
+		httpReq.Header.Set("X-Session-ID", sessionID)
 	}
 
 	keyMasked := "-"
@@ -221,6 +243,12 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 	httpReq.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if o.RelaySecret() != "" {
+		httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+	}
+	if o.RelayURL() != "" && o.baseURL != "" {
+		httpReq.Header.Set("X-Target-URL", o.baseURL)
 	}
 
 	keyMasked := "-"

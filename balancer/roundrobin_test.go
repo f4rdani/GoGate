@@ -111,3 +111,11 @@ func TestDistribution(t *testing.T) {
 		t.Errorf("expected 50/50 distribution, got x=%d y=%d", counts["x"], counts["y"])
 	}
 }
+
+func TestEmptyRoundRobin(t *testing.T) {
+	rr := New([]int{})
+	if got := rr.Next(); got != 0 {
+		t.Errorf("expected 0 for empty balancer, got %d", got)
+	}
+}
+

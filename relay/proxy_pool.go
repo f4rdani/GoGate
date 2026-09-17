@@ -1,0 +1,459 @@
+package relay
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/url"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/aigateway/config"
+)
+
+// ProxyEntry represents a verified public proxy in the pool.
+type ProxyEntry struct {
+	URL         string        `json:"url"`
+	Latency     time.Duration `json:"latency"`
+	LatencyMs   int64         `json:"latency_ms"`
+	LastChecked time.Time     `json:"last_checked"`
+	Failures    atomic.Int32  `json:"failures"`
+}
+
+// ProxyPoolStats holds snapshot metrics of the proxy pool.
+type ProxyPoolStats struct {
+	Enabled        bool          `json:"enabled"`
+	ActiveCount    int           `json:"active_count"`
+	TotalFound     int           `json:"total_found"`
+	AverageLatency string        `json:"average_latency"`
+	LastRefresh    string        `json:"last_refresh"`
+	CheckInterval  string        `json:"check_interval"`
+	Sources        []string      `json:"sources"`
+	TopProxies     []*ProxyEntry `json:"top_proxies,omitempty"`
+}
+
+// ProxyPool manages free public proxies, background validation, and round-robin rotation.
+type ProxyPool struct {
+	mu            sync.RWMutex
+	enabled       bool
+	sources       []string
+	checkInterval time.Duration
+	checkTimeout  time.Duration
+	testURL       string
+	maxProxies    int
+	proxies       []*ProxyEntry
+	counter       atomic.Uint64
+	lastRefresh   time.Time
+	totalFound    int
+	isRefreshing  atomic.Bool
+}
+
+// NewProxyPool creates a new proxy pool instance from configuration.
+func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
+	sources := cfg.Sources
+	if len(sources) == 0 {
+		sources = []string{
+			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+			"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
+			"https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt",
+			"https://raw.githubusercontent.com/clarketm/proxy-list/master/proxy-list-raw.txt",
+			"https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/generated/http_proxies.txt",
+			"https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt",
+		}
+	}
+
+	checkInterval := cfg.CheckInterval
+	if checkInterval <= 0 {
+		checkInterval = 5 * time.Minute
+	}
+
+	checkTimeout := cfg.CheckTimeout
+	if checkTimeout <= 0 {
+		checkTimeout = 5 * time.Second
+	}
+
+	testURL := cfg.TestURL
+	if testURL == "" || testURL == "http://www.google.com/generate_204" {
+		testURL = "https://www.google.com/generate_204"
+	}
+
+	maxProxies := cfg.MaxProxies
+	if maxProxies <= 0 {
+		maxProxies = 50
+	}
+
+	return &ProxyPool{
+		enabled:       cfg.Enabled,
+		sources:       sources,
+		checkInterval: checkInterval,
+		checkTimeout:  checkTimeout,
+		testURL:       testURL,
+		maxProxies:    maxProxies,
+		proxies:       make([]*ProxyEntry, 0),
+	}
+}
+
+// IsEnabled returns true if the proxy pool is enabled.
+func (p *ProxyPool) IsEnabled() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.enabled
+}
+
+// SetEnabled toggles the proxy pool enabled state.
+func (p *ProxyPool) SetEnabled(enabled bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.enabled = enabled
+}
+
+// Start launches the background updater and health checker goroutine.
+func (p *ProxyPool) Start(ctx context.Context) {
+	if !p.enabled {
+		return
+	}
+
+	slog.Info("free proxy pool rotator enabled",
+		"sources", len(p.sources),
+		"interval", p.checkInterval.String(),
+		"max_proxies", p.maxProxies,
+	)
+
+	// Run initial refresh in background
+	go func() {
+		if err := p.Refresh(ctx); err != nil {
+			slog.Warn("initial proxy pool refresh failed", "error", err)
+		}
+	}()
+
+	// Periodic refresh loop
+	go func() {
+		ticker := time.NewTicker(p.checkInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := p.Refresh(ctx); err != nil {
+					slog.Warn("periodic proxy pool refresh failed", "error", err)
+				}
+			}
+		}
+	}()
+}
+
+// Refresh scrapes public sources and checks health concurrently.
+func (p *ProxyPool) Refresh(ctx context.Context) error {
+	if !p.isRefreshing.CompareAndSwap(false, true) {
+		return fmt.Errorf("refresh already in progress")
+	}
+	defer p.isRefreshing.Store(false)
+
+	slog.Info("refreshing free proxy pool from public sources...")
+
+	rawProxies := p.fetchRawProxies(ctx)
+	if len(rawProxies) == 0 {
+		return fmt.Errorf("no proxies could be scraped from sources")
+	}
+
+	p.mu.Lock()
+	p.totalFound = len(rawProxies)
+	p.mu.Unlock()
+
+	// Limit validation candidates to at most 800 to conserve CPU and network
+	if len(rawProxies) > 800 {
+		rawProxies = rawProxies[:800]
+	}
+
+	// Concurrently test proxies using worker pool
+	alive := p.checkProxies(ctx, rawProxies)
+
+	// Sort by lowest latency
+	sort.Slice(alive, func(i, j int) bool {
+		return alive[i].Latency < alive[j].Latency
+	})
+
+	// Retain up to maxProxies
+	if len(alive) > p.maxProxies {
+		alive = alive[:p.maxProxies]
+	}
+
+	p.mu.Lock()
+	p.proxies = alive
+	p.lastRefresh = time.Now()
+	p.mu.Unlock()
+
+	slog.Info("proxy pool refresh complete",
+		"alive_count", len(alive),
+		"total_scraped", p.totalFound,
+	)
+	return nil
+}
+
+// fetchRawProxies fetches and parses IP:Port lines from all configured sources.
+func (p *ProxyPool) fetchRawProxies(ctx context.Context) []string {
+	var mu sync.Mutex
+	var all []string
+	seen := make(map[string]bool)
+
+	var wg sync.WaitGroup
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	for _, src := range p.sources {
+		wg.Add(1)
+		go func(sourceURL string) {
+			defer wg.Done()
+
+			req, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
+			if err != nil {
+				return
+			}
+
+			resp, err := client.Do(req)
+			if err != nil {
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				return
+			}
+
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+
+				// Normalize: ensure http:// prefix if missing
+				proxyURL := line
+				if !strings.HasPrefix(proxyURL, "http://") && !strings.HasPrefix(proxyURL, "https://") && !strings.HasPrefix(proxyURL, "socks5://") {
+					proxyURL = "http://" + proxyURL
+				}
+
+				mu.Lock()
+				if !seen[proxyURL] {
+					seen[proxyURL] = true
+					all = append(all, proxyURL)
+				}
+				mu.Unlock()
+			}
+		}(src)
+	}
+
+	wg.Wait()
+	return all
+}
+
+// checkProxies validates a list of raw proxies concurrently.
+func (p *ProxyPool) checkProxies(ctx context.Context, candidateURLs []string) []*ProxyEntry {
+	var alive []*ProxyEntry
+	var mu sync.Mutex
+
+	p.mu.Lock()
+	p.proxies = nil
+	p.mu.Unlock()
+
+	concurrency := 100
+	jobs := make(chan string, len(candidateURLs))
+	for _, u := range candidateURLs {
+		jobs <- u
+	}
+	close(jobs)
+
+	ctxCancel, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for proxyStr := range jobs {
+				select {
+				case <-ctxCancel.Done():
+					return
+				default:
+				}
+
+				entry, ok := p.testProxy(ctxCancel, proxyStr)
+				if ok && entry != nil {
+					mu.Lock()
+					alive = append(alive, entry)
+					p.mu.Lock()
+					p.proxies = append(p.proxies, entry)
+					p.mu.Unlock()
+					if len(alive) >= p.maxProxies {
+						cancel()
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	return alive
+}
+
+// testProxy probes a single proxy against testURL.
+func (p *ProxyPool) testProxy(ctx context.Context, proxyStr string) (*ProxyEntry, bool) {
+	proxyURL, err := url.Parse(proxyStr)
+	if err != nil {
+		return nil, false
+	}
+
+	dialer := &net.Dialer{
+		Timeout:   p.checkTimeout,
+		KeepAlive: 10 * time.Second,
+	}
+
+	transport := &http.Transport{
+		Proxy:                 http.ProxyURL(proxyURL),
+		DialContext:           dialer.DialContext,
+		TLSHandshakeTimeout:   p.checkTimeout,
+		ResponseHeaderTimeout: p.checkTimeout,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   p.checkTimeout,
+	}
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, "GET", p.testURL, nil)
+	if err != nil {
+		return nil, false
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return nil, false
+	}
+
+	latency := time.Since(start)
+	return &ProxyEntry{
+		URL:         proxyStr,
+		Latency:     latency,
+		LatencyMs:   latency.Milliseconds(),
+		LastChecked: time.Now(),
+	}, true
+}
+
+// Next returns the next active proxy in round-robin order. Returns nil if pool is empty.
+func (p *ProxyPool) Next() *ProxyEntry {
+	p.mu.RLock()
+	total := len(p.proxies)
+	p.mu.RUnlock()
+
+	if total == 0 {
+		if p.enabled && !p.isRefreshing.Load() {
+			go func() {
+				_ = p.Refresh(context.Background())
+			}()
+		}
+		return nil
+	}
+
+	// Auto-heal if proxies are running low (fewer than 5)
+	if total < 5 && p.enabled && !p.isRefreshing.Load() {
+		go func() {
+			_ = p.Refresh(context.Background())
+		}()
+	}
+
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if len(p.proxies) == 0 {
+		return nil
+	}
+
+	idx := p.counter.Add(1) - 1
+	return p.proxies[idx%uint64(len(p.proxies))]
+}
+
+// MarkFailure records an upstream request failure for a proxy. Evicts proxy after 3 consecutive failures.
+func (p *ProxyPool) MarkFailure(proxyURL string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for i, pe := range p.proxies {
+		if pe.URL == proxyURL {
+			if pe.Failures.Add(1) >= 3 {
+				// Evict dead proxy
+				slog.Info("evicting failing proxy from pool", "proxy", proxyURL)
+				p.proxies = append(p.proxies[:i], p.proxies[i+1:]...)
+			}
+			return
+		}
+	}
+}
+
+// Stats returns a snapshot of proxy pool health metrics.
+func (p *ProxyPool) Stats() ProxyPoolStats {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	totalLatency := time.Duration(0)
+	for _, pe := range p.proxies {
+		totalLatency += pe.Latency
+	}
+
+	avgLatency := "0ms"
+	if len(p.proxies) > 0 {
+		avgLatency = fmt.Sprintf("%dms", (totalLatency / time.Duration(len(p.proxies))).Milliseconds())
+	}
+
+	lastRef := "Never"
+	if !p.lastRefresh.IsZero() {
+		lastRef = time.Since(p.lastRefresh).Round(time.Second).String() + " ago"
+	}
+
+	var top []*ProxyEntry
+	for i, pe := range p.proxies {
+		if i >= 10 {
+			break
+		}
+		top = append(top, pe)
+	}
+
+	return ProxyPoolStats{
+		Enabled:        p.enabled,
+		ActiveCount:    len(p.proxies),
+		TotalFound:     p.totalFound,
+		AverageLatency: avgLatency,
+		LastRefresh:    lastRef,
+		CheckInterval:  p.checkInterval.String(),
+		Sources:        p.sources,
+		TopProxies:     top,
+	}
+}
+
+// DynamicProxyFunc returns a Proxy function suitable for http.Transport.Proxy
+// that automatically rotates through healthy proxies on each outgoing connection.
+func (p *ProxyPool) DynamicProxyFunc() func(*http.Request) (*url.URL, error) {
+	return func(req *http.Request) (*url.URL, error) {
+		if !p.IsEnabled() {
+			return nil, nil // pool disabled, direct connection
+		}
+		pe := p.Next()
+		if pe == nil {
+			return nil, nil // fall back to direct connection
+		}
+		return url.Parse(pe.URL)
+	}
+}

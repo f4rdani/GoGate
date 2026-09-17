@@ -423,55 +423,70 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 
 	switch route.Strategy {
 	case "", "direct":
+		if !route.Backend.Provider.IsHealthy() {
+			return nil, fmt.Errorf("provider %s is offline or disabled", route.Backend.Provider.Name())
+		}
 		// Direct: single backend
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, route.Backend.Provider.Name(), route.Backend.Model))
 		return r.executeBackend(ctx, route.Backend.Provider, route.Backend.Model, req)
 
 	case "round-robin":
-		// Round-robin with circuit breaker: try available backends
+		// Round-robin with circuit breaker and failover
 		total := len(route.Backends)
 		firstIdx := route.Balancer.Next()
 		idx := firstIdx
-		var backend *Backend
 
-		for i := 0; i < total; i++ {
-			b := &route.Backends[idx]
-			if time.Now().UnixNano() >= b.DisabledUntil.Load() {
-				backend = b
-				break
+		var lastErr error
+		for attempt := 0; attempt < total; attempt++ {
+			var backend *Backend
+			for i := 0; i < total; i++ {
+				b := &route.Backends[idx]
+				if time.Now().UnixNano() >= b.DisabledUntil.Load() {
+					backend = b
+					break
+				}
+				slog.Info("round-robin skipping disabled backend",
+					"alias", modelName,
+					"provider", b.Provider.Name(),
+					"model", b.Model,
+				)
+				idx = route.Balancer.Next()
 			}
-			slog.Info("round-robin skipping disabled backend",
-				"alias", modelName,
-				"provider", b.Provider.Name(),
-				"model", b.Model,
-			)
-			idx = route.Balancer.Next()
-		}
 
-		// If all backends disabled, use the originally selected one
-		if backend == nil {
-			backend = &route.Backends[firstIdx]
-			slog.Warn("all backends disabled, using originally selected",
-				"alias", modelName,
-				"provider", backend.Provider.Name(),
-			)
-		}
+			if backend == nil {
+				backend = &route.Backends[firstIdx]
+				slog.Warn("all backends disabled, using originally selected",
+					"alias", modelName,
+					"provider", backend.Provider.Name(),
+				)
+			}
 
-		req.Model = backend.Model
-		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+			reqCopy := *req
+			reqCopy.Model = backend.Model
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
 
-		resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, req)
-		if err != nil {
+			resp, err := r.executeBackend(ctx, backend.Provider, backend.Model, &reqCopy)
+			if err == nil {
+				return resp, nil
+			}
+
 			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
-			slog.Warn("backend disabled due to error",
+			slog.Warn("round-robin: backend failed, trying next available backend",
 				"alias", modelName,
 				"provider", backend.Provider.Name(),
+				"model", backend.Model,
 				"disabled_for", circuitBreakerDuration.String(),
 				"error", err,
 			)
+			lastErr = err
+
+			if pe, ok := err.(*provider.ProviderError); ok && !pe.IsRetryable() {
+				return nil, err
+			}
+			idx = route.Balancer.Next()
 		}
-		return resp, err
+		return nil, lastErr
 
 	case "fallback", "tiered":
 		// Fallback with retry: try each backend in tier order
@@ -650,54 +665,78 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 
 	switch route.Strategy {
 	case "", "direct":
+		if !route.Backend.Provider.IsHealthy() {
+			return fmt.Errorf("provider %s is offline or disabled", route.Backend.Provider.Name())
+		}
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s", modelName, route.Backend.Provider.Name(), route.Backend.Model))
 		return r.executeBackendStream(ctx, route.Backend.Provider, route.Backend.Model, req, w, flusher)
 
 	case "round-robin":
-		// Round-robin with circuit breaker: try available backends
+		// Round-robin with circuit breaker & stream failover
 		total := len(route.Backends)
 		firstIdx := route.Balancer.Next()
 		idx := firstIdx
-		var backend *Backend
 
-		for i := 0; i < total; i++ {
-			b := &route.Backends[idx]
-			if time.Now().UnixNano() >= b.DisabledUntil.Load() {
-				backend = b
-				break
+		var lastErr error
+		for attempt := 0; attempt < total; attempt++ {
+			var backend *Backend
+			for i := 0; i < total; i++ {
+				b := &route.Backends[idx]
+				if time.Now().UnixNano() >= b.DisabledUntil.Load() {
+					backend = b
+					break
+				}
+				slog.Info("round-robin skipping disabled backend",
+					"alias", modelName,
+					"provider", b.Provider.Name(),
+					"model", b.Model,
+				)
+				idx = route.Balancer.Next()
 			}
-			slog.Info("round-robin skipping disabled backend",
-				"alias", modelName,
-				"provider", b.Provider.Name(),
-				"model", b.Model,
-			)
-			idx = route.Balancer.Next()
-		}
 
-		// If all backends disabled, use the originally selected one
-		if backend == nil {
-			backend = &route.Backends[firstIdx]
-			slog.Warn("all backends disabled, using originally selected",
-				"alias", modelName,
-				"provider", backend.Provider.Name(),
-			)
-		}
+			if backend == nil {
+				backend = &route.Backends[firstIdx]
+				slog.Warn("all backends disabled, using originally selected",
+					"alias", modelName,
+					"provider", backend.Provider.Name(),
+				)
+			}
 
-		req.Model = backend.Model
-		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+			// Don't failover if headers already sent by previous attempt
+			if checker, ok := w.(HeaderWrittenChecker); ok && checker.HeaderWritten() {
+				return lastErr
+			}
 
-		err := r.executeBackendStream(ctx, backend.Provider, backend.Model, req, w, flusher)
-		if err != nil {
+			reqCopy := *req
+			reqCopy.Model = backend.Model
+			slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (round-robin)", modelName, backend.Provider.Name(), backend.Model))
+
+			err := r.executeBackendStream(ctx, backend.Provider, backend.Model, &reqCopy, w, flusher)
+			if err == nil {
+				return nil
+			}
+
 			backend.DisabledUntil.Store(time.Now().Add(circuitBreakerDuration).UnixNano())
-			slog.Warn("backend disabled due to error",
+			slog.Warn("round-robin stream: backend failed, circuit broken",
 				"alias", modelName,
 				"provider", backend.Provider.Name(),
+				"model", backend.Model,
 				"disabled_for", circuitBreakerDuration.String(),
 				"error", err,
 			)
+			lastErr = err
+
+			if checker, ok := w.(HeaderWrittenChecker); ok && checker.HeaderWritten() {
+				return err
+			}
+			if pe, ok := err.(*provider.ProviderError); ok && !pe.IsRetryable() {
+				return err
+			}
+
+			idx = route.Balancer.Next()
 		}
-		return err
+		return lastErr
 
 	case "fallback", "tiered":
 		// Streaming fallback with tier awareness
@@ -827,6 +866,9 @@ func (r *Router) Embeddings(ctx context.Context, modelName string, req *models.E
 
 	switch route.Strategy {
 	case "", "direct":
+		if !route.Backend.Provider.IsHealthy() {
+			return nil, fmt.Errorf("provider %s is offline or disabled", route.Backend.Provider.Name())
+		}
 		// Direct: single backend
 		req.Model = route.Backend.Model
 		slog.Info(fmt.Sprintf("ℹ️ [ROUTING] %s → %s/%s (embeddings)", modelName, route.Backend.Provider.Name(), route.Backend.Model))

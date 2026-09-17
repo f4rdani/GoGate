@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,32 +16,12 @@ import (
 	"github.com/aigateway/models"
 )
 
-// bufPool is a shared buffer pool to reduce GC pressure from io.ReadAll calls.
-var bufPool = sync.Pool{
-	New: func() interface{} {
-		buf := make([]byte, 0, 32*1024) // 32KB initial capacity
-		return &buf
-	},
-}
-
-// streamBufPool is for streaming read buffers.
+// streamBufPool is for streaming read buffers (32KB initial capacity for high throughput SSE).
 var streamBufPool = sync.Pool{
 	New: func() interface{} {
-		buf := make([]byte, 4096)
+		buf := make([]byte, 32*1024)
 		return &buf
 	},
-}
-
-// ReadAllPooled reads all bytes from r using a pooled buffer, reducing allocations.
-func ReadAllPooled(r io.Reader) ([]byte, error) {
-	bufPtr := bufPool.Get().(*[]byte)
-	buf := (*bufPtr)[:0]
-	defer func() {
-		*bufPtr = buf[:0]
-		bufPool.Put(bufPtr)
-	}()
-	result, err := io.ReadAll(io.LimitReader(r, 10<<20)) // 10MB limit
-	return result, err
 }
 
 // Provider is the interface that all AI providers must implement.
@@ -81,6 +60,8 @@ type BaseProvider struct {
 	name         string
 	providerType string
 	baseURL      string
+	relayURL     string
+	relaySecret  string
 	apiKeys      []*UpstreamKey
 	counter      atomic.Uint64
 	client       *http.Client
@@ -101,6 +82,16 @@ func (b *BaseProvider) ProviderType() string {
 // BaseURL returns the provider's base URL.
 func (b *BaseProvider) BaseURL() string {
 	return b.baseURL
+}
+
+// RelayURL returns the provider's relay URL (if set).
+func (b *BaseProvider) RelayURL() string {
+	return b.relayURL
+}
+
+// RelaySecret returns the provider's relay secret header value (if set).
+func (b *BaseProvider) RelaySecret() string {
+	return b.relaySecret
 }
 
 // Client returns the provider's HTTP client.
@@ -156,15 +147,20 @@ func (b *BaseProvider) ResolveKeyAndURL(rawKey, endpointPath string) (string, st
 	apiKey := rawKey
 	baseURL := b.baseURL
 
-	if b.providerType == "cloudflare" && strings.Contains(rawKey, ":") {
+	if b.relayURL != "" {
+		baseURL = b.relayURL
+	} else if b.providerType == "cloudflare" && strings.Contains(rawKey, ":") {
 		parts := strings.SplitN(rawKey, ":", 2)
 		accountID := parts[0]
 		apiKey = parts[1]
 		baseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", accountID)
 	}
 
-	url := strings.TrimRight(baseURL, "/") + endpointPath
-	return apiKey, url
+	baseURL = strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(baseURL, endpointPath) {
+		return apiKey, baseURL
+	}
+	return apiKey, baseURL + endpointPath
 }
 
 // ProviderError represents an error from an upstream provider.
@@ -226,13 +222,13 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		}).DialContext,
 		TLSHandshakeTimeout:   15 * time.Second,  // max time for TLS handshake
 		ResponseHeaderTimeout: 60 * time.Second,  // max time to wait for response headers
-		MaxIdleConns:          20,
-		MaxIdleConnsPerHost:   5,
-		IdleConnTimeout:       5 * time.Minute,
+		MaxIdleConns:          250,
+		MaxIdleConnsPerHost:   50,
+		IdleConnTimeout:       90 * time.Second,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
-	if cfg.ProxyURL != "" {
+	if cfg.ProxyURL != "" && cfg.ProxyURL != "auto" && cfg.ProxyURL != "pool" {
 		proxyURL, err := url.Parse(cfg.ProxyURL)
 		if err != nil {
 			return nil, fmt.Errorf("provider %s: invalid proxy_url: %w", cfg.Name, err)
@@ -258,6 +254,8 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		name:         cfg.Name,
 		providerType: cfg.Type,
 		baseURL:      cfg.BaseURL,
+		relayURL:     cfg.RelayURL,
+		relaySecret:  cfg.RelaySecret,
 		apiKeys:      keys,
 		client:       &http.Client{Transport: transport}, // no Timeout — streaming-safe
 		models:       modelSet,

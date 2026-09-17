@@ -17,6 +17,10 @@ func New[T any](items []T) *RoundRobin[T] {
 // Next returns the next item in round-robin order.
 // Thread-safe via atomic increment.
 func (rr *RoundRobin[T]) Next() T {
+	if len(rr.items) == 0 {
+		var zero T
+		return zero
+	}
 	n := rr.counter.Add(1) - 1
 	return rr.items[n%uint64(len(rr.items))]
 }

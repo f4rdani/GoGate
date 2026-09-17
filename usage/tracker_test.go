@@ -179,6 +179,21 @@ func TestPersistUsage(t *testing.T) {
 	if !contains(content, "openai/gpt-4o") {
 		t.Error("persisted JSON should contain model key")
 	}
+
+	// Test loading back into a new tracker
+	tr2 := NewTracker()
+	if err := tr2.LoadUsage(path); err != nil {
+		t.Fatalf("LoadUsage failed: %v", err)
+	}
+
+	stats := tr2.GetStats()
+	modelStat, ok := stats.ByModel["openai/gpt-4o"]
+	if !ok {
+		t.Fatalf("loaded stats missing openai/gpt-4o")
+	}
+	if modelStat.TotalPromptTokens != 100 || modelStat.TotalOutputTokens != 50 {
+		t.Errorf("expected 100 in, 50 out tokens; got in=%d out=%d", modelStat.TotalPromptTokens, modelStat.TotalOutputTokens)
+	}
 }
 
 func TestModelStatsSnapshot(t *testing.T) {

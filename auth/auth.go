@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aigateway/config"
@@ -20,10 +19,11 @@ type KeyInfo struct {
 	TokenSaver    *bool    `json:"token_saver,omitempty"` // nil=follow global, true/false=override
 	Disabled      bool     `json:"disabled"`
 
-	// Rate limiting state (not serialized)
-	windowStart time.Time
-	windowCount atomic.Int64
-	mu          sync.Mutex
+	// Rate limiting state (sliding window counter, not serialized)
+	currentWindow time.Time
+	prevCount     int64
+	currCount     int64
+	mu            sync.Mutex
 }
 
 // IsTokenSaverEnabled checks if token saver is enabled for this key.
@@ -46,23 +46,38 @@ func (k *KeyInfo) IsModelAllowed(model string) bool {
 }
 
 // CheckRateLimit returns true if the request is within rate limits.
-// Uses a sliding window per-minute counter.
+// Uses a weighted sliding window per-minute counter to eliminate boundary burst spikes.
 func (k *KeyInfo) CheckRateLimit() bool {
 	if k.RateLimit <= 0 {
 		return true // No rate limit
 	}
 
 	k.mu.Lock()
-	now := time.Now()
-	if now.Sub(k.windowStart) > time.Minute {
-		// Reset window
-		k.windowStart = now
-		k.windowCount.Store(0)
-	}
-	k.mu.Unlock()
+	defer k.mu.Unlock()
 
-	count := k.windowCount.Add(1)
-	return count <= int64(k.RateLimit)
+	now := time.Now()
+	nowWindow := now.Truncate(time.Minute)
+
+	if nowWindow != k.currentWindow {
+		if nowWindow == k.currentWindow.Add(time.Minute) {
+			k.prevCount = k.currCount
+		} else {
+			k.prevCount = 0
+		}
+		k.currCount = 0
+		k.currentWindow = nowWindow
+	}
+
+	// Calculate weighted requests from previous and current window
+	weight := float64(time.Minute-now.Sub(nowWindow)) / float64(time.Minute)
+	estimatedCount := int64(float64(k.prevCount)*weight) + k.currCount
+
+	if estimatedCount < int64(k.RateLimit) {
+		k.currCount++
+		return true
+	}
+
+	return false
 }
 
 // HashKey returns the SHA-256 hash of an API key as a hex string.

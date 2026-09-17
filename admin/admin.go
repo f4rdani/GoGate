@@ -18,6 +18,7 @@ import (
 	"github.com/aigateway/models"
 	"github.com/aigateway/provider"
 	"github.com/aigateway/proxy"
+	"github.com/aigateway/relay"
 	"github.com/aigateway/tunnel"
 )
 
@@ -32,10 +33,11 @@ type AdminHandler struct {
 	cfg         *config.Config
 	registry    *provider.Registry
 	tunnelMgr   *tunnel.TunnelManager
+	proxyPool   *relay.ProxyPool
 }
 
 // NewAdminHandler creates a new admin handler.
-func NewAdminHandler(keyStore *auth.KeyStore, adminSecret string, stats *proxy.Stats, reloadFunc func() error, configPath string, cfg *config.Config, registry *provider.Registry, tunnelMgr *tunnel.TunnelManager) *AdminHandler {
+func NewAdminHandler(keyStore *auth.KeyStore, adminSecret string, stats *proxy.Stats, reloadFunc func() error, configPath string, cfg *config.Config, registry *provider.Registry, tunnelMgr *tunnel.TunnelManager, proxyPool *relay.ProxyPool) *AdminHandler {
 	return &AdminHandler{
 		keyStore:    keyStore,
 		adminSecret: adminSecret,
@@ -45,6 +47,7 @@ func NewAdminHandler(keyStore *auth.KeyStore, adminSecret string, stats *proxy.S
 		cfg:         cfg,
 		registry:    registry,
 		tunnelMgr:   tunnelMgr,
+		proxyPool:   proxyPool,
 	}
 }
 
@@ -95,10 +98,10 @@ func (a *AdminHandler) CheckAuth(r *http.Request) bool {
 }
 
 // persistKeyStore saves the current key store state to the config file.
-// Holds the read lock for the entire operation to prevent stale data races.
+// Holds the write lock for the entire operation to prevent stale data races.
 func (a *AdminHandler) persistKeyStore() {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	if a.cfg == nil || a.configPath == "" {
 		return
@@ -303,25 +306,63 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		Type        string   `json:"type"`
 		Tier        int      `json:"tier"`
 		BaseURL     string   `json:"base_url"`
+		AccountID   string   `json:"account_id,omitempty"`
+		RelayURL    string   `json:"relay_url,omitempty"`
+		RelaySecret string   `json:"relay_secret,omitempty"`
+		ProxyURL    string   `json:"proxy_url,omitempty"`
 		Models      []string `json:"models"`
 		Healthy     bool     `json:"healthy"`
 		HasKey      bool     `json:"has_key"`
 		KeyCount    int      `json:"key_count"`
+		Keys        []string `json:"keys"`
+		APIKeys     []string `json:"api_keys"`
+		Disabled    bool     `json:"disabled"`
 	}
 
 	result := make([]providerInfo, 0, len(cfg.Providers))
 	for _, p := range cfg.Providers {
+		maskedKeys := make([]string, 0, len(p.APIKeys))
+		for _, k := range p.APIKeys {
+			k = strings.TrimSpace(k)
+			if len(k) >= 12 {
+				maskedKeys = append(maskedKeys, k[:8]+"..."+k[len(k)-4:])
+			} else if len(k) > 4 {
+				maskedKeys = append(maskedKeys, k[:2]+"..."+k[len(k)-2:])
+			} else if len(k) > 0 {
+				maskedKeys = append(maskedKeys, "***")
+			}
+		}
+
+		modelsList := p.Models
+		if modelsList == nil {
+			modelsList = []string{}
+		}
+
+		rawKeys := p.APIKeys
+		if rawKeys == nil {
+			rawKeys = []string{}
+		}
+
 		info := providerInfo{
-			Name:    p.Name,
-			Type:    p.Type,
-			Tier:    p.Tier,
-			BaseURL: p.BaseURL,
-			Models:  p.Models,
-			HasKey:  len(p.APIKeys) > 0,
-			KeyCount: len(p.APIKeys),
+			Name:        p.Name,
+			Type:        p.Type,
+			Tier:        p.Tier,
+			BaseURL:     p.BaseURL,
+			AccountID:   p.AccountID,
+			RelayURL:    p.RelayURL,
+			RelaySecret: p.RelaySecret,
+			ProxyURL:    p.ProxyURL,
+			Models:      modelsList,
+			HasKey:      len(p.APIKeys) > 0,
+			KeyCount:    len(p.APIKeys),
+			Keys:        maskedKeys,
+			APIKeys:     rawKeys,
+			Disabled:    p.Disabled,
 		}
 		// Check health from registry
-		if registry != nil {
+		if p.Disabled {
+			info.Healthy = false
+		} else if registry != nil {
 			if prov, ok := registry.Get(p.Name); ok {
 				info.Healthy = prov.IsHealthy()
 			} else {
@@ -538,12 +579,16 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 
 	var req struct {
-		Type      string   `json:"type"`
-		BaseURL   string   `json:"base_url"`
-		AccountID string   `json:"account_id"`
-		APIKeys   []string `json:"api_keys"`
-		Models    []string `json:"models"`
-		Tier      *int     `json:"tier"`
+		Type        string   `json:"type"`
+		BaseURL     string   `json:"base_url"`
+		AccountID   string   `json:"account_id"`
+		APIKeys     []string `json:"api_keys"`
+		Models      []string `json:"models"`
+		Tier        *int     `json:"tier"`
+		RelayURL    *string  `json:"relay_url"`
+		RelaySecret *string  `json:"relay_secret"`
+		ProxyURL    *string  `json:"proxy_url"`
+		Disabled    *bool    `json:"disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -562,6 +607,18 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 		if existing.Type == "cloudflare" {
 			existing.BaseURL = fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/v1", existing.AccountID)
 		}
+	}
+	if req.RelayURL != nil {
+		existing.RelayURL = *req.RelayURL
+	}
+	if req.RelaySecret != nil {
+		existing.RelaySecret = *req.RelaySecret
+	}
+	if req.ProxyURL != nil {
+		existing.ProxyURL = *req.ProxyURL
+	}
+	if req.Disabled != nil {
+		existing.Disabled = *req.Disabled
 	}
 	if req.APIKeys != nil {
 		// Clean and remove duplicates
@@ -1039,10 +1096,59 @@ func (a *AdminHandler) HandleTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 // diagFetchModels calls a provider's /models endpoint to get available models.
-func diagFetchModels(baseURL, apiKey, providerType string) ([]string, error) {
+func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) ([]string, error) {
 	if providerType == "anthropic" {
 		return nil, fmt.Errorf("Anthropic does not have a /models endpoint")
 	}
+
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	if providerType == "cloudflare" {
+		url := strings.TrimRight(baseURL, "/")
+		url = strings.Replace(url, "/v1", "/models/search", 1)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			b, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b)[:min(len(b), 200)])
+		}
+		var cfResp struct {
+			Result []struct {
+				Name string `json:"name"`
+			} `json:"result"`
+		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(body, &cfResp); err != nil {
+			return nil, err
+		}
+		var models []string
+		for _, m := range cfResp.Result {
+			if m.Name != "" {
+				models = append(models, m.Name)
+			}
+		}
+		if len(models) == 0 {
+			return nil, fmt.Errorf("no models found in Cloudflare catalog")
+		}
+		return models, nil
+	}
+
 	url := strings.TrimRight(baseURL, "/")
 	if !strings.HasSuffix(url, "/models") {
 		url += "/models"
@@ -1051,9 +1157,14 @@ func diagFetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if providerType == "opencode" {
+		req.Header.Set("x-opencode-session", fmt.Sprintf("ses_%d", time.Now().UnixNano()))
+		req.Header.Set("X-Session-ID", fmt.Sprintf("ses_%d", time.Now().UnixNano()))
+	}
 	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -1091,20 +1202,31 @@ func diagFetchModels(baseURL, apiKey, providerType string) ([]string, error) {
 }
 
 // diagTestModel sends a minimal chat completion request to verify the model works.
-func diagTestModel(baseURL, apiKey, modelID, providerType string) (string, int64, error) {
+func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType string) (string, int64, error) {
 	var url string
 	var reqBody []byte
-	var headers map[string]string
+	headers := make(map[string]string)
 	if providerType == "anthropic" {
 		url = strings.TrimRight(baseURL, "/") + "/v1/messages"
 		body := map[string]interface{}{"model": modelID, "max_tokens": 10, "messages": []map[string]string{{"role": "user", "content": "Say OK"}}}
 		reqBody, _ = json.Marshal(body)
-		headers = map[string]string{"Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01"}
+		headers["Content-Type"] = "application/json"
+		headers["anthropic-version"] = "2023-06-01"
+		if apiKey != "" {
+			headers["x-api-key"] = apiKey
+		}
 	} else {
 		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
 		body := map[string]interface{}{"model": modelID, "messages": []map[string]string{{"role": "user", "content": "Say OK"}}, "max_tokens": 10}
 		reqBody, _ = json.Marshal(body)
-		headers = map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + apiKey}
+		headers["Content-Type"] = "application/json"
+		if apiKey != "" {
+			headers["Authorization"] = "Bearer " + apiKey
+		}
+		if providerType == "opencode" {
+			headers["x-opencode-session"] = fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			headers["X-Session-ID"] = fmt.Sprintf("ses_%d", time.Now().UnixNano())
+		}
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
 	if err != nil {
@@ -1113,7 +1235,9 @@ func diagTestModel(baseURL, apiKey, modelID, providerType string) (string, int64
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 60 * time.Second}
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	}
 	start := time.Now()
 	resp, err := client.Do(req)
 	latency := time.Since(start).Milliseconds()
@@ -1154,16 +1278,20 @@ func (a *AdminHandler) resolveDiagParams(providerName string, keyIndex *int, bas
 		*baseURL = prov.BaseURL
 		*providerType = prov.Type
 		if len(prov.APIKeys) == 0 {
-			return fmt.Errorf("provider '%s' has no API keys", providerName)
+			if prov.Type != "opencode" && prov.Type != "mimo" {
+				return fmt.Errorf("provider '%s' has no API keys", providerName)
+			}
+			*apiKey = ""
+		} else {
+			idx := 0
+			if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
+				idx = *keyIndex
+			}
+			*apiKey = prov.APIKeys[idx]
 		}
-		idx := 0
-		if keyIndex != nil && *keyIndex >= 0 && *keyIndex < len(prov.APIKeys) {
-			idx = *keyIndex
-		}
-		*apiKey = prov.APIKeys[idx]
 		return nil
 	}
-	if *baseURL == "" || *apiKey == "" {
+	if *baseURL == "" || (*apiKey == "" && *providerType != "opencode" && *providerType != "mimo") {
 		return fmt.Errorf("base_url and api_key (or provider name) required")
 	}
 	return nil
@@ -1190,7 +1318,15 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	models, err := diagFetchModels(req.BaseURL, req.APIKey, req.Type)
+	var client *http.Client
+	if req.Provider != "" && a.registry != nil {
+		if p, ok := a.registry.Get(req.Provider); ok {
+			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+				client = up.Client()
+			}
+		}
+	}
+	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
 	if err != nil {
 		a.sendError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1225,7 +1361,15 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	response, latency, err := diagTestModel(req.BaseURL, req.APIKey, req.Model, req.Type)
+	var client *http.Client
+	if req.Provider != "" && a.registry != nil {
+		if p, ok := a.registry.Get(req.Provider); ok {
+			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+				client = up.Client()
+			}
+		}
+	}
+	response, latency, err := diagTestModel(client, req.BaseURL, req.APIKey, req.Model, req.Type)
 	if err != nil {
 		a.sendError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1255,7 +1399,15 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	models, err := diagFetchModels(req.BaseURL, req.APIKey, req.Type)
+	var client *http.Client
+	if req.Provider != "" && a.registry != nil {
+		if p, ok := a.registry.Get(req.Provider); ok {
+			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+				client = up.Client()
+			}
+		}
+	}
+	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
 	if err != nil {
 		a.sendError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1302,7 +1454,7 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 	// Fetch models if not provided
 	models := req.Models
 	if len(models) == 0 {
-		fetched, err := diagFetchModels(tmpl.BaseURL, req.APIKey, tmpl.Type)
+		fetched, err := diagFetchModels(nil, tmpl.BaseURL, req.APIKey, tmpl.Type)
 		if err != nil {
 			models = tmpl.FallbackModels
 			if len(models) == 0 {
@@ -1459,3 +1611,87 @@ func (a *AdminHandler) HandleToggleTunnel(w http.ResponseWriter, r *http.Request
 		"url":        a.tunnelMgr.GetURL(),
 	})
 }
+
+// HandleGetProxyPool returns proxy pool statistics (GET /admin/proxy-pool).
+func (a *AdminHandler) HandleGetProxyPool(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if a.proxyPool == nil {
+		json.NewEncoder(w).Encode(map[string]interface{}{"enabled": false, "active_count": 0})
+		return
+	}
+	json.NewEncoder(w).Encode(a.proxyPool.Stats())
+}
+
+// HandleRefreshProxyPool initiates a manual background refresh of the proxy pool (POST /admin/proxy-pool/refresh).
+func (a *AdminHandler) HandleRefreshProxyPool(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	go func() {
+		if err := a.proxyPool.Refresh(context.Background()); err != nil {
+			slog.Warn("manual proxy pool refresh failed", "error", err)
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Proxy pool refresh started in background",
+	})
+}
+
+// HandleToggleProxyPool enables or disables the rotating proxy pool (POST /admin/proxy-pool/toggle).
+func (a *AdminHandler) HandleToggleProxyPool(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	a.mu.Lock()
+	if a.cfg != nil {
+		a.cfg.ProxyPool.Enabled = req.Enabled
+	}
+	if a.proxyPool != nil {
+		a.proxyPool.SetEnabled(req.Enabled)
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		a.sendError(w, http.StatusInternalServerError, "Failed to save configuration: "+err.Error())
+		return
+	}
+
+	if req.Enabled && a.proxyPool != nil {
+		go func() {
+			_ = a.proxyPool.Refresh(context.Background())
+		}()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if a.proxyPool != nil {
+		json.NewEncoder(w).Encode(a.proxyPool.Stats())
+	} else {
+		json.NewEncoder(w).Encode(map[string]interface{}{"enabled": req.Enabled})
+	}
+}
+

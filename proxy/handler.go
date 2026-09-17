@@ -385,9 +385,6 @@ func (h *Handler) HandleListModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getDynamicModels(prov provider.Provider) []string {
-	h.dynamicModelsMu.Lock()
-	defer h.dynamicModelsMu.Unlock()
-
 	up, ok := prov.(provider.UpstreamConfigProvider)
 	if !ok {
 		return nil
@@ -397,12 +394,15 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 	pType := up.ProviderType()
 	baseURL := up.BaseURL()
 
-	// 5 minutes cache to prevent rate limiting per IP
+	h.dynamicModelsMu.Lock()
 	if cached, ok := h.dynamicModels[pName]; ok && time.Since(h.lastFetch[pName]) < 5*time.Minute {
+		h.dynamicModelsMu.Unlock()
 		return cached
 	}
+	staleCached := h.dynamicModels[pName]
+	h.dynamicModelsMu.Unlock()
 
-	// Fetch upstream models
+	// Fetch upstream models outside the lock
 	client := &http.Client{
 		Transport: up.Client().Transport,
 		Timeout:   3 * time.Second,
@@ -411,7 +411,7 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		slog.Warn("failed to create models request", "provider", pName, "error", err)
-		return h.dynamicModels[pName]
+		return staleCached
 	}
 
 	if keys := up.APIKeys(); len(keys) > 0 && keys[0].Key != "" {
@@ -421,13 +421,13 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Warn("failed to fetch models from provider", "provider", pName, "error", err)
-		return h.dynamicModels[pName]
+		return staleCached
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Warn("models fetch returned bad status", "provider", pName, "status", resp.StatusCode)
-		return h.dynamicModels[pName]
+		return staleCached
 	}
 
 	var data struct {
@@ -437,7 +437,7 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
 		slog.Warn("failed to decode models JSON", "provider", pName, "error", err)
-		return h.dynamicModels[pName]
+		return staleCached
 	}
 
 	var list []string
@@ -460,10 +460,9 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 	}
 
 	for _, m := range data.Data {
-		// If provider is opencode and has no custom api key, filter to keep only free models
 		if pType == "opencode" && !hasKeys {
 			if !strings.HasSuffix(m.ID, "-free") {
-				continue // skip paid models
+				continue
 			}
 		}
 		rawModels = append(rawModels, m.ID)
@@ -472,8 +471,11 @@ func (h *Handler) getDynamicModels(prov provider.Provider) []string {
 
 	provider.SetCachedDynamicModels(pName, rawModels)
 
+	h.dynamicModelsMu.Lock()
 	h.dynamicModels[pName] = list
 	h.lastFetch[pName] = time.Now()
+	h.dynamicModelsMu.Unlock()
+
 	return list
 }
 

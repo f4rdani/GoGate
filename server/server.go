@@ -17,6 +17,7 @@ import (
 	"github.com/aigateway/playground"
 	"github.com/aigateway/provider"
 	"github.com/aigateway/proxy"
+	"github.com/aigateway/relay"
 	"github.com/aigateway/router"
 	"github.com/aigateway/tunnel"
 	"github.com/aigateway/usage"
@@ -38,10 +39,14 @@ type Server struct {
 	registry   *provider.Registry
 	cancelFunc context.CancelFunc // for stopping background goroutines
 	tunnelMgr  *tunnel.TunnelManager
+	proxyPool  *relay.ProxyPool
 }
 
 // New creates and initializes a new Server from configuration.
 func New(cfg *config.Config, configPath string) (*Server, error) {
+	// 0. Initialize proxy pool
+	proxyPool := relay.NewProxyPool(cfg.ProxyPool)
+
 	// 1. Initialize provider registry
 	registry := provider.NewRegistry()
 	for _, pCfg := range cfg.Providers {
@@ -53,6 +58,20 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 		p, err := provider.NewProviderFromConfig(pCfg)
 		if err != nil {
 			return nil, fmt.Errorf("init provider %s: %w", pCfg.Name, err)
+		}
+
+		// Wire dynamic proxy pool if configured or specifically for opencode
+		if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && proxyPool != nil {
+			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+				if tr, ok := up.Client().Transport.(*http.Transport); ok {
+					tr.Proxy = proxyPool.DynamicProxyFunc()
+					slog.Info("provider routed through dynamic proxy pool", "name", pCfg.Name)
+				}
+			}
+		}
+
+		if pCfg.Disabled {
+			p.SetHealthy(false)
 		}
 		registry.Register(pCfg.Name, p)
 		slog.Info("provider registered",
@@ -105,7 +124,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 
 	tunnelMgr := tunnel.NewTunnelManager()
 
-	adminHandler := admin.NewAdminHandler(keyStore, cfg.Server.AdminSecret, proxyHandler.Stats, reloadFunc, configPath, cfg, registry, tunnelMgr)
+	adminHandler := admin.NewAdminHandler(keyStore, cfg.Server.AdminSecret, proxyHandler.Stats, reloadFunc, configPath, cfg, registry, tunnelMgr, proxyPool)
 
 	// 8. Setup routes (Go 1.22 pattern matching)
 	mux := http.NewServeMux()
@@ -142,6 +161,9 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("POST /admin/config/reload", adminHandler.HandleReloadConfig)
 	wrapAdmin("GET /admin/tunnel", adminHandler.HandleGetTunnelStatus)
 	wrapAdmin("POST /admin/tunnel/toggle", adminHandler.HandleToggleTunnel)
+	wrapAdmin("GET /admin/proxy-pool", adminHandler.HandleGetProxyPool)
+	wrapAdmin("POST /admin/proxy-pool/refresh", adminHandler.HandleRefreshProxyPool)
+	wrapAdmin("POST /admin/proxy-pool/toggle", adminHandler.HandleToggleProxyPool)
 
 	// Provider CRUD
 	wrapAdmin("GET /admin/providers", adminHandler.HandleProviders)
@@ -177,8 +199,15 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	// Admin password change
 	wrapAdmin("PUT /admin/change-password", adminHandler.HandleChangePassword)
 
+	// Console log endpoints
+	wrapAdmin("GET /admin/logs", adminHandler.HandleGetLogs)
+	wrapAdmin("GET /admin/logs/stream", adminHandler.HandleStreamLogs)
+
 	// Dashboard — admin web UI (with dynamic secret injection)
 	wrapAdmin("GET /admin", adminHandler.ServeDashboard)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/admin", http.StatusTemporaryRedirect)
+	})
 
 	// Playground — interactive chat UI
 	wrapAdmin("GET /playground", playground.Handler)
@@ -191,6 +220,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 		mux:        mux,
 		registry:   registry,
 		tunnelMgr:  tunnelMgr,
+		proxyPool:  proxyPool,
 	}
 	return srv, nil
 }
@@ -244,6 +274,11 @@ func (s *Server) Start() error {
 
 	// Start background health checks
 	s.startHealthChecks(ctx)
+
+	// Start background proxy pool rotator if enabled
+	if s.proxyPool != nil && s.proxyPool.IsEnabled() {
+		s.proxyPool.Start(ctx)
+	}
 
 	// Start Cloudflare Quick Tunnel if enabled in configuration
 	if s.cfg.Server.QuickTunnel {
@@ -463,6 +498,16 @@ func (s *Server) ReloadConfig() error {
 		if err != nil {
 			return fmt.Errorf("init provider %s: %w", pCfg.Name, err)
 		}
+		if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && s.proxyPool != nil {
+			if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+				if tr, ok := up.Client().Transport.(*http.Transport); ok {
+					tr.Proxy = s.proxyPool.DynamicProxyFunc()
+				}
+			}
+		}
+		if pCfg.Disabled {
+			p.SetHealthy(false)
+		}
 		registry.Register(pCfg.Name, p)
 	}
 
@@ -495,6 +540,17 @@ func (s *Server) ReloadConfig() error {
 
 	// Thread-safe update of admin handler configs
 	s.admin.UpdateConfig(keyStore, newCfg.Server.AdminSecret, newCfg, registry)
+
+	// Sync proxy pool state
+	if s.proxyPool != nil {
+		wasEnabled := s.proxyPool.IsEnabled()
+		s.proxyPool.SetEnabled(newCfg.ProxyPool.Enabled)
+		if !wasEnabled && newCfg.ProxyPool.Enabled {
+			go func() {
+				_ = s.proxyPool.Refresh(context.Background())
+			}()
+		}
+	}
 
 	s.cfg = newCfg
 	slog.Info("configuration reloaded successfully")

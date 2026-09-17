@@ -16,9 +16,20 @@ type Config struct {
 	Cache       CacheConfig       `yaml:"cache" json:"cache"`
 	Retry       RetryConfig       `yaml:"retry" json:"retry"`
 	TokenSaver  TokenSaverConfig  `yaml:"token_saver" json:"token_saver"`
+	ProxyPool   ProxyPoolConfig   `yaml:"proxy_pool,omitempty" json:"proxy_pool,omitempty"`
 	Providers   []ProviderConfig  `yaml:"providers" json:"providers"`
 	Models      []ModelConfig     `yaml:"models" json:"models"`
 	APIKeys     []APIKeyConfig    `yaml:"api_keys" json:"api_keys"`
+}
+
+// ProxyPoolConfig holds settings for the free public proxy pool rotator.
+type ProxyPoolConfig struct {
+	Enabled       bool          `yaml:"enabled" json:"enabled"`
+	Sources       []string      `yaml:"sources,omitempty" json:"sources,omitempty"`
+	CheckInterval time.Duration `yaml:"check_interval,omitempty" json:"check_interval,omitempty"`
+	CheckTimeout  time.Duration `yaml:"check_timeout,omitempty" json:"check_timeout,omitempty"`
+	TestURL       string        `yaml:"test_url,omitempty" json:"test_url,omitempty"`
+	MaxProxies    int           `yaml:"max_proxies,omitempty" json:"max_proxies,omitempty"`
 }
 
 // TokenSaverConfig holds settings for the RTK-style input token compression.
@@ -63,6 +74,9 @@ type ProviderConfig struct {
 	HealthCheckURL      string        `yaml:"health_check_url,omitempty" json:"health_check_url,omitempty"` // custom health check endpoint
 	HealthCheckInterval time.Duration `yaml:"health_check_interval,omitempty" json:"health_check_interval,omitempty"` // e.g. 30s, 0=disabled
 	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"`               // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
+	RelayURL            string        `yaml:"relay_url,omitempty" json:"relay_url,omitempty"`               // Cloudflare Worker or reverse proxy relay URL (e.g. https://my-worker.workers.dev)
+	RelaySecret         string        `yaml:"relay_secret,omitempty" json:"relay_secret,omitempty"`         // optional secret passed in X-Relay-Secret header
+	Disabled            bool          `yaml:"disabled,omitempty" json:"disabled,omitempty"`                 // true if provider is disabled / turned off
 }
 
 // ModelConfig defines a model route (direct or combo).
@@ -191,6 +205,26 @@ func LoadConfig(path string) (*Config, error) {
 	for i := range cfg.Providers {
 		if cfg.Providers[i].Tier == 0 {
 			cfg.Providers[i].Tier = 1
+		}
+	}
+
+	// Proxy pool defaults
+	if cfg.ProxyPool.CheckInterval == 0 {
+		cfg.ProxyPool.CheckInterval = 10 * time.Minute
+	}
+	if cfg.ProxyPool.CheckTimeout == 0 {
+		cfg.ProxyPool.CheckTimeout = 5 * time.Second
+	}
+	if cfg.ProxyPool.TestURL == "" {
+		cfg.ProxyPool.TestURL = "https://www.google.com"
+	}
+	if cfg.ProxyPool.MaxProxies == 0 {
+		cfg.ProxyPool.MaxProxies = 50
+	}
+	if len(cfg.ProxyPool.Sources) == 0 && cfg.ProxyPool.Enabled {
+		cfg.ProxyPool.Sources = []string{
+			"https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+			"https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
 		}
 	}
 

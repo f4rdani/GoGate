@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aigateway/admin"
 	"github.com/aigateway/cli"
 	"github.com/aigateway/config"
 	"github.com/aigateway/server"
@@ -90,7 +91,9 @@ func runServerWithCLI(configPath string) {
 	default:
 		level = slog.LevelInfo
 	}
-	logger := slog.New(&CustomLogHandler{w: logFile, level: level})
+	baseHandler := &CustomLogHandler{w: logFile, level: level}
+	ringHandler := admin.NewRingHandler(baseHandler, admin.GlobalLogRing)
+	logger := slog.New(ringHandler)
 	slog.SetDefault(logger)
 
 	// Disable tunnel output directly to stdout/stderr in CLI mode
@@ -150,7 +153,9 @@ func runServer(configPath string) {
 		level = slog.LevelInfo
 	}
 
-	logger := slog.New(&CustomLogHandler{w: os.Stdout, level: level})
+	baseHandler := &CustomLogHandler{w: os.Stdout, level: level}
+	ringHandler := admin.NewRingHandler(baseHandler, admin.GlobalLogRing)
+	logger := slog.New(ringHandler)
 	slog.SetDefault(logger)
 	slog.Info("configuration loaded", "path", configPath, "log_level", cfg.Server.LogLevel)
 

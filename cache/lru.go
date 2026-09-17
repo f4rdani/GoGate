@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"sync"
 	"sync/atomic"
@@ -68,7 +69,7 @@ func HashRequest(req *models.ChatCompletionRequest) string {
 	}
 
 	hash := sha256.Sum256(data)
-	return string(hash[:])
+	return hex.EncodeToString(hash[:])
 }
 
 // Get retrieves a cached response. Returns nil if not found or expired.

@@ -20,16 +20,16 @@ func (a *AdminHandler) ServeDashboard(w http.ResponseWriter, r *http.Request) {
 
 	if secret == "123456" || secret == "change-me-to-a-strong-secret" || secret == "1111qqqq" {
 		passBox = `
-    <div style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.2);border-radius:var(--radius);padding:.6rem .8rem;margin-bottom:1rem;font-size:.8rem;display:flex;align-items:center;gap:.5rem">
-      <span style="color:#ef4444;font-weight:600">⚠️ Security Warning:</span>
-      <span style="color:var(--text2)">Your admin secret is still default. Change it immediately!</span>
+    <div style="background:var(--red-soft);border:1px solid var(--red-border);border-radius:var(--radius);padding:.6rem .85rem;margin-bottom:1rem;font-size:.8rem;display:flex;align-items:center;gap:.6rem;color:var(--red)">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <div><strong style="color:var(--red)">Security Warning:</strong> <span style="color:var(--text2)">Your admin secret is still default. Change it immediately!</span></div>
     </div>`
 
 		banner = `
-  <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.25);color:#f87171;border-radius:var(--radius);padding:1rem;margin-bottom:1.5rem;display:flex;align-items:center;gap:0.75rem;font-size:0.9rem">
-    <span style="font-size:1.25rem">⚠️</span>
+  <div style="background:var(--red-soft);border:1px solid var(--red-border);color:var(--red);border-radius:var(--radius);padding:.85rem 1.15rem;margin-bottom:1.25rem;display:flex;align-items:center;gap:.75rem;font-size:.85rem">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
     <div>
-      <strong style="color:#ef4444">Security Warning:</strong> You are currently using a default admin password. Please change it immediately by clicking the <strong>🔑 Change Password</strong> button in the top right corner to secure your gateway!
+      <strong style="color:var(--red)">Security Notice:</strong> You are currently using a default administrator password. Please change it immediately using the <strong>Password</strong> button in the top navigation bar to secure your gateway.
     </div>
   </div>`
 	}

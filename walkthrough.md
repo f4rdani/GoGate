@@ -2574,3 +2574,44 @@ cat /proc/$(pgrep aigateway)/status | grep VmRSS
 | **Check upstream status before writing headers** | Enables streaming fallback — if upstream returns error, no headers sent yet |
 | **`responseTracker` wrapper** | Tracks if headers are written to prevent garbled error responses on stream failure |
 | **No database** | Config file + in-memory state = ultra-low resource, ideal for edge deployment |
+| **Rotating Proxy Pool** | Zero-setup background scraper with 100 concurrent workers for TLS CONNECT proxies |
+| **Keyless Providers** | Dynamic session headers (`x-opencode-session`) and IP rotation bypass upstream rate limits |
+
+---
+
+## Step 20: Free Rotating Proxy Pool & OpenCode Integration
+
+### 1. Zero-Setup Free Proxy Scraper (`relay/proxy_pool.go`)
+- **Automatic Multi-Source Scraping**: Pulls from 6 high-volume open-source community repositories (`roosterkid`, `monosans`, `TheSpeedX`, `proxifly`, `clarketm`, `sunny9577`), aggregating 7,000+ candidates.
+- **Ultra-Fast Parallel Verification**: Uses 100 concurrent worker goroutines with custom `DialContext` timeouts (4s) verifying genuine HTTPS `CONNECT` tunneling to Google generate_204 (`https://www.google.com/generate_204`) with strict `x509` certificate checks to filter out MITM proxies.
+- **Dynamic In-Flight Population**: Working proxies are appended to the active pool immediately as they pass verification (first proxy ready in < 300ms).
+- **Self-Healing & Auto-Refresh**: Runs background refreshes every 5 minutes (`check_interval: 5m0s`) and auto-triggers an immediate refresh if active proxy count drops below 5.
+- **Dynamic Egress Rotation**: `DynamicProxyFunc()` integrates natively with Go's `http.Transport.Proxy` to rotate public egress IPs on every HTTP request in round-robin sequence.
+
+### 2. OpenCode Keyless Provider
+- **Endpoint**: `https://opencode.ai/zen/v1`
+- **Keyless Architecture**: Requires 0 API keys (`api_keys: []`). GoGate automatically tags requests with dynamic session headers (`x-opencode-session: ses_<nano>` and `X-Session-ID: ses_<nano>`).
+- **Free Models**:
+  - `nemotron-3.5-lightning-free` (NVIDIA Nemotron 3.5 Lightning)
+  - `nemotron-3-ultra-free` (NVIDIA Nemotron 3 Ultra)
+  - `mimo-v2.5-free` (MiMo 2.5 Free)
+  - `ling-3.0-flash-fin-free` (Ling 3.0 Flash Fin Free)
+  - `deepseek-v4-flash-free` (DeepSeek V4 Flash Free)
+  - `muse-spark-1.3-contributor-free` (Muse Spark 1.3 Contributor Free)
+  - `big-pickle`
+- **Rate Limit Bypassing**: Because OpenCode enforces strict IP-based usage limits (`FreeUsageLimitError`), GoGate automatically routes all OpenCode requests through the Free Rotating Proxy Pool (`proxy_url: auto`), dynamically alternating egress IPs on every request.
+
+---
+
+## Step 21: Dashboard Redesign (9Router Sidebar Layout & Dual Theme)
+
+### 1. 9Router Modern Sidebar Architecture
+- **260px Sticky Sidebar Navigation**: Split into Core Routing, Egress & Network, and Monitoring & Tools with instant client-side hash routing (`switchView`).
+- **11 Modular Views**: Overview, Providers, Models & Combos, API Keys & CLI, Token Saver (RTK), Proxy Pool, Cloudflare Tunnel, System & Cache, Console Logs, Diagnostics, and Settings.
+- **Interactive AI Client Setup Guides**: Generates instant configuration snippets with 1-click copy for Claude Code, Cursor, Cline (VS Code), OpenClaw, Codex / Python SDK, and cURL.
+
+### 2. Dual Theme (Dark Mode & Light Mode)
+- **CSS Token Palette**: High-contrast, calm dark slate (`#0b0f19`) and clean soft light slate (`#f8fafc`).
+- **Auto-Detect & Persistence**: Persists user selection in `localStorage` (`gogate_theme`) with system color scheme detection fallback.
+
+

@@ -174,3 +174,48 @@ func (t *Tracker) PersistUsage(path string) error {
 	}
 	return os.WriteFile(path, data, 0600)
 }
+
+// LoadUsage loads saved usage stats from a JSON file to restore stats across restarts.
+func (t *Tracker) LoadUsage(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var stats StatsResponse
+	if err := json.Unmarshal(data, &stats); err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for k, snap := range stats.ByModel {
+		s := &ModelStats{}
+		s.TotalRequests.Store(snap.TotalRequests)
+		s.TotalPromptTokens.Store(snap.TotalPromptTokens)
+		s.TotalOutputTokens.Store(snap.TotalOutputTokens)
+		s.TotalTokens.Store(snap.TotalTokens)
+		s.TotalErrors.Store(snap.TotalErrors)
+		s.TotalCacheHits.Store(snap.TotalCacheHits)
+		t.byModel[k] = s
+	}
+
+	for k, snap := range stats.ByAPIKey {
+		s := &ModelStats{}
+		s.TotalRequests.Store(snap.TotalRequests)
+		s.TotalPromptTokens.Store(snap.TotalPromptTokens)
+		s.TotalOutputTokens.Store(snap.TotalOutputTokens)
+		s.TotalTokens.Store(snap.TotalTokens)
+		s.TotalErrors.Store(snap.TotalErrors)
+		s.TotalCacheHits.Store(snap.TotalCacheHits)
+		t.byKey[k] = s
+	}
+
+	t.totalBytesSaved.Store(stats.TokenSaverSaved)
+	return nil
+}
+
