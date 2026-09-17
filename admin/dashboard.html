@@ -44,9 +44,9 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
   --text1: #ffffff;
-  --text2: #e2e8f0;
-  --text3: #cbd5e1;
-  --text4: #64748b;
+  --text2: #f8fafc;
+  --text3: #e2e8f0;
+  --text4: #cbd5e1;
 
   --accent: #6366f1;
   --accent-hover: #4f46e5;
@@ -89,16 +89,16 @@
   --surface-active: #e2e8f0;
   --sidebar-bg: #ffffff;
   --sidebar-border: #e2e8f0;
-  --topbar-bg: rgba(255, 255, 255, 0.92);
+  --topbar-bg: rgba(255, 255, 255, 0.94);
 
   --border: #e2e8f0;
   --border-subtle: #f1f5f9;
   --border-hover: #cbd5e1;
 
-  --text1: #0f172a;
-  --text2: #334155;
-  --text3: #475569;
-  --text4: #64748b;
+  --text1: #090d16;
+  --text2: #0f172a;
+  --text3: #1e293b;
+  --text4: #334155;
 
   --accent: #4f46e5;
   --accent-hover: #4338ca;
@@ -630,10 +630,15 @@ a:hover { color: var(--accent-hover); }
   box-shadow: var(--shadow-sm);
   margin-bottom: 1.25rem;
   overflow: hidden;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.card:hover {
+  border-color: var(--border-hover);
 }
 .card-header {
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0.95rem 1.25rem;
+  background: linear-gradient(180deg, var(--surface-subtle) 0%, var(--surface) 100%);
+  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -646,7 +651,11 @@ a:hover { color: var(--accent-hover); }
   color: var(--text1);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
+}
+.card-title svg {
+  stroke: var(--accent);
+  flex-shrink: 0;
 }
 .card-body {
   padding: 1.25rem;
@@ -660,19 +669,35 @@ a:hover { color: var(--accent-hover); }
   margin-bottom: 1.25rem;
 }
 .kpi-tile {
-  background: var(--surface);
+  background: linear-gradient(180deg, var(--surface) 0%, var(--surface-subtle) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: 0.85rem 1rem;
+  padding: 0.9rem 1.1rem;
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  transition: transform 0.15s ease, border-color 0.15s ease;
+  gap: 0.35rem;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+  position: relative;
+  overflow: hidden;
+}
+.kpi-tile::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--border);
+  transition: background 0.18s ease;
 }
 .kpi-tile:hover {
   border-color: var(--border-hover);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+.kpi-tile:hover::before {
+  background: var(--accent);
 }
 .kpi-label {
   font-size: 0.72rem;
@@ -777,21 +802,21 @@ a:hover { color: var(--accent-hover); }
 
 /* Badges & Tags */
 .badge {
-  font-size: 0.7rem;
-  font-weight: 600;
-  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.16rem 0.55rem;
   border-radius: var(--radius-full);
   background: var(--surface-subtle);
-  color: var(--text2);
-  border: 1px solid var(--border);
+  color: var(--text1);
+  border: 1px solid var(--border-hover);
 }
 .tag {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.3rem;
   font-size: 0.72rem;
-  font-weight: 600;
-  padding: 0.15rem 0.45rem;
+  font-weight: 700;
+  padding: 0.16rem 0.48rem;
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   white-space: nowrap;
@@ -802,7 +827,7 @@ a:hover { color: var(--accent-hover); }
 .tag-red { background: var(--red-soft); color: var(--red); border: 1px solid var(--red-border); }
 .tag-purple { background: var(--purple-soft); color: var(--purple); border: 1px solid var(--purple-border); }
 .tag-cyan { background: var(--cyan-soft); color: var(--cyan); border: 1px solid var(--cyan-border); }
-.tag-gray { background: var(--surface-subtle); color: var(--text3); border: 1px solid var(--border); }
+.tag-gray { background: var(--surface-subtle); color: var(--text1); border: 1px solid var(--border-hover); font-weight: 700; }
 
 /* Tables */
 .table-wrap {
@@ -1155,17 +1180,17 @@ input:focus, select:focus, textarea:focus {
   flex-wrap: wrap;
 }
 .console-filter-btn {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  color: #94a3b8;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #e2e8f0;
   padding: 0.22rem 0.55rem;
   border-radius: var(--radius-xs);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
 }
-.console-filter-btn:hover { color: #ffffff; background: rgba(255, 255, 255, 0.12); }
+.console-filter-btn:hover { color: #ffffff; background: rgba(255, 255, 255, 0.18); }
 .console-filter-btn.active-all { background: var(--accent); color: #ffffff; border-color: var(--accent); }
 .console-filter-btn.active-info { background: #0284c7; color: #ffffff; border-color: #0284c7; }
 .console-filter-btn.active-warn { background: #d97706; color: #ffffff; border-color: #d97706; }
@@ -1184,10 +1209,11 @@ input:focus, select:focus, textarea:focus {
   gap: 0.2rem;
 }
 .console-empty {
-  color: #64748b;
+  color: #e2e8f0;
   font-style: italic;
   padding: 2rem 0;
   text-align: center;
+  font-weight: 500;
 }
 .log-row {
   display: flex;
@@ -1201,7 +1227,7 @@ input:focus, select:focus, textarea:focus {
 .log-row.row-error { background: rgba(239, 68, 68, 0.1); }
 .log-row.row-warn { background: rgba(245, 158, 11, 0.08); }
 .log-row.row-debug { background: rgba(168, 85, 247, 0.08); }
-.log-time { color: #64748b; flex-shrink: 0; font-size: 0.7rem; }
+.log-time { color: #94a3b8; flex-shrink: 0; font-size: 0.7rem; }
 .log-level {
   font-size: 0.65rem;
   font-weight: 700;
@@ -1213,13 +1239,13 @@ input:focus, select:focus, textarea:focus {
 .log-level.WARN { background: rgba(217, 119, 6, 0.2); color: #fbbf24; }
 .log-level.ERROR { background: rgba(220, 38, 38, 0.2); color: #f87171; }
 .log-level.DEBUG { background: rgba(124, 58, 237, 0.2); color: #c084fc; }
-.log-msg { color: #f1f5f9; font-weight: 500; }
-.log-attrs { color: #94a3b8; font-size: 0.72rem; }
+.log-msg { color: #f8fafc; font-weight: 600; }
+.log-attrs { color: #f1f5f9; font-size: 0.74rem; }
 .log-attrs-req { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 .attr-method { font-weight: 700; color: #38bdf8; }
-.attr-path { color: #e2e8f0; }
+.attr-path { color: #ffffff; }
 .attr-status { font-weight: 700; padding: 0.05rem 0.3rem; border-radius: 2px; font-size: 0.68rem; }
-.attr-dur { color: #64748b; font-size: 0.68rem; }
+.attr-dur { color: #cbd5e1; font-size: 0.7rem; font-weight: 600; }
 .dedup-badge {
   background: var(--accent-soft);
   color: var(--accent);
@@ -1775,15 +1801,15 @@ input:focus, select:focus, textarea:focus {
           <div class="card-body">
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:1rem; margin-bottom:1rem;">
               <div>
-                <div style="font-size:0.72rem; color:var(--text3); font-weight:600; text-transform:uppercase;">Base URL</div>
+                <div style="font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Base URL</div>
                 <div class="mono" style="font-size:0.88rem; font-weight:700; color:var(--accent); margin-top:0.2rem;" id="overviewBaseUrl">http://localhost:8080/v1</div>
               </div>
               <div>
-                <div style="font-size:0.72rem; color:var(--text3); font-weight:600; text-transform:uppercase;">Chat Completions</div>
+                <div style="font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Chat Completions</div>
                 <div class="mono" style="font-size:0.88rem; font-weight:700; color:var(--text1); margin-top:0.2rem;">/v1/chat/completions</div>
               </div>
               <div>
-                <div style="font-size:0.72rem; color:var(--text3); font-weight:600; text-transform:uppercase;">Models Endpoint</div>
+                <div style="font-size:0.72rem; color:var(--text2); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Models Endpoint</div>
                 <div class="mono" style="font-size:0.88rem; font-weight:700; color:var(--text1); margin-top:0.2rem;">/v1/models</div>
               </div>
             </div>
@@ -1802,7 +1828,10 @@ input:focus, select:focus, textarea:focus {
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(400px, 1fr)); gap:1.25rem;">
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Top Model Usage</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+                <span>Top Model Usage</span>
+              </div>
             </div>
             <div class="table-wrap" style="border:none; border-radius:0;">
               <table>
@@ -1810,7 +1839,7 @@ input:focus, select:focus, textarea:focus {
                   <tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Avg Latency</th><th>Errors</th></tr>
                 </thead>
                 <tbody id="usageModelTable">
-                  <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No model usage recorded yet</td></tr>
+                  <tr><td colspan="5" style="text-align:center;color:var(--text2);font-weight:600;padding:1.5rem 0;">No model usage recorded yet</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1818,7 +1847,10 @@ input:focus, select:focus, textarea:focus {
 
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Client API Key Usage</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-1.5 1.5L14 9M3 21l8-8m0 0l4 4-2 2-2-2-4 4"/></svg>
+                <span>Client API Key Usage</span>
+              </div>
             </div>
             <div class="table-wrap" style="border:none; border-radius:0;">
               <table>
@@ -1826,7 +1858,7 @@ input:focus, select:focus, textarea:focus {
                   <tr><th>Key Name</th><th>Requests</th><th>Tokens</th><th>Errors</th><th>Last Used</th></tr>
                 </thead>
                 <tbody id="usageKeyTable">
-                  <tr><td colspan="5" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No key usage recorded yet</td></tr>
+                  <tr><td colspan="5" style="text-align:center;color:var(--text2);font-weight:600;padding:1.5rem 0;">No key usage recorded yet</td></tr>
                 </tbody>
               </table>
             </div>
@@ -1992,7 +2024,7 @@ input:focus, select:focus, textarea:focus {
           <div class="view-header-left">
             <div>
               <div class="view-header-title">Token Saver (RTK Engine)</div>
-              <div class="view-header-desc">Automatic request compression engine that cuts context token costs by 40%?70%.</div>
+              <div class="view-header-desc">Automatic request compression engine that cuts context token costs by 40% &ndash; 70%.</div>
             </div>
             <span class="tag tag-green">RTK Active</span>
           </div>
@@ -2004,51 +2036,54 @@ input:focus, select:focus, textarea:focus {
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1.25rem; margin-bottom:1.25rem;">
           <div class="card" style="margin-bottom:0;">
             <div class="card-header">
-              <div class="card-title">RTK Engine Master Controls</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>RTK Engine Master Controls</span>
+              </div>
             </div>
             <div class="card-body">
               <div class="form-grid">
                 <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
                   <div>
-                    <div>Global Token Saver</div>
-                    <div style="font-size:0.72rem; color:var(--text3); font-weight:normal;">Enable real-time input compression across gateway</div>
+                    <div style="font-weight:700; color:var(--text1);">Global Token Saver</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Enable real-time input compression across gateway</div>
                   </div>
                   <input type="checkbox" id="ts_enabled" style="width:18px;height:18px;">
                 </label>
 
                 <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
                   <div>
-                    <div>Caveman Mode</div>
-                    <div style="font-size:0.72rem; color:var(--text3); font-weight:normal;">Enforces ultra-terse code-focused outputs to save output tokens</div>
+                    <div style="font-weight:700; color:var(--text1);">Caveman Mode</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Enforces ultra-terse code-focused outputs to save output tokens</div>
                   </div>
                   <input type="checkbox" id="ts_caveman" style="width:18px;height:18px;">
                 </label>
 
                 <label class="full">
-                  Max Input Trigger Threshold (Bytes)
+                  <span style="font-weight:700; color:var(--text1);">Max Input Trigger Threshold (Bytes)</span>
                   <input type="number" id="ts_max_bytes" value="4096">
                 </label>
 
                 <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
                   <div>
-                    <div>Compress User Messages</div>
-                    <div style="font-size:0.72rem; color:var(--text3); font-weight:normal;">Compress user prompts in addition to tool outputs</div>
+                    <div style="font-weight:700; color:var(--text1);">Compress User Messages</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Compress user prompts in addition to tool outputs</div>
                   </div>
                   <input type="checkbox" id="ts_user" style="width:18px;height:18px;">
                 </label>
 
                 <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
                   <div>
-                    <div>Minify JSON Payloads</div>
-                    <div style="font-size:0.72rem; color:var(--text3); font-weight:normal;">Strip whitespace and newlines from raw JSON tool data</div>
+                    <div style="font-weight:700; color:var(--text1);">Minify JSON Payloads</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Strip whitespace and newlines from raw JSON tool data</div>
                   </div>
                   <input type="checkbox" id="ts_json" style="width:18px;height:18px;">
                 </label>
 
                 <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
                   <div>
-                    <div>Strip Code Comments</div>
-                    <div style="font-size:0.72rem; color:var(--text3); font-weight:normal;">Remove redundant comments from large code snippets</div>
+                    <div style="font-weight:700; color:var(--text1);">Strip Code Comments</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Remove redundant comments from large code snippets</div>
                   </div>
                   <input type="checkbox" id="ts_comments" style="width:18px;height:18px;">
                 </label>
@@ -2059,7 +2094,10 @@ input:focus, select:focus, textarea:focus {
           <!-- Feature Matrix Card -->
           <div class="card" style="margin-bottom:0;">
             <div class="card-header">
-              <div class="card-title">Compression Algorithms</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                <span>Compression Algorithms</span>
+              </div>
             </div>
             <div class="card-body" style="font-size:0.8rem; display:flex; flex-direction:column; gap:0.65rem;">
               <div style="display:flex; align-items:flex-start; gap:0.6rem;">
@@ -2112,7 +2150,10 @@ input:focus, select:focus, textarea:focus {
 
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Proxy Pool Live Status</div>
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              <span>Proxy Pool Live Status</span>
+            </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
               <span id="ppViewBadge" class="tag tag-gray">Checking...</span>
               <button id="btnViewTogglePool" class="toggle-btn off" onclick="toggleProxyPool()">Turn ON</button>
@@ -2125,11 +2166,11 @@ input:focus, select:focus, textarea:focus {
               <div class="kpi-tile"><div class="kpi-label">Average Latency</div><div class="kpi-val cyan" id="ppViewLatency">0ms</div></div>
               <div class="kpi-tile"><div class="kpi-label">Rotation Mode</div><div class="kpi-val purple" style="font-size:1.1rem;padding-top:0.2rem;">Round-Robin</div></div>
             </div>
-            <p style="font-size:0.8rem; color:var(--text3); margin-bottom:0.75rem;">
+            <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:0.75rem;">
               Verified working proxies scraped from public sources. Any provider configured with <code>Free Proxy Pool</code> rotates through these proxies automatically:
             </p>
             <div id="ppViewListPreview" style="display:flex; gap:0.4rem; flex-wrap:wrap; max-height:220px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border-radius:var(--radius); border:1px solid var(--border);">
-              <span style="color:var(--text3); font-size:0.78rem;">No proxies loaded yet. Click Refresh to scrape.</span>
+              <span style="color:var(--text2); font-size:0.78rem; font-weight:600;">No proxies loaded yet. Click Refresh to scrape.</span>
             </div>
           </div>
         </div>
@@ -2151,11 +2192,14 @@ input:focus, select:focus, textarea:focus {
 
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Public Ingress URL</div>
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>
+              <span>Public Ingress URL</span>
+            </div>
             <span id="tunnelStatusBadge" class="tag tag-gray">Checking...</span>
           </div>
           <div class="card-body">
-            <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">
+            <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:1rem;">
               When connected, Cloudflare provides a high-speed HTTPS public address that routes requests straight to your local gateway without port forwarding.
             </p>
             <div class="code-box" style="margin-bottom:1rem;">
@@ -2183,7 +2227,10 @@ input:focus, select:focus, textarea:focus {
         <!-- LRU Cache Metrics Strip -->
         <div class="card">
           <div class="card-header">
-            <div class="card-title">Response LRU Cache Performance</div>
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+              <span>Response LRU Cache Performance</span>
+            </div>
             <button class="btn btn-sm" onclick="editCacheConfig()">Edit Cache Settings</button>
           </div>
           <div class="card-body">
@@ -2217,7 +2264,7 @@ input:focus, select:focus, textarea:focus {
             <div class="console-status-group">
               <span class="console-dot" id="consoleDot"></span>
               <span id="consoleStatus" style="font-weight:600; color:#e2e8f0;">Connecting...</span>
-              <span id="consoleCount" style="color:#64748b; font-size:0.72rem;">0 lines</span>
+              <span id="consoleCount" style="color:var(--text1); font-weight:600; font-size:0.75rem;">0 lines</span>
             </div>
 
             <div class="console-actions">
@@ -2231,13 +2278,13 @@ input:focus, select:focus, textarea:focus {
               <button class="console-filter-btn active-all" id="fDedup" onclick="toggleDedup()" title="Deduplicate identical lines">Dedup</button>
               <button class="console-filter-btn" id="fAutoScroll" onclick="toggleAutoScroll()" title="Toggle auto-scrolling">Scroll: <span id="autoScrollLabel">ON</span></button>
 
-              <button class="btn btn-sm btn-ghost" onclick="clearConsole()" style="color:#94a3b8;">Clear</button>
-              <button class="btn btn-sm btn-ghost" onclick="downloadConsoleLogs()" style="color:#94a3b8;">Download</button>
+              <button class="btn btn-sm btn-ghost" onclick="clearConsole()" style="color:var(--text1); font-weight:600;">Clear</button>
+              <button class="btn btn-sm btn-ghost" onclick="downloadConsoleLogs()" style="color:var(--text1); font-weight:600;">Download</button>
             </div>
           </div>
 
           <div class="console-body" id="consoleBody">
-            <div class="console-empty" id="consoleEmpty">Listening for gateway logs...</div>
+            <div class="console-empty" id="consoleEmpty" style="color:var(--text2); font-weight:500;">Listening for gateway logs...</div>
           </div>
         </div>
       </section>
@@ -2257,10 +2304,13 @@ input:focus, select:focus, textarea:focus {
           <!-- Card: Test Provider Key -->
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Test Upstream API Key</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                <span>Test Upstream API Key</span>
+              </div>
             </div>
             <div class="card-body">
-              <p style="font-size:0.8rem; color:var(--text3); margin-bottom:1rem;">
+              <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:1rem;">
                 Check if a specific provider's API key is valid and measure authentication latency.
               </p>
               <button class="btn btn-primary" onclick="showTestKey()">
@@ -2272,10 +2322,13 @@ input:focus, select:focus, textarea:focus {
           <!-- Card: Test Model Route -->
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Test Model Completion</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Test Model Completion</span>
+              </div>
             </div>
             <div class="card-body">
-              <p style="font-size:0.8rem; color:var(--text3); margin-bottom:1rem;">
+              <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:1rem;">
                 Dispatch a test prompt to any model route or combo to verify streaming and response latency.
               </p>
               <button class="btn btn-primary" onclick="showTestModel()">
@@ -2287,10 +2340,13 @@ input:focus, select:focus, textarea:focus {
           <!-- Card: Sync Models -->
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Sync Models from Upstream</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Sync Models from Upstream</span>
+              </div>
             </div>
             <div class="card-body">
-              <p style="font-size:0.8rem; color:var(--text3); margin-bottom:1rem;">
+              <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:1rem;">
                 Fetch live available models directly from the provider's /v1/models endpoint and sync.
               </p>
               <button class="btn btn-primary" onclick="showSyncModels()">
@@ -2316,13 +2372,16 @@ input:focus, select:focus, textarea:focus {
           <!-- Change Password Card -->
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Change Admin Secret</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                <span>Change Admin Secret</span>
+              </div>
             </div>
             <div class="card-body">
               <div class="form-grid">
-                <label class="full">Current Admin Secret<input id="set_old_pass" type="password" placeholder="Current secret..."></label>
-                <label class="full">New Admin Secret<input id="set_new_pass" type="password" placeholder="Min 6 characters..."></label>
-                <label class="full">Confirm New Secret<input id="set_confirm_pass" type="password" placeholder="Confirm new secret..."></label>
+                <label class="full"><span style="font-weight:700;color:var(--text1);">Current Admin Secret</span><input id="set_old_pass" type="password" placeholder="Current secret..."></label>
+                <label class="full"><span style="font-weight:700;color:var(--text1);">New Admin Secret</span><input id="set_new_pass" type="password" placeholder="Min 6 characters..."></label>
+                <label class="full"><span style="font-weight:700;color:var(--text1);">Confirm New Secret</span><input id="set_confirm_pass" type="password" placeholder="Confirm new secret..."></label>
               </div>
               <button class="btn btn-primary" onclick="doSettingsChangePassword()">Update Password</button>
             </div>
@@ -2331,7 +2390,10 @@ input:focus, select:focus, textarea:focus {
           <!-- Server Runtime Card -->
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Server Runtime</div>
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                <span>Server Runtime</span>
+              </div>
             </div>
             <div class="card-body">
               <div style="display:flex; flex-direction:column; gap:0.6rem; font-size:0.82rem;">
@@ -3033,11 +3095,11 @@ function renderStats(stats, usage, providers, models, keys){
   const el = id => document.getElementById(id);
   if(el('statTotal')) el('statTotal').textContent = fmt(stats.total_requests);
   if(el('statActive')) el('statActive').textContent = stats.active_requests || 0;
-  if(el('statUptime')) el('statUptime').textContent = stats.uptime || '?';
+  if(el('statUptime')) el('statUptime').textContent = stats.uptime || '--';
   if(el('statProviders')) el('statProviders').textContent = providers.length;
   if(el('statModels')) el('statModels').textContent = models.length;
   if(el('statKeys')) el('statKeys').textContent = keys.length;
-  if(el('uptime')) el('uptime').textContent = 'Uptime: ' + (stats.uptime || '?');
+  if(el('uptime')) el('uptime').textContent = 'Uptime: ' + (stats.uptime || '--');
 
   const navP = document.getElementById('navProvCount'); if(navP) navP.textContent = providers.length;
   const navM = document.getElementById('navModelCount'); if(navM) navM.textContent = models.length;
@@ -3090,7 +3152,7 @@ function renderProviders(list){
         </div>
       </td>
       <td><span class="tag tag-blue">${esc(p.type)}</span></td>
-      <td class="mono" style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.base_url||'?')}</td>
+      <td class="mono" style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.base_url||'--')}</td>
       <td><span class="tag tag-gray">${(p.api_keys||[]).length} keys</span></td>
       <td><span class="tag tag-gray">${(p.models||[]).length} models</span></td>
       <td>${proxyBadge}</td>
@@ -3182,7 +3244,7 @@ function renderKeys(list){
       <td>${modelsTag}</td>
       <td><span class="tag tag-gray">${k.rate_limit ? k.rate_limit + ' req/min' : 'Unlimited'}</span></td>
       <td>${tsBadge}</td>
-      <td style="font-size:0.75rem;color:var(--text3);">${k.created_at ? new Date(k.created_at).toLocaleDateString() : '?'}</td>
+      <td style="font-size:0.75rem;color:var(--text2);">${k.created_at ? new Date(k.created_at).toLocaleDateString() : '--'}</td>
       <td style="text-align:right;white-space:nowrap;">
         <button class="btn btn-sm btn-danger" onclick="deleteKey('${esc(k.key)}', '${esc(k.name)}')">Revoke</button>
       </td>
@@ -4149,11 +4211,11 @@ function _appendLogRow(entry, live){
       if(!badge){
         badge = document.createElement('span');
         badge.className = 'dedup-badge';
-        badge.textContent = '?2';
+        badge.textContent = '×2';
         _lastDedupEl.appendChild(badge);
       }else{
-        const n = parseInt(badge.textContent.replace('?','')) + 1;
-        badge.textContent = '?' + n;
+        const n = (parseInt(badge.textContent.replace(/[^\d]/g,'')) || 1) + 1;
+        badge.textContent = '×' + n;
       }
       const timeEl = _lastDedupEl.querySelector('.log-time');
       if(timeEl) timeEl.textContent = entry.t;
