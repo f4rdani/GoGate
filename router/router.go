@@ -516,6 +516,14 @@ func (r *Router) retryWithBackoff(ctx context.Context, fn func() (bool, error)) 
 func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, string, error) {
 	modelName = r.resolveSmartVisionRoute(modelName, req)
 	route, ok := r.routes[modelName]
+	if !ok && strings.Contains(modelName, "/") && !strings.HasPrefix(modelName, "oc/") && !strings.HasPrefix(modelName, "mimo/") {
+		baseName := modelName[strings.LastIndex(modelName, "/")+1:]
+		if altRoute, altOk := r.routes[baseName]; altOk {
+			route = altRoute
+			ok = true
+			modelName = baseName
+		}
+	}
 	if !ok {
 		// Dynamic prefix routing fallback
 		if strings.HasPrefix(modelName, "oc/") {
@@ -796,6 +804,14 @@ type HeaderWrittenChecker interface {
 func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req *models.ChatCompletionRequest, w http.ResponseWriter, flusher http.Flusher) error {
 	modelName = r.resolveSmartVisionRoute(modelName, req)
 	route, ok := r.routes[modelName]
+	if !ok && strings.Contains(modelName, "/") && !strings.HasPrefix(modelName, "oc/") && !strings.HasPrefix(modelName, "mimo/") {
+		baseName := modelName[strings.LastIndex(modelName, "/")+1:]
+		if altRoute, altOk := r.routes[baseName]; altOk {
+			route = altRoute
+			ok = true
+			modelName = baseName
+		}
+	}
 	if !ok {
 		// Dynamic prefix routing fallback
 		if strings.HasPrefix(modelName, "oc/") {
