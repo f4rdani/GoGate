@@ -3810,6 +3810,16 @@ async function fetchAll(){
   }
 }
 
+function updateOverviewEndpoints(baseUrl){
+  const origin = baseUrl || (window.location.origin + '/v1');
+  const baseEl = document.getElementById('overviewBaseUrl');
+  if(baseEl) baseEl.textContent = origin;
+  const curlPre = document.getElementById('overviewCurlSnippet');
+  if(curlPre){
+    curlPre.textContent = `curl ${origin}/chat/completions \\\n  -H "Content-Type: application/json" \\\n  -H "Authorization: Bearer <YOUR_API_KEY>" \\\n  -d '{\n    "model": "gpt-4o",\n    "messages": [{"role": "user", "content": "Hello GoGate!"}]\n  }'`;
+  }
+}
+
 function updateTunnelUI(){
   const tText = document.getElementById('tunnelStatusText');
   const tLink = document.getElementById('tunnelLink');
@@ -3821,6 +3831,7 @@ function updateTunnelUI(){
   const navBadge = document.getElementById('navTunnelBadge');
 
   if(_tunnelActive && _tunnelURL){
+    updateOverviewEndpoints(_tunnelURL + '/v1');
     if(tText) tText.innerHTML = 'Live: <a href="'+esc(_tunnelURL)+'" target="_blank" style="color:var(--cyan);font-weight:600;">'+esc(_tunnelURL)+'</a>';
     if(tLink){ tLink.href = _tunnelURL; tLink.style.display = 'inline-flex'; }
     if(tBtn){ tBtn.textContent = 'Disconnect'; tBtn.className = 'btn btn-sm btn-danger'; }
@@ -3830,6 +3841,7 @@ function updateTunnelUI(){
     if(vOpen){ vOpen.href = _tunnelURL; vOpen.style.display = 'inline-flex'; }
     if(navBadge){ navBadge.textContent = 'Live'; navBadge.style.color = 'var(--green)'; }
   } else {
+    updateOverviewEndpoints(null);
     if(tText) tText.textContent = 'Expose local gateway securely to the internet without port-forwarding.';
     if(tLink) tLink.style.display = 'none';
     if(tBtn){ tBtn.textContent = 'Connect Tunnel'; tBtn.className = 'btn btn-sm'; }
@@ -7594,6 +7606,7 @@ function editServerConfig(){
       <label>Host<input id="mc_host" value="${esc(s.host||'0.0.0.0')}"></label>
       <label>Port<input id="mc_port" type="number" value="${s.port||8080}"></label>
       <label>Log Level<select id="mc_log"><option ${s.log_level==='info'?'selected':''}>info</option><option ${s.log_level==='debug'?'selected':''}>debug</option><option ${s.log_level==='warn'?'selected':''}>warn</option><option ${s.log_level==='error'?'selected':''}>error</option></select></label>
+      <div class="full" style="font-size:0.75rem;color:var(--text3);margin-top:0.25rem;">ℹ️ Catatan: Perubahan Host dan Port memerlukan restart server GoGate agar port baru aktif.</div>
     </div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitServerConfig()">Save</button></div>
   `, null);
@@ -7873,8 +7886,10 @@ async function doChangePassword(){
   if(newSec !== conf){toast('New passwords do not match','error');return;}
 
   try{
-    await api('/admin/change-password',{method:'PUT',body:JSON.stringify({old_secret:oldSec, new_secret:newSec})});
+    await api('/admin/change-password',{method:'PUT',body:JSON.stringify({old_secret:oldSec, current_secret:oldSec, new_secret:newSec})});
     secret = newSec;
+    localStorage.setItem('admin_secret', newSec);
+    sessionStorage.setItem('admin_secret', newSec);
     localStorage.setItem('adminSecret', newSec);
     closeModal();
     toast('Admin password updated successfully!','success');
@@ -7891,8 +7906,10 @@ async function doSettingsChangePassword(){
   if(newSec !== conf){toast('New passwords do not match','error');return;}
 
   try{
-    await api('/admin/change-password',{method:'PUT',body:JSON.stringify({old_secret:oldSec, new_secret:newSec})});
+    await api('/admin/change-password',{method:'PUT',body:JSON.stringify({old_secret:oldSec, current_secret:oldSec, new_secret:newSec})});
     secret = newSec;
+    localStorage.setItem('admin_secret', newSec);
+    sessionStorage.setItem('admin_secret', newSec);
     localStorage.setItem('adminSecret', newSec);
     document.getElementById('set_old_pass').value = '';
     document.getElementById('set_new_pass').value = '';
@@ -8154,8 +8171,7 @@ function downloadConsoleLogs(){
     });
   }
 
-  const baseEl = document.getElementById('overviewBaseUrl');
-  if(baseEl) baseEl.textContent = window.location.origin + '/v1';
+  updateOverviewEndpoints();
 
   if(!secret){
     var target = window.location.pathname + window.location.search;

@@ -207,16 +207,40 @@ func (c *Config) DeleteModel(name string) ([]string, []string, error) {
 		}
 		c.Models = kept
 
-		for i := range c.Providers {
-			if c.Providers[i].Name == deleted.Provider {
-				var keptModels []string
-				for _, m := range c.Providers[i].Models {
-					if m != deleted.Model {
-						keptModels = append(keptModels, m)
+		// Only remove from provider's Models list if no remaining route
+		// (direct or combo backend) still references this upstream model on this provider.
+		stillReferenced := false
+		for _, m := range c.Models {
+			if m.Strategy == "" {
+				if m.Provider == deleted.Provider && m.Model == deleted.Model {
+					stillReferenced = true
+					break
+				}
+			} else {
+				for _, b := range m.Backends {
+					if b.Provider == deleted.Provider && b.Model == deleted.Model {
+						stillReferenced = true
+						break
 					}
 				}
-				c.Providers[i].Models = keptModels
-				break
+				if stillReferenced {
+					break
+				}
+			}
+		}
+
+		if !stillReferenced {
+			for i := range c.Providers {
+				if c.Providers[i].Name == deleted.Provider {
+					var keptModels []string
+					for _, m := range c.Providers[i].Models {
+						if m != deleted.Model {
+							keptModels = append(keptModels, m)
+						}
+					}
+					c.Providers[i].Models = keptModels
+					break
+				}
 			}
 		}
 	}

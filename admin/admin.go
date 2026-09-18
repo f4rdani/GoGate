@@ -1242,11 +1242,15 @@ func (a *AdminHandler) HandleUpdateConfigCache(w http.ResponseWriter, r *http.Re
 func (a *AdminHandler) HandleChangePassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		CurrentSecret string `json:"current_secret"`
+		OldSecret     string `json:"old_secret"`
 		NewSecret     string `json:"new_secret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
+	}
+	if req.CurrentSecret == "" && req.OldSecret != "" {
+		req.CurrentSecret = req.OldSecret
 	}
 
 	// Auth: accept either header or body current_secret

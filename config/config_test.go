@@ -242,6 +242,35 @@ func TestConfig_DeleteModelComboCascade(t *testing.T) {
 	}
 }
 
+func TestConfig_DeleteModelSharedUpstream(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "groq", Type: "groq", BaseURL: "https://api.groq.com", APIKeys: []string{"g-key"}, Models: []string{"llama-3.3"}},
+		},
+		Models: []ModelConfig{
+			{Name: "llama-route-1", Provider: "groq", Model: "llama-3.3"},
+			{Name: "llama-route-2", Provider: "groq", Model: "llama-3.3"},
+		},
+	}
+
+	// Deleting route 1 must not remove llama-3.3 from groq because route 2 still uses it.
+	if _, _, err := cfg.DeleteModel("llama-route-1"); err != nil {
+		t.Fatalf("DeleteModel failed: %v", err)
+	}
+	prov := cfg.GetProvider("groq")
+	if len(prov.Models) != 1 || prov.Models[0] != "llama-3.3" {
+		t.Errorf("expected llama-3.3 preserved on provider groq, got: %v", prov.Models)
+	}
+
+	// Deleting the last route now safely cleans up the provider Models list.
+	if _, _, err := cfg.DeleteModel("llama-route-2"); err != nil {
+		t.Fatalf("DeleteModel failed: %v", err)
+	}
+	if len(prov.Models) != 0 {
+		t.Errorf("expected llama-3.3 removed after last route deleted, got: %v", prov.Models)
+	}
+}
+
 func TestNormalizeProxyURL(t *testing.T) {
 	tests := []struct {
 		input    string

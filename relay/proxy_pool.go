@@ -461,6 +461,14 @@ func (p *ProxyPool) RevalidateFree(ctx context.Context) (int, int, error) {
 	}
 	close(jobs)
 
+	type probeResult struct {
+		pe        *ProxyEntry
+		entry     *ProxyEntry
+		ok        bool
+		checkedAt time.Time
+	}
+	results := make(chan probeResult, len(targets))
+
 	var wg sync.WaitGroup
 	for i := 0; i < concurrency; i++ {
 		wg.Add(1)
@@ -468,23 +476,32 @@ func (p *ProxyPool) RevalidateFree(ctx context.Context) (int, int, error) {
 			defer wg.Done()
 			for pe := range jobs {
 				entry, ok := p.testProxy(ctx, pe.URL)
-				if ok && entry != nil {
-					pe.Latency = entry.Latency
-					pe.LatencyMs = entry.LatencyMs
-					pe.LastChecked = entry.LastChecked
-					pe.Failures.Store(0)
-				} else {
-					pe.LastChecked = time.Now()
-					pe.Failures.Add(1)
+				results <- probeResult{
+					pe:        pe,
+					entry:     entry,
+					ok:        ok,
+					checkedAt: time.Now(),
 				}
 			}
 		}()
 	}
 	wg.Wait()
+	close(results)
 
 	// Apply results: keep manual/webshare entries untouched, drop free entries
 	// with 2+ consecutive failures, re-sort survivors fastest-first.
 	p.mu.Lock()
+	for res := range results {
+		if res.ok && res.entry != nil {
+			res.pe.Latency = res.entry.Latency
+			res.pe.LatencyMs = res.entry.LatencyMs
+			res.pe.LastChecked = res.entry.LastChecked
+			res.pe.Failures.Store(0)
+		} else {
+			res.pe.LastChecked = res.checkedAt
+			res.pe.Failures.Add(1)
+		}
+	}
 	var kept []*ProxyEntry
 	var survivors []*ProxyEntry
 	evicted := 0
