@@ -94,6 +94,43 @@ func TestDiagTestModelReasoningFlag(t *testing.T) {
 	}
 }
 
+func TestDiagTestModelOpenCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-opencode-client") != "cli" {
+			t.Errorf("missing x-opencode-client")
+		}
+		if r.Header.Get("User-Agent") == "" {
+			t.Errorf("missing User-Agent")
+		}
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("invalid body: %v", err)
+		}
+		if req["stream"] != true {
+			t.Errorf("opencode request must have stream=true")
+		}
+		tools, ok := req["tools"].([]interface{})
+		if !ok || len(tools) == 0 {
+			t.Errorf("opencode request must have injected tools")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: {\"id\":\"chatcmpl-123\",\"choices\":[{\"delta\":{\"content\":\"Hello from OpenCode\"}}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "sk-test", "mimo-v2.5-free", "opencode")
+	if err != nil {
+		t.Fatalf("diag opencode test failed: %v", err)
+	}
+	if text != "Hello from OpenCode" || latency < 0 {
+		t.Fatalf("unexpected result: %q %d", text, latency)
+	}
+	if reasoning {
+		t.Error("expected reasoning=false for non-reasoning response")
+	}
+}
+
+
 func TestAdminHandler_CheckAuth(t *testing.T) {
 	adm := setupTestAdmin()
 

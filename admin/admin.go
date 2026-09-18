@@ -1392,6 +1392,34 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 		if apiKey != "" {
 			headers["x-api-key"] = apiKey
 		}
+	} else if providerType == "opencode" {
+		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
+		chatReq := &models.ChatCompletionRequest{
+			Model: modelID,
+			Messages: []models.Message{
+				{Role: "user", Content: json.RawMessage(`"Say OK"`)},
+			},
+			Stream: true,
+		}
+		prepared := provider.PrepareOpenCodeRequest(chatReq)
+		var err error
+		reqBody, err = json.Marshal(prepared)
+		if err != nil {
+			return "", 0, false, err
+		}
+		headers["Content-Type"] = "application/json"
+		sess := provider.GenerateOpenCodeSessionID()
+		headers["x-opencode-client"] = "cli"
+		headers["x-opencode-project"] = provider.OpenCodeProjectID()
+		headers["x-opencode-session"] = sess
+		headers["x-opencode-request"] = provider.GenerateOpenCodeRequestID()
+		headers["X-Session-ID"] = sess
+		headers["User-Agent"] = provider.OpenCodeDefaultUA
+		if apiKey != "" {
+			headers["Authorization"] = "Bearer " + apiKey
+		} else {
+			headers["Authorization"] = "Bearer public"
+		}
 	} else {
 		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
 		body := map[string]interface{}{"model": modelID, "messages": []map[string]string{{"role": "user", "content": "Say OK"}}, "max_tokens": 10}
@@ -1399,18 +1427,8 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 		headers["Content-Type"] = "application/json"
 		if apiKey != "" {
 			headers["Authorization"] = "Bearer " + apiKey
-		} else if providerType == "opencode" {
-			headers["Authorization"] = "Bearer public"
 		}
-		if providerType == "opencode" {
-			sess := provider.GenerateOpenCodeSessionID()
-			headers["x-opencode-client"] = "cli"
-			headers["x-opencode-project"] = provider.OpenCodeProjectID()
-			headers["x-opencode-session"] = sess
-			headers["x-opencode-request"] = provider.GenerateOpenCodeRequestID()
-			headers["X-Session-ID"] = sess
-			headers["User-Agent"] = provider.OpenCodeDefaultUA
-		} else if providerType == "mimo" {
+		if providerType == "mimo" {
 			headers["X-Mimo-Source"] = "mimocode-cli"
 		}
 	}
@@ -1431,10 +1449,32 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 		return "", latency, false, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
 		return "", latency, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)[:min(len(respBody), 300)])
 	}
+	if providerType == "opencode" {
+		chatResp, err := provider.ParseOpenCodeSSEStream(resp.Body, modelID)
+		if err != nil {
+			return "", latency, false, fmt.Errorf("parse opencode sse stream: %w", err)
+		}
+		content := ""
+		reasoning := false
+		if len(chatResp.Choices) > 0 && chatResp.Choices[0].Message != nil {
+			content = chatResp.Choices[0].Message.ContentString()
+			if chatResp.Choices[0].Message.ReasoningContent != "" {
+				reasoning = true
+			}
+		}
+		if content == "" {
+			content = "OK"
+		}
+		if !reasoning {
+			reasoning = detectReasoning(modelID, content)
+		}
+		return content, latency, reasoning, nil
+	}
+	respBody, _ := io.ReadAll(resp.Body)
 	reasoning := detectReasoning(modelID, string(respBody))
 	if providerType == "anthropic" {
 		var r struct{ Content []struct{ Type, Text string } }
