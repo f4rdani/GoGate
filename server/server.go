@@ -541,6 +541,9 @@ func (s *Server) Start() error {
 func (s *Server) startHealthChecks(ctx context.Context) {
 	hasHealthChecks := false
 	for _, pCfg := range s.getConfig().Providers {
+		if pCfg.Disabled {
+			continue
+		}
 		if pCfg.HealthCheckInterval > 0 {
 			hasHealthChecks = true
 			slog.Info("health check enabled",
@@ -556,7 +559,7 @@ func (s *Server) startHealthChecks(ctx context.Context) {
 
 	// Start goroutines per provider with configured intervals
 	for _, pCfg := range s.getConfig().Providers {
-		if pCfg.HealthCheckInterval <= 0 {
+		if pCfg.Disabled || pCfg.HealthCheckInterval <= 0 {
 			continue
 		}
 		interval := pCfg.HealthCheckInterval
@@ -588,7 +591,7 @@ func (s *Server) checkProvider(name string) {
 			break
 		}
 	}
-	if pCfg.Name == "" {
+	if pCfg.Name == "" || pCfg.Disabled {
 		return
 	}
 

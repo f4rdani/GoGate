@@ -1548,7 +1548,12 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 			headers["x-api-key"] = apiKey
 		}
 	} else if providerType == "opencode" {
-		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
+		isResponses := provider.IsOpenCodeResponsesModel(modelID)
+		endpointPath := "/chat/completions"
+		if isResponses {
+			endpointPath = "/responses"
+		}
+		url = strings.TrimRight(baseURL, "/") + endpointPath
 		chatReq := &models.ChatCompletionRequest{
 			Model: modelID,
 			Messages: []models.Message{
@@ -1556,9 +1561,13 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 			},
 			Stream: true,
 		}
-		prepared := provider.PrepareOpenCodeRequest(chatReq)
 		var err error
-		reqBody, err = json.Marshal(prepared)
+		if isResponses {
+			reqBody, err = provider.BuildOpenCodeResponsesRequest(chatReq)
+		} else {
+			prepared := provider.PrepareOpenCodeRequest(chatReq)
+			reqBody, err = json.Marshal(prepared)
+		}
 		if err != nil {
 			return "", 0, false, err
 		}
@@ -1570,10 +1579,19 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 		headers["x-opencode-request"] = provider.GenerateOpenCodeRequestID()
 		headers["X-Session-ID"] = sess
 		headers["User-Agent"] = provider.OpenCodeDefaultUA
+		headers["Accept"] = "text/event-stream"
 		if apiKey != "" {
 			headers["Authorization"] = "Bearer " + apiKey
 		} else {
 			headers["Authorization"] = "Bearer public"
+		}
+
+		if strings.Contains(baseURL, "opencode.ai") && len(provider.DefaultOpenCodeRelays) > 0 {
+			headers["x-relay-target"] = "https://opencode.ai"
+			headers["x-relay-path"] = "/zen/v1" + endpointPath
+			headers["x-opencode-client"] = "desktop"
+			headers["x-opencode-project"] = "global"
+			url = strings.TrimRight(provider.DefaultOpenCodeRelays[0], "/") + endpointPath
 		}
 	} else {
 		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
@@ -1613,7 +1631,13 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 		return "", latency, false, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody)[:min(len(respBody), 300)])
 	}
 	if providerType == "opencode" {
-		chatResp, err := provider.ParseOpenCodeSSEStream(resp.Body, modelID)
+		var chatResp *models.ChatCompletionResponse
+		var err error
+		if provider.IsOpenCodeResponsesModel(modelID) {
+			chatResp, err = provider.ParseOpenCodeResponsesStream(resp.Body, modelID)
+		} else {
+			chatResp, err = provider.ParseOpenCodeSSEStream(resp.Body, modelID)
+		}
 		if err != nil {
 			return "", latency, false, fmt.Errorf("parse opencode sse stream: %w", err)
 		}
@@ -1996,6 +2020,74 @@ func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request,
 	})
 }
 
+// diagTestOpenCodeModel runs a minimal completion through the registered OpenCode
+// provider (which handles edge relay rotation, /responses endpoint, and SSE parsing internally).
+func (a *AdminHandler) diagTestOpenCodeModel(w http.ResponseWriter, r *http.Request, providerName, model, prompt string) {
+	reg := a.getRegistry()
+	if reg == nil {
+		a.sendError(w, http.StatusBadRequest, "provider registry not initialized")
+		return
+	}
+	p, ok := reg.Get(providerName)
+	if !ok {
+		a.sendError(w, http.StatusBadRequest, fmt.Sprintf("provider '%s' not found", providerName))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	start := time.Now()
+	proxyLabel := a.diagProxyModeLabel(providerName)
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → opencode relay · proxy %s", providerName, model, proxyLabel))
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "Say OK"
+	}
+	promptJSON, _ := json.Marshal(prompt)
+	resp, err := p.ChatCompletion(ctx, &models.ChatCompletionRequest{
+		Model:    model,
+		Messages: []models.Message{{Role: "user", Content: promptJSON}},
+	})
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		slog.Warn(fmt.Sprintf("❌ [DIAG] test-model %s/%s fail via opencode relay · proxy %s · %dms · %s", providerName, model, proxyLabel, latency, err.Error()))
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"provider": providerName, "model": model, "type": "opencode",
+			"target": "opencode-relay", "latency_ms": latency,
+			"proxy": proxyLabel, "proxy_mode": proxyLabel,
+		})
+		return
+	}
+	text := "(empty)"
+	reasoning := false
+	if len(resp.Choices) > 0 && resp.Choices[0].Message != nil {
+		text = resp.Choices[0].Message.ContentString()
+		if resp.Choices[0].Message.ReasoningContent != "" {
+			reasoning = true
+		}
+	}
+	if text == "" {
+		text = "OK"
+	}
+	if !reasoning {
+		reasoning = detectReasoning(model, text)
+	}
+	slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via opencode relay · proxy %s · %dms", providerName, model, proxyLabel, latency))
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":                 true,
+		"response":           text,
+		"latency_ms":         latency,
+		"status":             "OK",
+		"provider":           providerName,
+		"model":              model,
+		"type":               "opencode",
+		"target":             "opencode-relay",
+		"key_label":          "auto (opencode relay)",
+		"proxy":              proxyLabel,
+		"proxy_mode":         proxyLabel,
+		"reasoning_detected": reasoning,
+	})
+}
+
 // resolveDiagParams resolves baseURL, apiKey, and providerType from provider name and optional keyIndex,
 // or falls back to using the raw baseURL/apiKey passed directly.
 func (a *AdminHandler) resolveDiagParams(providerName string, keyIndex *int, baseURL, apiKey, providerType *string) error {
@@ -2279,6 +2371,10 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	// through the registered provider (which rotates keys/surfaces itself).
 	if prov := a.cfg.GetProvider(req.Provider); prov != nil && prov.Type == "kiro" {
 		a.diagTestKiroModel(w, r, req.Provider, req.Model)
+		return
+	}
+	if prov := a.cfg.GetProvider(req.Provider); prov != nil && prov.Type == "opencode" {
+		a.diagTestOpenCodeModel(w, r, req.Provider, req.Model, req.Prompt)
 		return
 	}
 	candidates, err := a.buildDiagKeyCandidates(req.Provider, req.KeyIndex, &req.BaseURL, &req.Type, req.APIKey)
