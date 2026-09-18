@@ -111,15 +111,12 @@ func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
 
 	// Initialize manual proxies from config
 	for _, raw := range cfg.ManualProxies {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
+		norm := config.NormalizeProxyURL(raw)
+		if norm == "" {
 			continue
 		}
-		if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "socks5://") {
-			raw = "http://" + raw
-		}
 		entry := &ProxyEntry{
-			URL:         raw,
+			URL:         norm,
 			Latency:     100 * time.Millisecond,
 			LatencyMs:   100,
 			LastChecked: time.Now(),
@@ -284,10 +281,9 @@ func (p *ProxyPool) fetchRawProxies(ctx context.Context) []string {
 					continue
 				}
 
-				// Normalize: ensure http:// prefix if missing
-				proxyURL := line
-				if !strings.HasPrefix(proxyURL, "http://") && !strings.HasPrefix(proxyURL, "https://") && !strings.HasPrefix(proxyURL, "socks5://") {
-					proxyURL = "http://" + proxyURL
+				proxyURL := config.NormalizeProxyURL(line)
+				if proxyURL == "" {
+					continue
 				}
 
 				mu.Lock()
@@ -521,9 +517,9 @@ func (p *ProxyPool) MarkFailure(proxyURL string) {
 
 // TestProxyDirect tests a proxy URL directly and returns the ProxyEntry with latency or an error.
 func (p *ProxyPool) TestProxyDirect(ctx context.Context, proxyStr string) (*ProxyEntry, error) {
-	proxyStr = strings.TrimSpace(proxyStr)
-	if !strings.HasPrefix(proxyStr, "http://") && !strings.HasPrefix(proxyStr, "https://") && !strings.HasPrefix(proxyStr, "socks5://") {
-		proxyStr = "http://" + proxyStr
+	proxyStr = config.NormalizeProxyURL(proxyStr)
+	if proxyStr == "" {
+		return nil, fmt.Errorf("proxy URL cannot be empty")
 	}
 	entry, ok := p.testProxy(ctx, proxyStr)
 	if !ok {
@@ -534,12 +530,9 @@ func (p *ProxyPool) TestProxyDirect(ctx context.Context, proxyStr string) (*Prox
 
 // AddManualProxy adds a manual proxy to the pool, testing it first.
 func (p *ProxyPool) AddManualProxy(ctx context.Context, rawURL string) (*ProxyEntry, error) {
-	rawURL = strings.TrimSpace(rawURL)
+	rawURL = config.NormalizeProxyURL(rawURL)
 	if rawURL == "" {
 		return nil, fmt.Errorf("proxy URL cannot be empty")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "socks5://") {
-		rawURL = "http://" + rawURL
 	}
 	if _, err := url.Parse(rawURL); err != nil {
 		return nil, fmt.Errorf("invalid proxy URL format: %w", err)
@@ -597,10 +590,7 @@ func (p *ProxyPool) AddManualProxy(ctx context.Context, rawURL string) (*ProxyEn
 
 // RemoveManualProxy removes a manual proxy from the pool.
 func (p *ProxyPool) RemoveManualProxy(rawURL string) bool {
-	rawURL = strings.TrimSpace(rawURL)
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "socks5://") {
-		rawURL = "http://" + rawURL
-	}
+	rawURL = config.NormalizeProxyURL(rawURL)
 
 	p.mu.Lock()
 	defer p.mu.Unlock()

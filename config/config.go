@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -530,5 +531,44 @@ func (c *Config) FindCFRelay(name string) *CFRelay {
 		}
 	}
 	return nil
+}
+
+// NormalizeProxyURL normalizes and converts proxy representations:
+// - Strips whitespace
+// - Handles socks5://, https://, http:// prefixes
+// - Converts "host:port:user:pass" (standard provider export format like Webshare)
+//   into "http://user:pass@host:port"
+// - Ensures an "http://" prefix if no scheme is specified
+func NormalizeProxyURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	scheme := "http://"
+	lower := strings.ToLower(raw)
+	if strings.HasPrefix(lower, "socks5://") {
+		scheme = "socks5://"
+		raw = raw[len("socks5://"):]
+	} else if strings.HasPrefix(lower, "https://") {
+		scheme = "https://"
+		raw = raw[len("https://"):]
+	} else if strings.HasPrefix(lower, "http://") {
+		scheme = "http://"
+		raw = raw[len("http://"):]
+	}
+
+	if strings.Contains(raw, "@") {
+		return scheme + raw
+	}
+
+	// Check if raw matches "host:port:user:pass" (e.g. Webshare export)
+	parts := strings.Split(raw, ":")
+	if len(parts) == 4 {
+		userInfo := url.UserPassword(parts[2], parts[3]).String()
+		return fmt.Sprintf("%s%s@%s:%s", scheme, userInfo, parts[0], parts[1])
+	}
+
+	return scheme + raw
 }
 

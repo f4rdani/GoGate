@@ -173,3 +173,26 @@ func TestConfig_CascadeOperations(t *testing.T) {
 	_ = routesRemoved
 	_ = combosRemoved
 }
+
+func TestNormalizeProxyURL(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"", ""},
+		{"   ", ""},
+		{"1.2.3.4:8080", "http://1.2.3.4:8080"},
+		{"http://1.2.3.4:8080", "http://1.2.3.4:8080"},
+		{"socks5://1.2.3.4:1080", "socks5://1.2.3.4:1080"},
+		{"31.59.20.176:6754:user:pass", "http://user:pass@31.59.20.176:6754"},
+		{"socks5://31.59.20.176:6754:user:pass", "socks5://user:pass@31.59.20.176:6754"},
+		{"http://user:pass@31.59.20.176:6754", "http://user:pass@31.59.20.176:6754"},
+	}
+
+	for _, tt := range tests {
+		got := NormalizeProxyURL(tt.input)
+		if got != tt.expected {
+			t.Errorf("NormalizeProxyURL(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}

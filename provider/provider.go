@@ -543,8 +543,9 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
 
-	if cfg.ProxyURL != "" && cfg.ProxyURL != "auto" && cfg.ProxyURL != "pool" {
-		proxyURL, err := url.Parse(cfg.ProxyURL)
+	if cfg.ProxyURL != "" && cfg.ProxyURL != "auto" && cfg.ProxyURL != "pool" && cfg.ProxyURL != "direct" && cfg.ProxyURL != "none" {
+		normProxy := config.NormalizeProxyURL(cfg.ProxyURL)
+		proxyURL, err := url.Parse(normProxy)
 		if err != nil {
 			return nil, fmt.Errorf("provider %s: invalid proxy_url: %w", cfg.Name, err)
 		}
