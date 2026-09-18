@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -133,7 +134,9 @@ func (a *AdminHandler) persistKeyStore() {
 			AllowedModels: k.AllowedModels,
 			RateLimit:     k.RateLimit,
 			TokenSaver:    k.TokenSaver,
+			Privacy:       k.Privacy,
 			Disabled:      k.Disabled,
+			CreatedAt:     k.CreatedAt,
 		})
 	}
 
@@ -182,6 +185,12 @@ func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	keys := a.getKeyStore().ListKeys()
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].CreatedAt != keys[j].CreatedAt {
+			return keys[i].CreatedAt > keys[j].CreatedAt
+		}
+		return keys[i].Name < keys[j].Name
+	})
 
 	type keyResponse struct {
 		ID            string   `json:"id"`
@@ -190,7 +199,9 @@ func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 		AllowedModels []string `json:"allowed_models"`
 		RateLimit     int      `json:"rate_limit"`
 		TokenSaver    *bool    `json:"token_saver,omitempty"`
+		Privacy       *bool    `json:"privacy,omitempty"`
 		Disabled      bool     `json:"disabled"`
+		CreatedAt     string   `json:"created_at,omitempty"`
 	}
 
 	resp := make([]keyResponse, 0, len(keys))
@@ -206,7 +217,9 @@ func (a *AdminHandler) HandleListKeys(w http.ResponseWriter, r *http.Request) {
 			AllowedModels: k.AllowedModels,
 			RateLimit:     k.RateLimit,
 			TokenSaver:    k.TokenSaver,
+			Privacy:       k.Privacy,
 			Disabled:      k.Disabled,
+			CreatedAt:     k.CreatedAt,
 		})
 	}
 
@@ -226,6 +239,7 @@ func (a *AdminHandler) HandleCreateKey(w http.ResponseWriter, r *http.Request) {
 		AllowedModels []string `json:"allowed_models"`
 		RateLimit     int      `json:"rate_limit"`
 		TokenSaver    *bool    `json:"token_saver"`
+		Privacy       *bool    `json:"privacy"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -241,7 +255,7 @@ func (a *AdminHandler) HandleCreateKey(w http.ResponseWriter, r *http.Request) {
 		req.AllowedModels = []string{"*"}
 	}
 
-	keyInfo := a.getKeyStore().AddKey(req.Name, req.AllowedModels, req.RateLimit, req.TokenSaver)
+	keyInfo := a.getKeyStore().AddKeyFull(req.Name, req.AllowedModels, req.RateLimit, req.TokenSaver, req.Privacy)
 
 	slog.Info("API key created",
 		"name", req.Name,
@@ -256,10 +270,64 @@ func (a *AdminHandler) HandleCreateKey(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":             auth.HashKey(keyInfo.Key),
 		"key":            keyInfo.Key,
 		"name":           keyInfo.Name,
 		"allowed_models": keyInfo.AllowedModels,
 		"rate_limit":     keyInfo.RateLimit,
+		"created_at":     keyInfo.CreatedAt,
+	})
+}
+
+// HandleRegenerateKey handles POST /admin/keys/{hash}/regenerate — issue a
+// fresh secret for an existing key. All metadata (name, allowed models, rate
+// limit, overrides, created_at) is preserved; only the credential changes.
+// The new secret is returned once and never again (list responses are masked).
+func (a *AdminHandler) HandleRegenerateKey(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	// Extract key hash from URL path: /admin/keys/{hash}/regenerate
+	trimmed := strings.TrimSuffix(r.URL.Path, "/")
+	if !strings.HasSuffix(trimmed, "/regenerate") {
+		a.sendError(w, http.StatusBadRequest, "Expected /admin/keys/{id}/regenerate")
+		return
+	}
+	hash := extractName(strings.TrimSuffix(trimmed, "/regenerate"), "/admin/keys/")
+	if hash == "" {
+		a.sendError(w, http.StatusBadRequest, "Key not specified in URL path")
+		return
+	}
+
+	keyInfo, ok := a.getKeyStore().RegenerateKey(hash)
+	if !ok {
+		a.sendError(w, http.StatusNotFound, "Key not found")
+		return
+	}
+
+	// Sync the new secret back to the config entry (matched by old hash).
+	a.mu.Lock()
+	for i := range a.cfg.APIKeys {
+		if auth.HashKey(a.cfg.APIKeys[i].Key) == hash {
+			a.cfg.APIKeys[i].Key = keyInfo.Key
+			break
+		}
+	}
+	a.mu.Unlock()
+	a.persistKeyStore()
+
+	slog.Info("API key regenerated", "name", keyInfo.Name, "key_prefix", keyInfo.Key[:9]+"...")
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":             auth.HashKey(keyInfo.Key),
+		"key":            keyInfo.Key,
+		"name":           keyInfo.Name,
+		"allowed_models": keyInfo.AllowedModels,
+		"rate_limit":     keyInfo.RateLimit,
+		"created_at":     keyInfo.CreatedAt,
 	})
 }
 
@@ -443,9 +511,11 @@ func (a *AdminHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 	cfg := a.cfg
 
 	type backendInfo struct {
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-		Tier     int    `json:"tier"`
+		Provider         string `json:"provider"`
+		Model            string `json:"model"`
+		Tier             int    `json:"tier"`
+		ProviderDisabled bool   `json:"provider_disabled,omitempty"`
+		Missing          bool   `json:"missing,omitempty"`
 	}
 	type modelInfo struct {
 		Name      string        `json:"name"`
@@ -465,11 +535,17 @@ func (a *AdminHandler) HandleModels(w http.ResponseWriter, r *http.Request) {
 			info.Type = "combo"
 			info.Strategy = m.Strategy
 			for _, b := range m.Backends {
-				info.Backends = append(info.Backends, backendInfo{
+				bi := backendInfo{
 					Provider: b.Provider,
 					Model:    b.Model,
 					Tier:     b.Tier,
-				})
+				}
+				if prov := a.cfg.GetProvider(b.Provider); prov != nil {
+					bi.ProviderDisabled = prov.Disabled
+				} else {
+					bi.Missing = true
+				}
+				info.Backends = append(info.Backends, bi)
 			}
 		} else {
 			info.Type = "direct"
@@ -892,18 +968,39 @@ func (a *AdminHandler) HandleUpdateModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Partial update
+	// Partial update with direct<->combo type conversion support:
+	// - backends: [] (explicit empty) converts combo -> direct (clears strategy).
+	// - backends: [2+ items] converts direct -> combo (clears provider/model).
+	if req.Backends != nil && len(req.Backends) == 0 {
+		existing.Backends = nil
+		existing.Strategy = ""
+	} else if req.Backends != nil && len(req.Backends) > 0 {
+		existing.Backends = req.Backends
+		if req.Strategy != "" {
+			existing.Strategy = req.Strategy
+		} else if existing.Strategy == "" {
+			existing.Strategy = "fallback"
+		}
+		// Combo mode ignores top-level provider/model — clear for a clean config.
+		existing.Provider = ""
+		existing.Model = ""
+	} else {
+		if req.Strategy != "" {
+			existing.Strategy = req.Strategy
+		}
+	}
 	if req.Provider != "" {
 		existing.Provider = req.Provider
+		// Direct mode must not keep stale combo fields.
+		if existing.Backends != nil && req.Backends == nil && req.Strategy == "" && existing.Strategy != "" {
+			// Heuristic: provider+model sent without backends/strategy on a combo
+			// means convert back to direct.
+			existing.Backends = nil
+			existing.Strategy = ""
+		}
 	}
 	if req.Model != "" {
 		existing.Model = req.Model
-	}
-	if req.Strategy != "" {
-		existing.Strategy = req.Strategy
-	}
-	if req.Backends != nil {
-		existing.Backends = req.Backends
 	}
 	if req.Reasoning != nil {
 		existing.Reasoning = *req.Reasoning
@@ -935,7 +1032,8 @@ func (a *AdminHandler) HandleDeleteModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := a.cfg.DeleteModel(name); err != nil {
+	combosUpdated, combosDeleted, err := a.cfg.DeleteModel(name)
+	if err != nil {
 		a.sendError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -945,9 +1043,9 @@ func (a *AdminHandler) HandleDeleteModel(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	slog.Info("model deleted via admin", "name", name)
+	slog.Info("model deleted via admin", "name", name, "combos_updated", combosUpdated, "combos_deleted", combosDeleted)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted", "name": name, "combos_updated": combosUpdated, "combos_deleted": combosDeleted})
 }
 
 // ==================== API Key Update Endpoint ====================
@@ -972,6 +1070,7 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		AllowedModels []string `json:"allowed_models"`
 		RateLimit     int      `json:"rate_limit"`
 		TokenSaver    *bool    `json:"token_saver"`
+		Privacy       *bool    `json:"privacy"`
 		Disabled      *bool    `json:"disabled"`
 	}
 	bodyBytes, err := io.ReadAll(r.Body)
@@ -987,6 +1086,7 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 	var rawMap map[string]interface{}
 	json.Unmarshal(bodyBytes, &rawMap)
 	_, hasTokenSaver := rawMap["token_saver"]
+	_, hasPrivacy := rawMap["privacy"]
 	_, hasRateLimit := rawMap["rate_limit"]
 
 	// Find the key in config by its hash
@@ -1012,13 +1112,18 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 		tokenSaverVal = req.TokenSaver
 	}
 
+	privacyVal := existing.Privacy
+	if hasPrivacy {
+		privacyVal = req.Privacy
+	}
+
 	// Absent rate_limit must preserve the existing value (not reset to 0/unlimited).
 	rateLimitVal := existing.RateLimit
 	if hasRateLimit {
 		rateLimitVal = req.RateLimit
 	}
 
-	if !a.getKeyStore().UpdateKey(key, req.Name, req.AllowedModels, rateLimitVal, tokenSaverVal, disabledVal) {
+	if !a.getKeyStore().UpdateKey(key, req.Name, req.AllowedModels, rateLimitVal, tokenSaverVal, privacyVal, disabledVal) {
 		a.sendError(w, http.StatusNotFound, "Key not found in keystore")
 		return
 	}
@@ -1027,7 +1132,7 @@ func (a *AdminHandler) HandleUpdateKey(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("API key updated via admin", "hash_prefix", key[:min(8, len(key))]+"...")
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated", "id": key})
 }
 
 // ==================== Config Update Endpoints ====================
@@ -2604,6 +2709,42 @@ func (a *AdminHandler) HandleRefreshProxyPool(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "ok",
 		"message": "Proxy pool refresh started in background",
+	})
+}
+
+// HandleRevalidateProxyPool re-tests all live FREE proxies in the pool
+// (POST /admin/proxy-pool/revalidate). Webshare and manual proxies are
+// excluded. Runs synchronously (bounded by the pool size) and returns the
+// alive/evicted counts plus fresh stats.
+func (a *AdminHandler) HandleRevalidateProxyPool(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+
+	alive, evicted, err := a.proxyPool.RevalidateFree(ctx)
+	if err != nil {
+		a.sendError(w, http.StatusConflict, "Revalidate skipped: "+err.Error())
+		return
+	}
+
+	slog.Info("manual free proxy revalidation complete", "alive", alive, "evicted", evicted)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"alive":   alive,
+		"evicted": evicted,
+		"message": fmt.Sprintf("Cek ulang selesai: %d hidup, %d dibuang", alive, evicted),
+		"stats":   a.proxyPool.Stats(),
 	})
 }
 

@@ -636,6 +636,15 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 			var backend *Backend
 			for i := 0; i < total; i++ {
 				b := &route.Backends[idx]
+				if !b.Provider.IsHealthy() {
+					slog.Info("round-robin skipping unhealthy backend",
+						"alias", modelName,
+						"provider", b.Provider.Name(),
+						"model", b.Model,
+					)
+					idx = route.Balancer.Next()
+					continue
+				}
 				if time.Now().UnixNano() >= b.DisabledUntil.Load() {
 					backend = b
 					break
@@ -649,11 +658,9 @@ func (r *Router) ChatCompletion(ctx context.Context, modelName string, req *mode
 			}
 
 			if backend == nil {
-				backend = &route.Backends[firstIdx]
-				slog.Warn("all backends disabled, using originally selected",
-					"alias", modelName,
-					"provider", backend.Provider.Name(),
-				)
+				// All backends unhealthy/circuit-broken — surface a clear
+				// error instead of sending traffic to a disabled provider.
+				return nil, lastProv, fmt.Errorf("all backends unavailable for model %s (providers disabled/offline or circuit-broken)", modelName)
 			}
 
 		reqCopy := *req
@@ -904,6 +911,15 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 			var backend *Backend
 			for i := 0; i < total; i++ {
 				b := &route.Backends[idx]
+				if !b.Provider.IsHealthy() {
+					slog.Info("round-robin skipping unhealthy backend",
+						"alias", modelName,
+						"provider", b.Provider.Name(),
+						"model", b.Model,
+					)
+					idx = route.Balancer.Next()
+					continue
+				}
 				if time.Now().UnixNano() >= b.DisabledUntil.Load() {
 					backend = b
 					break
@@ -917,11 +933,9 @@ func (r *Router) ChatCompletionStream(ctx context.Context, modelName string, req
 			}
 
 			if backend == nil {
-				backend = &route.Backends[firstIdx]
-				slog.Warn("all backends disabled, using originally selected",
-					"alias", modelName,
-					"provider", backend.Provider.Name(),
-				)
+				// All backends unhealthy/circuit-broken — surface a clear
+				// error instead of sending traffic to a disabled provider.
+				return fmt.Errorf("all backends unavailable for model %s (providers disabled/offline or circuit-broken)", modelName)
 			}
 
 			// Don't failover if headers already sent by previous attempt

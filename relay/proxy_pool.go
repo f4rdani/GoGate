@@ -62,20 +62,25 @@ type WebshareAccountState struct {
 
 // ProxyPoolStats holds snapshot metrics of the proxy pool.
 type ProxyPoolStats struct {
-	Enabled          bool                   `json:"enabled"`
-	ActiveCount      int                    `json:"active_count"`
-	HealthyCount     int                    `json:"healthy_count"`
-	TotalFound       int                    `json:"total_found"`
-	TotalScraped     int                    `json:"total_scraped"`
-	AverageLatency   string                 `json:"average_latency"`
-	LastRefresh      string                 `json:"last_refresh"`
-	CheckInterval    string                 `json:"check_interval"`
-	Sources          []string               `json:"sources"`
-	TopProxies       []*ProxyEntry          `json:"top_proxies,omitempty"`
-	Proxies          []*ProxyEntry          `json:"proxies,omitempty"`
-	ManualCount      int                    `json:"manual_count"`
-	ManualProxies    []*ProxyEntry          `json:"manual_proxies,omitempty"`
-	WebshareAccounts []*WebshareAccountView `json:"webshare_accounts,omitempty"`
+	Enabled            bool                   `json:"enabled"`
+	ActiveCount        int                    `json:"active_count"`
+	HealthyCount       int                    `json:"healthy_count"`
+	FreeCount          int                    `json:"free_count"`
+	TotalFound         int                    `json:"total_found"`
+	TotalScraped       int                    `json:"total_scraped"`
+	AverageLatency     string                 `json:"average_latency"`
+	LastRefresh        string                 `json:"last_refresh"`
+	LastRevalidate     string                 `json:"last_revalidate"`
+	RevalidateAlive    int                    `json:"revalidate_alive"`
+	RevalidateEvicted  int                    `json:"revalidate_evicted"`
+	RevalidateInterval string                 `json:"revalidate_interval"`
+	CheckInterval      string                 `json:"check_interval"`
+	Sources            []string               `json:"sources"`
+	TopProxies         []*ProxyEntry          `json:"top_proxies,omitempty"`
+	Proxies            []*ProxyEntry          `json:"proxies,omitempty"`
+	ManualCount        int                    `json:"manual_count"`
+	ManualProxies      []*ProxyEntry          `json:"manual_proxies,omitempty"`
+	WebshareAccounts   []*WebshareAccountView `json:"webshare_accounts,omitempty"`
 }
 
 // ProxyPool manages free public proxies, background validation, and round-robin rotation.
@@ -92,10 +97,37 @@ type ProxyPool struct {
 	proxies          []*ProxyEntry
 	counter          atomic.Uint64
 	lastRefresh      time.Time
+	lastRevalidate   time.Time
+	revalidateAlive  int
+	revalidateEvict  int
 	totalFound       int
 	isRefreshing     atomic.Bool
+	isRevalidating   atomic.Bool
 	webshareAccounts map[string]*WebshareAccountState
 	proxyToAccount   map[string]string
+}
+
+// revalidateInterval derives how often live free proxies are re-tested:
+// halfway between full scrape refreshes, at least once a minute.
+func (p *ProxyPool) revalidateInterval() time.Duration {
+	iv := p.checkInterval / 2
+	if iv < time.Minute {
+		iv = time.Minute
+	}
+	return iv
+}
+
+// isFreeEntryLocked reports whether an entry is a scraped public (free) proxy.
+// Manual and Webshare proxies are excluded: Webshare traffic costs monthly
+// bandwidth, and manual entries are explicitly managed by the user.
+func (p *ProxyPool) isFreeEntryLocked(pe *ProxyEntry) bool {
+	if pe == nil || pe.IsManual || pe.AccountName != "" {
+		return false
+	}
+	if _, ok := p.proxyToAccount[pe.URL]; ok {
+		return false
+	}
+	return true
 }
 
 // NewProxyPool creates a new proxy pool instance from configuration.
@@ -258,6 +290,7 @@ func (p *ProxyPool) Start(ctx context.Context) {
 	slog.Info("free proxy pool rotator enabled",
 		"sources", len(p.sources),
 		"interval", p.checkInterval.String(),
+		"revalidate_interval", p.revalidateInterval().String(),
 		"max_proxies", p.maxProxies,
 	)
 
@@ -284,10 +317,39 @@ func (p *ProxyPool) Start(ctx context.Context) {
 			}
 		}
 	}()
+
+	// Periodic revalidation loop for live FREE proxies (webshare excluded).
+	// Staggered to run halfway between scrape refreshes so the pool is
+	// continuously verified: scrape → revalidate → scrape → ...
+	go func() {
+		iv := p.revalidateInterval()
+		timer := time.NewTimer(iv)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				timer.Reset(iv)
+				if alive, evicted, err := p.RevalidateFree(ctx); err != nil {
+					slog.Warn("periodic free proxy revalidation skipped", "error", err)
+				} else {
+					slog.Info("periodic free proxy revalidation complete",
+						"alive", alive,
+						"evicted", evicted,
+					)
+				}
+			}
+		}
+	}()
 }
 
 // Refresh scrapes public sources and checks health concurrently.
 func (p *ProxyPool) Refresh(ctx context.Context) error {
+	if p.isRevalidating.Load() {
+		return fmt.Errorf("free proxy revalidation in progress")
+	}
 	if !p.isRefreshing.CompareAndSwap(false, true) {
 		return fmt.Errorf("refresh already in progress")
 	}
@@ -349,6 +411,113 @@ func (p *ProxyPool) Refresh(ctx context.Context) error {
 		"total_scraped", p.totalFound,
 	)
 	return nil
+}
+
+// RevalidateFree re-tests every live FREE (scraped public) proxy currently in
+// the pool and evicts the dead ones. Webshare and manual proxies are never
+// touched: Webshare traffic consumes metered monthly bandwidth, and manual
+// entries are explicitly managed by the user.
+//
+// Survivors get fresh latency measurements (used for fastest-first rotation),
+// failures accumulate on the entry and evict at 2 consecutive failures.
+// Returns (alive, evicted).
+func (p *ProxyPool) RevalidateFree(ctx context.Context) (int, int, error) {
+	if p.isRefreshing.Load() {
+		return 0, 0, fmt.Errorf("pool refresh in progress")
+	}
+	if !p.isRevalidating.CompareAndSwap(false, true) {
+		return 0, 0, fmt.Errorf("revalidation already in progress")
+	}
+	defer p.isRevalidating.Store(false)
+
+	// Snapshot current free entries without holding the lock during probes.
+	p.mu.RLock()
+	var targets []*ProxyEntry
+	for _, pe := range p.proxies {
+		if p.isFreeEntryLocked(pe) {
+			targets = append(targets, pe)
+		}
+	}
+	p.mu.RUnlock()
+
+	if len(targets) == 0 {
+		p.mu.Lock()
+		p.lastRevalidate = time.Now()
+		p.revalidateAlive = 0
+		p.revalidateEvict = 0
+		p.mu.Unlock()
+		return 0, 0, nil
+	}
+
+	slog.Info("revalidating live free proxies...", "count", len(targets))
+
+	concurrency := 20
+	if len(targets) < concurrency {
+		concurrency = len(targets)
+	}
+	jobs := make(chan *ProxyEntry, len(targets))
+	for _, pe := range targets {
+		jobs <- pe
+	}
+	close(jobs)
+
+	var wg sync.WaitGroup
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for pe := range jobs {
+				entry, ok := p.testProxy(ctx, pe.URL)
+				if ok && entry != nil {
+					pe.Latency = entry.Latency
+					pe.LatencyMs = entry.LatencyMs
+					pe.LastChecked = entry.LastChecked
+					pe.Failures.Store(0)
+				} else {
+					pe.LastChecked = time.Now()
+					pe.Failures.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Apply results: keep manual/webshare entries untouched, drop free entries
+	// with 2+ consecutive failures, re-sort survivors fastest-first.
+	p.mu.Lock()
+	var kept []*ProxyEntry
+	var survivors []*ProxyEntry
+	evicted := 0
+	for _, pe := range p.proxies {
+		if !p.isFreeEntryLocked(pe) {
+			kept = append(kept, pe)
+			continue
+		}
+		if pe.Failures.Load() >= 2 {
+			evicted++
+			slog.Info("evicting dead free proxy after revalidation",
+				"proxy", pe.URL,
+				"failures", pe.Failures.Load(),
+			)
+			continue
+		}
+		survivors = append(survivors, pe)
+	}
+	sort.Slice(survivors, func(i, j int) bool {
+		return survivors[i].Latency < survivors[j].Latency
+	})
+	kept = append(kept, survivors...)
+	p.proxies = kept
+	p.lastRevalidate = time.Now()
+	p.revalidateAlive = len(survivors)
+	p.revalidateEvict = evicted
+	p.mu.Unlock()
+
+	slog.Info("free proxy revalidation complete",
+		"alive", len(survivors),
+		"evicted", evicted,
+	)
+	return len(survivors), evicted, nil
 }
 
 // fetchRawProxies fetches and parses IP:Port lines from all configured sources.
@@ -785,6 +954,18 @@ func (p *ProxyPool) Stats() ProxyPoolStats {
 		lastRef = time.Since(p.lastRefresh).Round(time.Second).String() + " ago"
 	}
 
+	lastReval := "Never"
+	if !p.lastRevalidate.IsZero() {
+		lastReval = time.Since(p.lastRevalidate).Round(time.Second).String() + " ago"
+	}
+
+	freeCount := 0
+	for _, pe := range p.proxies {
+		if p.isFreeEntryLocked(pe) {
+			freeCount++
+		}
+	}
+
 	var top []*ProxyEntry
 	for i, pe := range p.proxies {
 		if i >= 15 {
@@ -799,20 +980,25 @@ func (p *ProxyPool) Stats() ProxyPoolStats {
 	}
 
 	return ProxyPoolStats{
-		Enabled:        p.enabled,
-		ActiveCount:    len(p.proxies),
-		HealthyCount:   len(p.proxies),
-		TotalFound:     p.totalFound,
-		TotalScraped:   p.totalFound,
-		AverageLatency: avgLatency,
-		LastRefresh:    lastRef,
-		CheckInterval:  p.checkInterval.String(),
-		Sources:        p.sources,
-		TopProxies:     top,
-		Proxies:        top,
-		ManualCount:      len(p.manualEntries),
-		ManualProxies:    manCopies,
-		WebshareAccounts: p.getWebshareAccountsLocked(),
+		Enabled:            p.enabled,
+		ActiveCount:        len(p.proxies),
+		HealthyCount:       len(p.proxies),
+		FreeCount:          freeCount,
+		TotalFound:         p.totalFound,
+		TotalScraped:       p.totalFound,
+		AverageLatency:     avgLatency,
+		LastRefresh:        lastRef,
+		LastRevalidate:     lastReval,
+		RevalidateAlive:    p.revalidateAlive,
+		RevalidateEvicted:  p.revalidateEvict,
+		RevalidateInterval: p.revalidateInterval().String(),
+		CheckInterval:      p.checkInterval.String(),
+		Sources:            p.sources,
+		TopProxies:         top,
+		Proxies:            top,
+		ManualCount:        len(p.manualEntries),
+		ManualProxies:      manCopies,
+		WebshareAccounts:   p.getWebshareAccountsLocked(),
 	}
 }
 

@@ -79,12 +79,42 @@ func TestKeyStore_AddAndDelete(t *testing.T) {
 	}
 }
 
+func TestKeyStore_RegenerateKey(t *testing.T) {
+	ks := NewKeyStore(nil)
+	info := ks.AddKeyFull("Regen Me", []string{"*"}, 60, nil, nil)
+	if info.CreatedAt == "" {
+		t.Fatal("expected AddKeyFull to stamp CreatedAt")
+	}
+	oldKey := info.Key
+	hash := HashKey(oldKey)
+
+	regen, ok := ks.RegenerateKey(hash)
+	if !ok || regen == nil {
+		t.Fatal("expected RegenerateKey to succeed")
+	}
+	if regen.Key == oldKey {
+		t.Error("regenerated secret must differ from the old one")
+	}
+	if regen.Name != "Regen Me" || regen.RateLimit != 60 || regen.CreatedAt != info.CreatedAt {
+		t.Error("regenerate must preserve name, limits, and created_at")
+	}
+	if _, ok := ks.Validate(oldKey); ok {
+		t.Error("old secret must stop validating after regenerate")
+	}
+	if _, ok := ks.Validate(regen.Key); !ok {
+		t.Error("new secret must validate after regenerate")
+	}
+	if _, ok := ks.RegenerateKey("deadbeef"); ok {
+		t.Error("regenerate of unknown hash must fail")
+	}
+}
+
 func TestKeyStore_UpdateKey(t *testing.T) {
 	ks := NewKeyStore(nil)
 	info := ks.AddKey("Original Name", []string{"gpt-4"}, 10, nil)
 	hash := HashKey(info.Key)
 
-	updated := ks.UpdateKey(hash, "Updated Name", []string{"*"}, 50, nil, false)
+	updated := ks.UpdateKey(hash, "Updated Name", []string{"*"}, 50, nil, nil, false)
 	if !updated {
 		t.Fatalf("expected UpdateKey to return true")
 	}

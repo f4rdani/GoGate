@@ -2116,6 +2116,7 @@ input:focus, select:focus, textarea:focus {
               <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
                 <button id="btnToggleProxyPool" class="toggle-btn off" onclick="toggleProxyPool()">Turn ON</button>
                 <button id="btnRefreshProxyPool" class="btn btn-sm" onclick="refreshProxyPool()" title="Scrape and test latest public proxies">Refresh</button>
+                <button id="btnRevalidateProxyPool" class="btn btn-sm" onclick="revalidateFreeProxies()" title="Test ulang semua proxy free yang sedang aktif (tanpa scrape baru; webshare & manual dikecualikan)">Test Ulang Free</button>
                 <button class="btn btn-sm" onclick="showAddManualProxyModal()" title="Tambah Proxy Manual">+ Proxy</button>
                 <button class="btn btn-sm btn-purple" onclick="showAddCFRelayModal()" title="Tambah Cloudflare Relay (AI Gateway / Reverse Proxy)">+ CF Relay</button>
               </div>
@@ -2124,12 +2125,13 @@ input:focus, select:focus, textarea:focus {
               Automatic free rotating public proxy pool per-request for providers with custom manual proxies and Cloudflare Relays.
             </p>
             <div id="proxyPoolDetails" style="display:none; border-top:1px solid var(--border-subtle); padding-top:0.65rem;">
-              <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.8rem; color:var(--text2);">
+<div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.8rem; color:var(--text2);">
                 <div>Scraped: <strong id="ppTotal" class="mono" style="color:var(--text1)">0</strong></div>
                 <div>Manual: <strong id="ppManual" class="mono" style="color:var(--purple)">0</strong></div>
-                <div>Active &amp; Ready: <strong id="ppHealthy" class="mono" style="color:var(--green)">0</strong></div>
+                <div>Free: <strong id="ppFree" class="mono" style="color:var(--cyan)">0</strong></div>
+                <div>Active & Ready: <strong id="ppHealthy" class="mono" style="color:var(--green)">0</strong></div>
                 <div>Avg Latency: <strong id="ppLatency" class="mono" style="color:var(--cyan)">0ms</strong></div>
-                <div>Last Checked: <span id="ppLastRef" class="mono" style="color:var(--text3)">Never</span></div>
+                <div title="Test ulang berkala khusus proxy free (webshare & manual dikecualikan)">Cek Ulang Free: <span id="ppReval" class="mono" style="color:var(--text3)">Never</span></div>
               </div>
               <div id="proxyListPreview" style="margin-top:0.5rem; display:flex; gap:0.35rem; flex-wrap:wrap; max-height:120px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border:1px solid var(--border); border-radius:var(--radius);"></div>
             </div>
@@ -2299,16 +2301,22 @@ input:focus, select:focus, textarea:focus {
             </div>
             <span class="badge" id="modelCount">0</span>
           </div>
-          <button class="btn btn-primary" onclick="showAddModel()">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add Model Route
-          </button>
+          <div style="display:flex;gap:.5rem;">
+            <button class="btn" onclick="showAddModel()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Model Route
+            </button>
+            <button class="btn btn-primary" onclick="showAddModel();mmSetType('combo')">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              Buat Combo
+            </button>
+          </div>
         </div>
 
         <div class="card" style="margin-bottom:1rem;">
           <div class="card-header" style="padding:0.7rem 1.25rem;">
             <div class="card-title" style="font-size:0.88rem;">🔗 Combo Models <span class="badge" id="comboCount">0</span></div>
-            <span style="font-size:0.75rem;color:var(--text3);">Multi-backend routes dengan fallback</span>
+            <span style="font-size:0.75rem;color:var(--text3);">Multi-backend: pilih beberapa model + fallback / round-robin</span>
           </div>
           <div class="table-wrap" style="border:none; border-radius:0;">
             <table>
@@ -2317,7 +2325,7 @@ input:focus, select:focus, textarea:focus {
                   <th>Model ID</th>
                   <th>Route / Providers</th>
                   <th>Upstream Target</th>
-                  <th>Fallbacks</th>
+                  <th>Strategy</th>
                   <th>Capabilities</th>
                   <th style="text-align:right;">Actions</th>
                 </tr>
@@ -2341,7 +2349,7 @@ input:focus, select:focus, textarea:focus {
                   <th>Model ID</th>
                   <th>Route / Providers</th>
                   <th>Upstream Target</th>
-                  <th>Fallbacks</th>
+                  <th>Strategy</th>
                   <th>Capabilities</th>
                   <th style="text-align:right;">Actions</th>
                 </tr>
@@ -2380,12 +2388,13 @@ input:focus, select:focus, textarea:focus {
                   <th>Allowed Models</th>
                   <th>Rate Limit</th>
                   <th>Token Saver (RTK)</th>
+                  <th>Privacy</th>
                   <th>Created</th>
                   <th style="text-align:right;">Actions</th>
                 </tr>
               </thead>
               <tbody id="keyTable">
-                <tr><td colspan="7" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Loading API keys...</td></tr>
+                <tr><td colspan="8" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Loading API keys...</td></tr>
               </tbody>
             </table>
           </div>
@@ -2676,6 +2685,9 @@ input:focus, select:focus, textarea:focus {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               Scrape &amp; Refresh
             </button>
+            <button class="btn" onclick="revalidateFreeProxies()" title="Test ulang semua proxy free yang sedang aktif (tanpa scrape baru; webshare & manual dikecualikan)">
+              Test Ulang Free
+            </button>
             <button class="btn btn-cyan" onclick="showAddWebshareModal()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
               + Add Webshare Account
@@ -2705,11 +2717,12 @@ input:focus, select:focus, textarea:focus {
             </div>
           </div>
           <div class="card-body">
-            <div class="kpi-strip" style="margin-bottom:1rem;">
+<div class="kpi-strip" style="margin-bottom:1rem;">
               <div class="kpi-tile"><div class="kpi-label">Scraped Public</div><div class="kpi-val" id="ppViewTotal">0</div></div>
               <div class="kpi-tile"><div class="kpi-label">Manual Proxies</div><div class="kpi-val purple" id="ppViewManual">0</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Active &amp; Ready</div><div class="kpi-val green" id="ppViewHealthy">0</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Average Latency</div><div class="kpi-val cyan" id="ppViewLatency">0ms</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Free Proxies</div><div class="kpi-val cyan" id="ppViewFree">0</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Active & Ready</div><div class="kpi-val green" id="ppViewHealthy">0</div></div>
+              <div class="kpi-tile" title="Test ulang berkala khusus proxy free (webshare & manual dikecualikan)"><div class="kpi-label">Cek Ulang Free</div><div class="kpi-val cyan" id="ppViewReval" style="font-size:1.05rem;padding-top:0.2rem;">-</div></div>
               <div class="kpi-tile"><div class="kpi-label">Rotation Mode</div><div class="kpi-val purple" style="font-size:1.05rem;padding-top:0.2rem;">Round-Robin</div></div>
             </div>
             <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:0.75rem;">
@@ -3617,8 +3630,10 @@ function switchCliTab(clientName){
 
 function updateCliSnippet(){
   const picker = document.getElementById('cliKeyPicker');
-  const selectedKey = picker ? picker.value : '';
-  const keyVal = selectedKey || 'sk-gogate-your-api-key';
+  const selOpt = picker && picker.selectedOptions && picker.selectedOptions[0] ? picker.selectedOptions[0].textContent : '';
+  // Full secrets are only shown once (at Create/Regenerate) — list API returns
+  // masked tokens, so snippets use a placeholder the user replaces.
+  const keyVal = 'PASTE-FULL-API-KEY-HERE';
   const host = window.location.origin;
 
   let code = '';
@@ -3685,7 +3700,7 @@ print(response.choices[0].message.content)`;
   const pre = document.getElementById('cliSnippetCode');
   if(pre) pre.textContent = code;
   const h = document.getElementById('cliHelpText');
-  if(h) h.textContent = help;
+  if(h) h.textContent = (help ? help + ' ' : '') + 'Ganti PASTE-FULL-API-KEY-HERE dengan key penuh' + (selOpt ? ` untuk "${selOpt}"` : '') + ' (hanya ditampilkan sekali saat Create / Regenerate).';
 }
 
 function copyCliSnippet(btn){
@@ -3877,6 +3892,7 @@ function renderProxyPool(data){
 
   const t1 = document.getElementById('ppTotal'); if(t1) t1.textContent = data.total_scraped || data.total || 0;
   const m1 = document.getElementById('ppManual'); if(m1) m1.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
+  const f1 = document.getElementById('ppFree'); if(f1) f1.textContent = data.free_count || 0;
   const h1 = document.getElementById('ppHealthy'); if(h1) h1.textContent = healthyCount;
   const l1 = document.getElementById('ppLatency'); if(l1) l1.textContent = (data.avg_latency_ms||0) + 'ms';
   const r1 = document.getElementById('ppLastRef');
@@ -3892,11 +3908,38 @@ function renderProxyPool(data){
       }
     }
   }
+  const rv1 = document.getElementById('ppReval');
+  if(rv1){
+    if(!data.last_revalidate) rv1.textContent = 'Never';
+    else if(typeof data.last_revalidate === 'string' && data.last_revalidate.includes('ago')) rv1.textContent = data.last_revalidate;
+    else {
+      try {
+        const d = new Date(data.last_revalidate);
+        rv1.textContent = isNaN(d.getTime()) ? String(data.last_revalidate) : d.toLocaleTimeString();
+      } catch(e) {
+        rv1.textContent = String(data.last_revalidate);
+      }
+    }
+  }
 
   const t2 = document.getElementById('ppViewTotal'); if(t2) t2.textContent = data.total_scraped || data.total || 0;
   const m2 = document.getElementById('ppViewManual'); if(m2) m2.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
+  const f2 = document.getElementById('ppViewFree'); if(f2) f2.textContent = data.free_count || 0;
   const h2 = document.getElementById('ppViewHealthy'); if(h2) h2.textContent = healthyCount;
   const l2 = document.getElementById('ppViewLatency'); if(l2) l2.textContent = (data.avg_latency_ms||0) + 'ms';
+  const rv2 = document.getElementById('ppViewReval');
+  if(rv2){
+    if(!data.last_revalidate) rv2.textContent = 'Never';
+    else if(typeof data.last_revalidate === 'string' && data.last_revalidate.includes('ago')) rv2.textContent = data.last_revalidate;
+    else {
+      try {
+        const d = new Date(data.last_revalidate);
+        rv2.textContent = isNaN(d.getTime()) ? String(data.last_revalidate) : d.toLocaleTimeString();
+      } catch(e) {
+        rv2.textContent = String(data.last_revalidate);
+      }
+    }
+  }
 
   const preview = document.getElementById('proxyListPreview');
   const vPreview = document.getElementById('ppViewListPreview');
@@ -4533,6 +4576,20 @@ async function refreshProxyPool(){
   }
 }
 
+async function revalidateFreeProxies(){
+  try{
+    toast('Mengecek ulang semua proxy free yang aktif...', 'info');
+    const r = await api('/admin/proxy-pool/revalidate', {method:'POST'});
+    if(r.stats){
+      renderProxyPool(r.stats);
+    }
+    toast(r.message || 'Revalidate selesai', r.evicted ? 'warn' : 'success');
+    fetchAll();
+  }catch(e){
+    toast('Revalidate Error: ' + e.message, 'error');
+  }
+}
+
 function showWorkerScriptModal(){
   const scriptCode = `// Cloudflare Worker Reverse Proxy Relay for GoGate AI Gateway
 export default {
@@ -4910,34 +4967,84 @@ function isModelActive(m, disabledProviders){
   return !disabledProviders.has(m.provider);
 }
 
+function mmBackendStatus(b){
+  // Resolve whether a combo backend is currently skipped: provider disabled,
+  // provider deleted (missing), or flagged by the API.
+  if(!b) return { off: false, label: '' };
+  if(b.missing) return { off: true, label: 'DELETED' };
+  if(b.provider_disabled) return { off: true, label: 'DISABLED' };
+  const p = (_currentProviders || []).find(x => x.name === b.provider);
+  if(!p) return { off: true, label: 'DELETED' };
+  if(p.disabled) return { off: true, label: 'DISABLED' };
+  return { off: false, label: '' };
+}
+
 function modelRowHTML(m){
+  const combo = isModelCombo(m);
   let routeInfo = '';
-  if(isModelCombo(m)){
+  if(combo){
     const n = (m.backends || []).length;
-    routeInfo = `<span class="tag tag-purple">Combo (${n})</span> <span style="font-size:0.75rem;color:var(--text3);">${esc(m.strategy||'rr')}</span>`;
+    const strat = (m.strategy || 'fallback').toLowerCase();
+    const stratBadge = strat === 'round-robin'
+      ? '<span class="tag tag-purple">Round-robin</span>'
+      : strat === 'tiered'
+      ? '<span class="tag tag-cyan">Tiered</span>'
+      : '<span class="tag tag-orange">Fallback</span>';
+    routeInfo = `<span class="tag tag-purple">Combo (${n})</span> ${stratBadge}`;
   } else {
     routeInfo = `<span class="tag tag-blue">${esc(m.provider||'direct')}</span>`;
   }
 
-  let fbInfo = '';
-  if(m.fallbacks && m.fallbacks.length){
-    fbInfo = m.fallbacks.map(f => `<span class="tag tag-orange mono" style="font-size:0.68rem;">${esc(f)}</span>`).join(' ');
+  let targetInfo = '';
+  let offCount = 0;
+  if(combo){
+    const backends = m.backends || [];
+    const isRR = (m.strategy || '').toLowerCase() === 'round-robin';
+    targetInfo = backends.map((b, i) => {
+      const st = mmBackendStatus(b);
+      if(st.off) offCount++;
+      const prefix = isRR ? '&bull;' : `${i + 1}.`;
+      const dim = st.off ? 'opacity:.55;' : '';
+      const strike = st.off ? 'text-decoration:line-through;' : '';
+      const tag = st.off ? ` <span class="tag tag-red" style="font-size:.62rem;" title="Provider ${st.label === 'DELETED' ? 'dihapus' : 'di-disable'} — backend ini di-skip saat routing">${st.label}</span>` : '';
+      return `<div class="mono" style="font-size:0.72rem;white-space:nowrap;${dim}"><span style="color:var(--text3);">${prefix}</span> <strong style="color:var(--text1);${strike}">${esc(b.provider)}</strong><span style="color:var(--text3);"> / </span><span style="${strike}">${esc(b.model || '-')}</span>${tag}</div>`;
+    }).join('');
+    if(!targetInfo) targetInfo = '<span style="color:var(--text3);font-size:0.75rem;">No backends</span>';
   } else {
-    fbInfo = '<span style="color:var(--text3);font-size:0.75rem;">None</span>';
+    targetInfo = `<span class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</span>`;
+  }
+
+  let stratInfo = '';
+  if(combo){
+    const strat = (m.strategy || 'fallback').toLowerCase();
+    if(strat === 'round-robin'){
+      stratInfo = '<span style="color:var(--text2);font-size:0.72rem;">Bergiliran (load-balance) + auto-failover</span>';
+    } else if(strat === 'tiered'){
+      stratInfo = '<span style="color:var(--text2);font-size:0.72rem;">Per-tier: T1 &rarr; T2 &rarr; T3</span>';
+    } else {
+      stratInfo = '<span style="color:var(--text2);font-size:0.72rem;">Urutan prioritas 1 &rarr; 2 &rarr; 3&hellip;</span>';
+    }
+    if(offCount > 0){
+      stratInfo += `<div style="margin-top:.25rem;"><span class="tag tag-orange" style="font-size:.65rem;" title="Backend yang provider-nya disable/dihapus otomatis di-skip saat routing">${offCount} backend nonaktif — di-skip</span></div>`;
+    }
+  } else {
+    stratInfo = '<span style="color:var(--text3);font-size:0.75rem;">&mdash;</span>';
   }
 
   let caps = [];
   if(m.reasoning) caps.push('<span class="tag tag-green">Reasoning</span>');
   if(!caps.length) caps.push('<span style="color:var(--text3);font-size:0.75rem;">Standard</span>');
 
+  const editName = encodeURIComponent(m.name).replace(/'/g, '%27');
   return `<tr>
     <td><strong class="mono" style="color:var(--text1);">${esc(m.name)}</strong></td>
     <td>${routeInfo}</td>
-    <td class="mono" style="font-size:0.75rem;">${esc(m.model||m.name)}</td>
-    <td>${fbInfo}</td>
+    <td>${targetInfo}</td>
+    <td>${stratInfo}</td>
     <td>${caps.join(' ')}</td>
     <td style="text-align:right;white-space:nowrap;">
       <button class="btn btn-sm btn-primary" onclick="showTestModel('${esc(m.provider||'')}', '${esc(m.name)}')">Test</button>
+      <button class="btn btn-sm" onclick="showEditModel('${editName}')">Edit</button>
       <button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(m.name)}')">Delete</button>
     </td>
   </tr>`;
@@ -4977,20 +5084,21 @@ function renderKeys(list){
 
   if(picker){
     const curr = picker.value;
-    picker.innerHTML = '<option value="">(Select a key for snippets)</option>' + 
-      list.map(k => `<option value="${esc(k.key)}" ${k.key===curr?'selected':''}>${esc(k.name)} (${esc(maskKey(k.key))})</option>`).join('');
+    picker.innerHTML = '<option value="">(Select a key for snippets)</option>' +
+      list.map(k => `<option value="${esc(k.id)}" ${k.id===curr?'selected':''}>${esc(k.name)} (${esc(maskKey(k.key))})</option>`).join('');
     if(!curr && list.length > 0){
-      picker.value = list[0].key;
+      picker.value = list[0].id;
       updateCliSnippet();
     }
   }
 
   if(!list.length){
-    tb.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No API keys created yet</td></tr>';
+    tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No API keys created yet</td></tr>';
     return;
   }
 
   tb.innerHTML = list.map(k => {
+    const kid = esc(k.id || '');
     let modelsTag = '';
     if(!k.allowed_models || !k.allowed_models.length || k.allowed_models.includes('*')){
       modelsTag = '<span class="tag tag-green">All Models (*)</span>';
@@ -5002,15 +5110,27 @@ function renderKeys(list){
     if(k.token_saver === true) tsBadge = '<span class="tag tag-green">RTK Force ON</span>';
     if(k.token_saver === false) tsBadge = '<span class="tag tag-red">RTK Force OFF</span>';
 
-    return `<tr>
-      <td><strong style="color:var(--text1);">${esc(k.name)}</strong></td>
+    let privBadge = '<span class="tag tag-gray">Inherit Global</span>';
+    if(k.privacy === true) privBadge = '<span class="tag tag-green">Privacy ON</span>';
+    if(k.privacy === false) privBadge = '<span class="tag tag-red">Privacy OFF</span>';
+
+    const created = k.created_at ? new Date(k.created_at).toLocaleString() : '<span style="color:var(--text3)">--</span>';
+    const disBadge = k.disabled ? ' <span class="tag tag-red">DISABLED</span>' : '';
+    const rowStyle = k.disabled ? 'opacity:.6;' : '';
+
+    return `<tr style="${rowStyle}">
+      <td><strong style="color:var(--text1);">${esc(k.name)}</strong>${disBadge}</td>
       <td class="mono" style="font-size:0.78rem;">${maskKey(k.key)}</td>
       <td>${modelsTag}</td>
       <td><span class="tag tag-gray">${k.rate_limit ? k.rate_limit + ' req/min' : 'Unlimited'}</span></td>
       <td>${tsBadge}</td>
-      <td style="font-size:0.75rem;color:var(--text2);">${k.created_at ? new Date(k.created_at).toLocaleDateString() : '--'}</td>
+      <td>${privBadge}</td>
+      <td style="font-size:0.75rem;color:var(--text2);white-space:nowrap;">${created}</td>
       <td style="text-align:right;white-space:nowrap;">
-        <button class="btn btn-sm btn-danger" onclick="deleteKey('${esc(k.key)}', '${esc(k.name)}')">Revoke</button>
+        <button class="btn btn-sm btn-primary" onclick="showEditKey('${kid}')">Edit</button>
+        <button class="btn btn-sm" onclick="regenerateKey('${kid}', '${esc(k.name)}')" title="Ganti secret key ini dengan yang baru (key lama langsung mati)">Regenerate</button>
+        <button class="btn btn-sm" onclick="toggleKeyDisabled('${kid}', ${!k.disabled})" title="${k.disabled ? 'Aktifkan kembali key ini' : 'Nonaktifkan sementara key ini'}">${k.disabled ? 'Enable' : 'Disable'}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteKey('${kid}', '${esc(k.name)}')">Revoke</button>
       </td>
     </tr>`;
   }).join('');
@@ -6478,10 +6598,15 @@ async function deleteHubModel(provName, routeName, upstreamTarget){
   if(!p) return;
 
   try{
-    // 1. Delete route if it exists
+    // 1. Delete route if it exists (backend cascade ikut membersihkan combo)
+    let cascadeNote = '';
     const hasRoute = (_currentModels || []).some(m => m.name === routeName);
     if(hasRoute){
-      await api('/admin/models/' + encodeURIComponent(routeName), { method: 'DELETE' });
+      const r = await api('/admin/models/' + encodeURIComponent(routeName), { method: 'DELETE' });
+      const upd = (r && r.combos_updated) || [];
+      const del = (r && r.combos_deleted) || [];
+      if(upd.length) cascadeNote += ` — combo di-sync: ${upd.join(', ')}`;
+      if(del.length) cascadeNote += ` — combo ikut terhapus: ${del.join(', ')}`;
     }
 
     // 2. Remove from provider.models array
@@ -6496,7 +6621,7 @@ async function deleteHubModel(provName, routeName, upstreamTarget){
     _hubSelectedModels.delete((routeName || upstreamTarget) + ':::' + upstreamTarget);
     _hubSelectedModels.delete(routeName + ':::' + upstreamTarget);
 
-    toast(`Model deleted: ${targetLabel}`, 'info');
+    toast(`Model deleted: ${targetLabel}${cascadeNote}`, 'info');
     await fetchAll();
     const curP = _currentProviders.find(x => x.name === provName);
     if(curP && document.getElementById('hubModelsList')){
@@ -6776,7 +6901,7 @@ async function showSyncModelsModal(provName){
     <div id="syncModelsContent" style="min-height:120px;display:flex;align-items:center;justify-content:center;">
       <span class="loading-spinner"></span> <span style="margin-left:0.5rem;color:var(--text3);">Mengambil daftar model dari upstream API...</span>
     </div>
-  `, null, 'modal-lg');
+  `, null, 'modal-xl');
 
   try{
     const res = await api('/admin/diag/fetch-models', {
@@ -6797,54 +6922,12 @@ async function showSyncModelsModal(provName){
     }
 
     const existingEntries = getProviderModelEntries(p);
-    const existingUpstreamSet = new Set(existingEntries.map(e => e.upstreamTarget));
-
-    const rows = models.map((mId) => {
-      const alreadyExists = existingUpstreamSet.has(mId);
-      return `
-        <tr style="${alreadyExists ? 'opacity:0.65;' : ''}">
-          <td style="width:40px;text-align:center;">
-            <input type="checkbox" class="sync-model-cb" value="${esc(mId)}" ${alreadyExists ? '' : 'checked'}>
-          </td>
-          <td>
-            <strong class="mono" style="font-size:0.8rem;">${esc(mId)}</strong>
-          </td>
-          <td>
-            ${alreadyExists ? '<span class="tag tag-gray">Sudah Terdaftar</span>' : '<span class="tag tag-green">Model Baru</span>'}
-          </td>
-        </tr>
-      `;
-    }).join('');
-
-    document.getElementById('syncModelsContent').innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.4rem;">
-        <div style="font-size:0.8rem;color:var(--text1);font-weight:600;">
-          Ditemukan <strong>${models.length}</strong> model dari upstream:
-        </div>
-        <div style="display:flex;gap:0.4rem;">
-          <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(true)">Pilih Semua</button>
-          <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(false)">Batal Pilih</button>
-        </div>
-      </div>
-      <div class="table-wrap" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem;">
-        <table>
-          <thead>
-            <tr>
-              <th style="width:40px;text-align:center;">✓</th>
-              <th>Upstream Model ID</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows}
-          </tbody>
-        </table>
-      </div>
-      <div class="form-actions">
-        <button class="btn" onclick="closeModal()">Batal</button>
-        <button class="btn btn-primary" onclick="submitImportSyncedModels('${esc(provName)}')">Import Selected Models</button>
-      </div>
-    `;
+    _syncModalExisting = new Set(existingEntries.map(e => e.upstreamTarget));
+    // Default: semua model baru ter-checklist, yang sudah terdaftar tidak.
+    _syncModalSelected = new Set(models.filter(mId => !_syncModalExisting.has(mId)));
+    _syncModalQuery = '';
+    _syncModalFilter = 'all';
+    renderSyncModelsTable(provName);
   }catch(e){
     const parsed = parseTestErrorDetails(e, { provider: provName, targetURL: e.data?.target });
     document.getElementById('syncModelsContent').innerHTML = `
@@ -6862,16 +6945,157 @@ async function showSyncModelsModal(provName){
   }
 }
 
-function toggleSelectAllSyncModels(selectAll){
-  document.querySelectorAll('.sync-model-cb').forEach(cb => cb.checked = selectAll);
+// State for the Sync-from-API modal (perluasan tabel + search/filter).
+let _syncModalExisting = new Set();
+let _syncModalSelected = new Set();
+let _syncModalQuery = '';
+let _syncModalFilter = 'all';
+
+function syncModalFilteredModels(){
+  const q = (_syncModalQuery || '').toLowerCase().trim();
+  return (_fetchedApiModels || []).filter(mId => {
+    const lower = String(mId).toLowerCase();
+    if(q && !lower.includes(q)) return false;
+    if(_syncModalFilter === 'new') return !_syncModalExisting.has(mId);
+    if(_syncModalFilter === 'existing') return _syncModalExisting.has(mId);
+    if(_syncModalFilter === 'free') return lower.includes('free');
+    return true;
+  });
+}
+
+function onSyncModalSearch(val, provName){
+  _syncModalQuery = val || '';
+  renderSyncModelsTable(provName);
+}
+
+function onSyncModalFilterChange(val, provName){
+  _syncModalFilter = val || 'all';
+  renderSyncModelsTable(provName);
+}
+
+function clearSyncModalSearch(provName){
+  _syncModalQuery = '';
+  const inp = document.getElementById('syncModelSearchInput');
+  if(inp) inp.value = '';
+  renderSyncModelsTable(provName);
+}
+
+function renderSyncModelsTable(provName){
+  const host = document.getElementById('syncModelsContent');
+  if(!host) return;
+  const models = _fetchedApiModels || [];
+  const filtered = syncModalFilteredModels();
+  const newCount = models.filter(mId => !_syncModalExisting.has(mId)).length;
+  const selCount = _syncModalSelected.size;
+  const allFilteredChecked = filtered.length > 0 && filtered.every(mId => _syncModalSelected.has(mId));
+
+  const rows = filtered.map(mId => {
+    const alreadyExists = _syncModalExisting.has(mId);
+    const checked = _syncModalSelected.has(mId);
+    const isFree = String(mId).toLowerCase().includes('free');
+    return `
+      <tr style="${alreadyExists ? 'opacity:0.65;' : ''}">
+        <td style="width:40px;text-align:center;">
+          <input type="checkbox" class="sync-model-cb" data-mid="${esc(mId)}" ${checked ? 'checked' : ''} onchange="toggleSyncModelSelect(this, '${esc(mId)}', '${esc(provName)}')">
+        </td>
+        <td style="min-width:0;">
+          <strong class="mono" style="font-size:0.8rem;word-break:break-all;white-space:normal;">${esc(mId)}</strong>
+        </td>
+        <td style="white-space:nowrap;">
+          ${alreadyExists ? '<span class="tag tag-gray">Sudah Terdaftar</span>' : '<span class="tag tag-green">Model Baru</span>'}
+          ${isFree ? ' <span class="tag tag-cyan" title="ID model mengandung kata free">Free</span>' : ''}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  host.innerHTML = `
+    <div style="display:flex;gap:0.5rem;margin-bottom:0.6rem;flex-wrap:wrap;align-items:center;">
+      <div style="position:relative;flex:1;min-width:200px;">
+        <input type="text" id="syncModelSearchInput" class="form-control" style="width:100%;padding:0.55rem 2rem 0.55rem 0.8rem;font-size:0.85rem;" placeholder="Cari nama model... mis. free, llama, gpt" value="${esc(_syncModalQuery)}" oninput="onSyncModalSearch(this.value, '${esc(provName)}')">
+        ${_syncModalQuery ? `<button type="button" onclick="clearSyncModalSearch('${esc(provName)}')" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text3);font-size:0.9rem;padding:0 4px;" title="Hapus pencarian">✕</button>` : ''}
+      </div>
+      <select onchange="onSyncModalFilterChange(this.value, '${esc(provName)}')" style="padding:0.42rem 0.65rem;font-size:0.8rem;min-width:150px;">
+        <option value="all" ${_syncModalFilter === 'all' ? 'selected' : ''}>Semua (${models.length})</option>
+        <option value="new" ${_syncModalFilter === 'new' ? 'selected' : ''}>Model Baru (${newCount})</option>
+        <option value="free" ${_syncModalFilter === 'free' ? 'selected' : ''}>Free</option>
+        <option value="existing" ${_syncModalFilter === 'existing' ? 'selected' : ''}>Sudah Terdaftar (${models.length - newCount})</option>
+      </select>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.4rem;">
+      <div style="font-size:0.8rem;color:var(--text2);">
+        Menampilkan <strong style="color:var(--text1);">${filtered.length}</strong> dari <strong style="color:var(--text1);">${models.length}</strong> model
+        &bull; <strong style="color:var(--accent);" id="syncSelectedCount">${selCount}</strong> dipilih
+      </div>
+      <div style="display:flex;gap:0.4rem;align-items:center;">
+        <input type="checkbox" id="syncMasterSelect" ${allFilteredChecked ? 'checked' : ''} onchange="toggleSelectAllSyncModels(this.checked, '${esc(provName)}')" title="Pilih / batalkan semua yang tampil">
+        <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(true, '${esc(provName)}')">Pilih Tampil</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleSelectAllSyncModels(false, '${esc(provName)}')">Bersihkan</button>
+      </div>
+    </div>
+    <div class="table-wrap" style="max-height:420px;overflow-y:auto;overflow-x:hidden;border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem;">
+      <table style="table-layout:fixed;width:100%;">
+        <thead style="position:sticky;top:0;z-index:1;">
+          <tr>
+            <th style="width:40px;text-align:center;">✓</th>
+            <th>Upstream Model ID</th>
+            <th style="width:190px;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows || '<tr><td colspan="3" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Tidak ada model yang cocok dengan pencarian / filter.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" id="syncImportBtn" onclick="submitImportSyncedModels('${esc(provName)}')" ${selCount ? '' : 'disabled style="opacity:.5;"'}>Import (<span id="syncImportCount">${selCount}</span>) Model</button>
+    </div>
+  `;
+  const inp = document.getElementById('syncModelSearchInput');
+  if(inp && document.activeElement !== inp && _syncModalQuery){
+    inp.focus();
+    inp.setSelectionRange(inp.value.length, inp.value.length);
+  }
+}
+
+function toggleSyncModelSelect(cb, mId, provName){
+  if(cb.checked) _syncModalSelected.add(mId);
+  else _syncModalSelected.delete(mId);
+  const c1 = document.getElementById('syncSelectedCount');
+  if(c1) c1.textContent = _syncModalSelected.size;
+  const c2 = document.getElementById('syncImportCount');
+  if(c2) c2.textContent = _syncModalSelected.size;
+  const btn = document.getElementById('syncImportBtn');
+  if(btn){
+    if(_syncModalSelected.size){ btn.removeAttribute('disabled'); btn.style.opacity = ''; }
+    else { btn.setAttribute('disabled', ''); btn.style.opacity = '.5'; }
+  }
+  const filtered = syncModalFilteredModels();
+  const master = document.getElementById('syncMasterSelect');
+  if(master) master.checked = filtered.length > 0 && filtered.every(x => _syncModalSelected.has(x));
+}
+
+function toggleSelectAllSyncModels(selectAll, provName){
+  const filtered = syncModalFilteredModels();
+  if(selectAll) filtered.forEach(mId => _syncModalSelected.add(mId));
+  else {
+    if(filtered.length === (_fetchedApiModels || []).length) _syncModalSelected.clear();
+    else filtered.forEach(mId => _syncModalSelected.delete(mId));
+  }
+  renderSyncModelsTable(provName);
 }
 
 async function submitImportSyncedModels(provName){
   const p = _currentProviders.find(x => x.name === provName);
   if(!p) return;
 
-  const checkedBoxes = Array.from(document.querySelectorAll('.sync-model-cb:checked'));
-  const selectedModels = checkedBoxes.map(cb => cb.value.trim()).filter(Boolean);
+  // Pakai Set pilihan (tetap ingat checklist walau barisnya ke-filter).
+  // Fallback ke DOM bila Set kosong (kompatibilitas).
+  let selectedModels = Array.from(_syncModalSelected || []).map(m => String(m).trim()).filter(Boolean);
+  if(!selectedModels.length){
+    selectedModels = Array.from(document.querySelectorAll('.sync-model-cb:checked')).map(cb => (cb.dataset && cb.dataset.mid ? cb.dataset.mid : cb.value || '').trim()).filter(Boolean);
+  }
 
   if(!selectedModels.length){
     toast('Pilih minimal satu model untuk diimpor', 'warn');
@@ -6915,6 +7139,9 @@ async function submitImportSyncedModels(provName){
     }
 
     closeModal();
+    _syncModalSelected = new Set();
+    _syncModalQuery = '';
+    _syncModalFilter = 'all';
     toast(`Berhasil mengimpor ${selectedModels.length} model!`, 'success');
     await fetchAll();
     openProviderHub(provName);
@@ -6923,57 +7150,280 @@ async function submitImportSyncedModels(provName){
   }
 }
 
-/* ===== Model Routing CRUD ===== */
-function showAddModel(){
-  const provOpts = _currentProviders.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${esc(p.type)})</option>`).join('');
-  openModal('Add Model Route', `
-    <div class="form-grid">
-      <label>Route Model ID<input id="mm_name" placeholder="e.g. gpt-4o or claude-3-5-sonnet"></label>
-      <label>Target Provider<select id="mm_provider"><option value="">(None / Combo Model)</option>${provOpts}</select></label>
-      <label class="full">Upstream Model ID (optional)<input id="mm_model" placeholder="Model ID at upstream provider (leave blank if same)"></label>
-      <label class="full">Fallbacks (comma-separated model names)<input id="mm_fallbacks" placeholder="gpt-4o-mini, groq-llama"></label>
-      <label class="full">Reasoning / Thinking Model?<select id="mm_reasoning"><option value="false">False (Standard LLM)</option><option value="true">True (Extracts <thought> & reasoning tokens)</option></select></label>
-      <label class="full">Combo Backends (one per line: provider,upstream_model)<textarea id="mm_backends" rows="3" placeholder="openai,gpt-4o
-groq,llama-3.3-70b"></textarea></label>
+/* ===== Model Routing CRUD (Direct + Combo Builder) ===== */
+let _mmBackendIdx = 0;
+
+function mmProviderModels(provName){
+  const p = (_currentProviders || []).find(x => x.name === provName);
+  return (p && p.models) ? p.models : [];
+}
+
+function mmStrategyDescHTML(strat){
+  if(strat === 'round-robin') return '<strong>Round-robin:</strong> request dibagi <strong>bergiliran</strong> ke semua backend (load-balance). Kalau satu backend gagal, otomatis dicoba ke backend lain.';
+  if(strat === 'tiered') return '<strong>Tiered:</strong> seperti fallback tapi per <strong>tier</strong> (Tier 1 &rarr; Tier 2 &rarr; Tier 3). Cocok untuk urutan langganan &rarr; murah &rarr; gratis.';
+  return '<strong>Fallback:</strong> coba backend <strong>1</strong>, kalau gagal/error lanjut ke <strong>2</strong>, lalu <strong>3</strong>, dst. Urutan = prioritas.';
+}
+
+function mmRefreshStrategyDesc(){
+  const sel = document.getElementById('mm_combo_strategy');
+  const desc = document.getElementById('mm_strategy_desc');
+  if(sel && desc) desc.innerHTML = mmStrategyDescHTML(sel.value);
+}
+
+function mmSetType(t){
+  const isCombo = t === 'combo';
+  const btnD = document.getElementById('mm_type_direct');
+  const btnC = document.getElementById('mm_type_combo');
+  if(btnD) btnD.className = 'btn btn-sm' + (!isCombo ? ' btn-primary' : '');
+  if(btnC) btnC.className = 'btn btn-sm' + (isCombo ? ' btn-primary' : '');
+  const dSec = document.getElementById('mm_direct_sec');
+  const cSec = document.getElementById('mm_combo_sec');
+  if(dSec) dSec.style.display = isCombo ? 'none' : '';
+  if(cSec) cSec.style.display = isCombo ? '' : 'none';
+  const submitBtn = document.getElementById('mm_submit_btn');
+  if(submitBtn) submitBtn.textContent = (window._mmEditing ? 'Save Changes' : (isCombo ? 'Create Combo' : 'Add Route'));
+}
+
+function mmRefreshDirectModels(){
+  const provSel = document.getElementById('mm_provider');
+  const dl = document.getElementById('mm_direct_dl');
+  if(!provSel || !dl) return;
+  const models = mmProviderModels(provSel.value);
+  dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join('');
+}
+
+function mmOnBackendProviderChange(sel){
+  const row = sel.closest('.mm-backend-row');
+  if(!row) return;
+  const dl = row.querySelector('datalist');
+  const models = mmProviderModels(sel.value);
+  if(dl) dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join('');
+  const p = (_currentProviders || []).find(x => x.name === sel.value);
+  const warn = row.querySelector('.mm-prov-warn');
+  if(warn) warn.innerHTML = (p && p.disabled) ? '<span class="tag tag-red" style="font-size:.62rem;" title="Provider ini di-disable — backend ini akan di-skip saat routing">DISABLED — di-skip</span>' : '';
+  mmRenumberBackends();
+}
+
+function mmBackendProvOpts(selProv){
+  return (_currentProviders || []).map(p => {
+    const dis = p.disabled ? ' — DISABLED' : '';
+    return `<option value="${esc(p.name)}" ${p.name === selProv ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)}${dis})</option>`;
+  }).join('');
+}
+
+function mmMoveBackend(btn, dir){
+  const row = btn.closest('.mm-backend-row');
+  const wrap = document.getElementById('mm_backend_rows');
+  if(!row || !wrap) return;
+  const sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+  if(!sibling) return;
+  if(dir < 0) wrap.insertBefore(row, sibling);
+  else wrap.insertBefore(sibling, row);
+  mmRenumberBackends();
+}
+
+function mmRenumberBackends(){
+  const rows = document.querySelectorAll('#mm_backend_rows .mm-backend-row');
+  rows.forEach((r, i) => {
+    const badge = r.querySelector('.mm-order');
+    if(badge) badge.textContent = (i + 1);
+    const upBtn = r.querySelector('.mm-up');
+    const dnBtn = r.querySelector('.mm-dn');
+    if(upBtn) upBtn.disabled = (i === 0);
+    if(dnBtn) dnBtn.disabled = (i === rows.length - 1);
+    if(upBtn) upBtn.style.opacity = (i === 0) ? '.35' : '';
+    if(dnBtn) dnBtn.style.opacity = (i === rows.length - 1) ? '.35' : '';
+  });
+  const hint = document.getElementById('mm_backend_hint');
+  if(hint) hint.textContent = rows.length < 2 ? `Tambahkan minimal 2 backend (sekarang ${rows.length}).` : `${rows.length} backend dipilih. Urutan = prioritas Fallback/Tiered — pakai ↑ ↓ untuk menyusun.`;
+}
+
+function addComboBackendRow(provider, model){
+  const wrap = document.getElementById('mm_backend_rows');
+  if(!wrap) return;
+  const provs = _currentProviders || [];
+  if(!provs.length){ toast('Tambahkan provider dulu sebelum membuat combo', 'error'); return; }
+  const idx = ++_mmBackendIdx;
+  const selProv = provider || provs[0].name;
+  const models = mmProviderModels(selProv);
+  const provOpts = mmBackendProvOpts(selProv);
+  const dlOpts = models.map(m => `<option value="${esc(m)}">`).join('');
+  const selP = provs.find(p => p.name === selProv);
+  const warnTag = (selP && selP.disabled) ? '<span class="tag tag-red" style="font-size:.62rem;" title="Provider ini di-disable — backend ini akan di-skip saat routing">DISABLED — di-skip</span>' : '';
+  const div = document.createElement('div');
+  div.className = 'mm-backend-row';
+  div.style.cssText = 'display:flex;gap:.4rem;align-items:center;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.5rem .6rem;';
+  div.innerHTML = `
+    <span class="mm-order" title="Urutan prioritas (1 = dicoba pertama untuk Fallback)" style="min-width:1.4rem;height:1.4rem;display:inline-flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:.72rem;border-radius:999px;">?</span>
+    <div style="display:flex;flex-direction:column;gap:0;">
+      <button class="btn btn-sm mm-up" onclick="mmMoveBackend(this,-1)" title="Naikkan prioritas (geser ke atas)" style="padding:.05rem .45rem;line-height:1;">↑</button>
+      <button class="btn btn-sm mm-dn" onclick="mmMoveBackend(this,1)" title="Turunkan prioritas (geser ke bawah)" style="padding:.05rem .45rem;line-height:1;">↓</button>
     </div>
-    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitAddModelRoute()">Add Route</button></div>
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:.2rem;">
+      <select class="mm-b-prov" onchange="mmOnBackendProviderChange(this)" style="width:100%;">${provOpts}</select>
+      <span class="mm-prov-warn">${warnTag}</span>
+    </div>
+    <input class="mm-b-model" list="mm-dl-${idx}" placeholder="ketik / pilih upstream model" value="${esc(model || '')}" style="flex:1.4;min-width:0;">
+    <datalist id="mm-dl-${idx}">${dlOpts}</datalist>
+    <button class="btn btn-sm btn-danger" onclick="this.closest('.mm-backend-row').remove();mmRenumberBackends();" title="Hapus backend ini">&times;</button>`;
+  wrap.appendChild(div);
+  mmRenumberBackends();
+}
+
+function showAddModel(){
+  window._mmEditing = null;
+  _mmBackendIdx = 0;
+  const provs = _currentProviders || [];
+  const provOpts = mmBackendProvOpts(provs.length ? provs[0].name : '');
+  const directDl = provs.length ? mmProviderModels(provs[0].name).map(m => `<option value="${esc(m)}">`).join('') : '';
+  openModal('Add Model Route', `
+    <div style="display:flex;gap:.5rem;margin-bottom:1rem;">
+      <button id="mm_type_direct" class="btn btn-sm btn-primary" onclick="mmSetType('direct')">▫️ Direct (1 provider)</button>
+      <button id="mm_type_combo" class="btn btn-sm" onclick="mmSetType('combo')">🔗 Combo (multi-provider)</button>
+    </div>
+    <div class="form-grid">
+      <label class="full">Route Model ID (nama yang dipakai client)<input id="mm_name" placeholder="e.g. gpt-4o atau combo-hemat"></label>
+      <div id="mm_direct_sec" class="full" style="display:contents;">
+        <label>Target Provider<select id="mm_provider" onchange="mmRefreshDirectModels()">${provOpts || '<option value="">(no providers)</option>'}</select></label>
+        <label>Upstream Model ID<input id="mm_model" list="mm_direct_dl" placeholder="ketik / pilih model upstream"><datalist id="mm_direct_dl">${directDl}</datalist></label>
+      </div>
+      <div id="mm_combo_sec" class="full" style="display:none;">
+        <label class="full" style="margin-bottom:.4rem;">Metode Combo<select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()">
+          <option value="fallback">Fallback — prioritas 1 &rarr; 2 &rarr; 3</option>
+          <option value="round-robin">Round-robin — bergiliran (load-balance)</option>
+          <option value="tiered">Tiered — per tier T1 &rarr; T2 &rarr; T3</option>
+        </select></label>
+        <div id="mm_strategy_desc" class="full" style="font-size:.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.55rem .7rem;margin-bottom:.6rem;">${mmStrategyDescHTML('fallback')}</div>
+        <div class="full" style="font-size:.78rem;font-weight:700;color:var(--text1);margin-bottom:.35rem;">Backends <span style="font-weight:400;color:var(--text3);">— pilih beberapa model dari beberapa provider, susun urutan pakai ↑ ↓</span></div>
+        <div id="mm_backend_rows" class="full" style="display:flex;flex-direction:column;gap:.5rem;"></div>
+        <div class="full" style="display:flex;align-items:center;gap:.6rem;margin-top:.4rem;">
+          <button class="btn btn-sm" onclick="addComboBackendRow()">+ Tambah Backend</button>
+          <span id="mm_backend_hint" style="font-size:.74rem;color:var(--text3);"></span>
+        </div>
+      </div>
+      <label class="full">Reasoning / Thinking Model?<select id="mm_reasoning"><option value="false">False (Standard LLM)</option><option value="true">True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option></select></label>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Add Route</button></div>
   `, null);
+  addComboBackendRow();
+  addComboBackendRow();
+}
+
+function showEditModel(encName){
+  const name = decodeURIComponent(encName);
+  const m = (_currentModels || []).find(x => x.name === name);
+  if(!m){ toast('Model tidak ditemukan: ' + name, 'error'); return; }
+  const combo = isModelCombo(m);
+  window._mmEditing = name;
+  _mmBackendIdx = 0;
+  const provs = _currentProviders || [];
+  const provOpts = (sel) => mmBackendProvOpts(sel);
+  const directDl = mmProviderModels(m.provider || (provs[0] && provs[0].name)).map(x => `<option value="${esc(x)}">`).join('');
+  const strat = (m.strategy || 'fallback').toLowerCase();
+  openModal('Edit Model: ' + m.name, `
+    <div style="display:flex;gap:.5rem;margin-bottom:1rem;">
+      <button id="mm_type_direct" class="btn btn-sm ${combo ? '' : 'btn-primary'}" onclick="mmSetType('direct')">▫️ Direct (1 provider)</button>
+      <button id="mm_type_combo" class="btn btn-sm ${combo ? 'btn-primary' : ''}" onclick="mmSetType('combo')">🔗 Combo (multi-provider)</button>
+    </div>
+    <div class="form-grid">
+      <label class="full">Route Model ID (tidak bisa diganti)<input id="mm_name" value="${esc(m.name)}" disabled></label>
+      <div id="mm_direct_sec" class="full" style="display:${combo ? 'none' : 'contents'};">
+        <label>Target Provider<select id="mm_provider" onchange="mmRefreshDirectModels()">${provOpts(m.provider)}</select></label>
+        <label>Upstream Model ID<input id="mm_model" list="mm_direct_dl" value="${esc(m.model || '')}" placeholder="ketik / pilih model upstream"><datalist id="mm_direct_dl">${directDl}</datalist></label>
+      </div>
+      <div id="mm_combo_sec" class="full" style="display:${combo ? '' : 'none'};">
+        <label class="full" style="margin-bottom:.4rem;">Metode Combo<select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()">
+          <option value="fallback" ${strat === 'fallback' ? 'selected' : ''}>Fallback — prioritas 1 &rarr; 2 &rarr; 3</option>
+          <option value="round-robin" ${strat === 'round-robin' ? 'selected' : ''}>Round-robin — bergiliran (load-balance)</option>
+          <option value="tiered" ${strat === 'tiered' ? 'selected' : ''}>Tiered — per tier T1 &rarr; T2 &rarr; T3</option>
+        </select></label>
+        <div id="mm_strategy_desc" class="full" style="font-size:.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.55rem .7rem;margin-bottom:.6rem;">${mmStrategyDescHTML(strat)}</div>
+        <div class="full" style="font-size:.78rem;font-weight:700;color:var(--text1);margin-bottom:.35rem;">Backends <span style="font-weight:400;color:var(--text3);">— pilih beberapa model dari beberapa provider, susun urutan pakai ↑ ↓</span></div>
+        <div id="mm_backend_rows" class="full" style="display:flex;flex-direction:column;gap:.5rem;"></div>
+        <div class="full" style="display:flex;align-items:center;gap:.6rem;margin-top:.4rem;">
+          <button class="btn btn-sm" onclick="addComboBackendRow()">+ Tambah Backend</button>
+          <span id="mm_backend_hint" style="font-size:.74rem;color:var(--text3);"></span>
+        </div>
+      </div>
+      <label class="full">Reasoning / Thinking Model?<select id="mm_reasoning"><option value="false" ${m.reasoning ? '' : 'selected'}>False (Standard LLM)</option><option value="true" ${m.reasoning ? 'selected' : ''}>True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option></select></label>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Save Changes</button></div>
+  `, null);
+  const backends = (m.backends && m.backends.length) ? m.backends : [{ provider: provs[0] ? provs[0].name : '', model: '' }, { provider: provs[0] ? provs[0].name : '', model: '' }];
+  backends.forEach(b => addComboBackendRow(b.provider, b.model));
+  mmSetType(combo ? 'combo' : 'direct');
 }
 
 async function submitAddModelRoute(){
-  const name = document.getElementById('mm_name').value.trim();
-  const provider = document.getElementById('mm_provider').value;
-  const model = document.getElementById('mm_model').value.trim();
+  const editing = window._mmEditing || null;
+  const nameEl = document.getElementById('mm_name');
+  const name = (nameEl ? nameEl.value : '').trim();
   const reasoning = document.getElementById('mm_reasoning').value === 'true';
-  const fbStr = document.getElementById('mm_fallbacks').value.trim();
-  const fallbacks = fbStr ? fbStr.split(',').map(s=>s.trim()).filter(Boolean) : [];
-  const backendLines = document.getElementById('mm_backends').value.trim();
-  const backends = parseBackendLines(backendLines);
+  const comboVisible = document.getElementById('mm_combo_sec') && document.getElementById('mm_combo_sec').style.display !== 'none';
+  const btnC = document.getElementById('mm_type_combo');
+  const isCombo = comboVisible || (btnC && btnC.className.includes('btn-primary'));
 
-  if(!name){toast('Model name is required','error');return;}
-  const payload = {
-    name,
-    provider: provider || undefined,
-    model: model || undefined,
-    reasoning,
-    fallbacks: fallbacks.length ? fallbacks : undefined,
-    backends: backends.length ? backends : undefined,
-    is_combo: backends.length > 0
-  };
+  if(!name){ toast('Model name is required', 'error'); return; }
+
+  let payload;
+  if(isCombo){
+    const strategy = document.getElementById('mm_combo_strategy').value;
+    const rows = Array.from(document.querySelectorAll('#mm_backend_rows .mm-backend-row'));
+    const backends = rows.map(r => ({
+      provider: r.querySelector('.mm-b-prov').value,
+      model: r.querySelector('.mm-b-model').value.trim()
+    })).filter(b => b.provider);
+    const missingModel = backends.find(b => !b.model);
+    if(backends.length < 2){ toast(`Combo butuh minimal 2 backend (sekarang ${backends.length})`, 'error'); return; }
+    if(missingModel){ toast('Setiap backend wajib punya upstream model (ketik / pilih dari provider)', 'error'); return; }
+    const seen = new Set();
+    for(const b of backends){
+      const k = b.provider + '|' + b.model;
+      if(seen.has(k)){ toast(`Backend duplikat: ${b.provider} / ${b.model}`, 'error'); return; }
+      seen.add(k);
+    }
+    payload = { name, strategy, backends, reasoning };
+  } else {
+    const provider = document.getElementById('mm_provider').value;
+    let model = document.getElementById('mm_model').value.trim();
+    if(!provider){ toast('Pilih target provider untuk direct route', 'error'); return; }
+    if(!model) model = name;
+    // backends:[] eksplisit agar edit combo -> direct membersihkan strategy/backends di backend.
+    payload = { name, provider, model, reasoning, backends: [] };
+  }
 
   try{
-    await api('/admin/models', {method:'POST', body:JSON.stringify(payload)});
-    closeModal();
-    toast('Model route created: ' + name, 'success');
+    if(editing){
+      await api('/admin/models/' + encodeURIComponent(editing), { method: 'PUT', body: JSON.stringify(payload) });
+      window._mmEditing = null;
+      closeModal();
+      toast('Model updated: ' + name, 'success');
+    } else {
+      await api('/admin/models', { method: 'POST', body: JSON.stringify(payload) });
+      closeModal();
+      toast((isCombo ? 'Combo created: ' : 'Model route created: ') + name, 'success');
+    }
     fetchAll();
-  }catch(e){toast('Error: ' + e.message, 'error');}
+  }catch(e){ toast('Error: ' + e.message, 'error'); }
 }
 
 async function deleteModel(name){
-  if(!await confirm(`Delete model route "${name}"?`)) return;
+  // Warn when the route feeds combos — those backends sync-hapus otomatis.
+  const feeding = (_currentModels || []).filter(m => isModelCombo(m) && (m.backends || []).some(b => {
+    const direct = (_currentModels || []).find(x => x.name === name);
+    if(direct && !isModelCombo(direct)) return b.provider === direct.provider && (b.model || '') === (direct.model || direct.name);
+    return false;
+  })).map(m => m.name);
+  const extra = feeding.length ? `\n\nModel ini dipakai di combo: ${feeding.join(', ')}.\nBackend tersebut ikut terhapus otomatis (sync).` : '';
+  if(!await confirm(`Delete model route "${name}"?${extra}`)) return;
   try{
-    await api('/admin/models/'+encodeURIComponent(name), {method:'DELETE'});
-    toast('Model deleted: ' + name, 'success');
+    const r = await api('/admin/models/'+encodeURIComponent(name), {method:'DELETE'});
+    let msg = 'Model deleted: ' + name;
+    const upd = (r && r.combos_updated) || [];
+    const del = (r && r.combos_deleted) || [];
+    if(upd.length) msg += ` — combo di-sync: ${upd.join(', ')}`;
+    if(del.length) msg += ` — combo ikut terhapus (sisa <2 backend): ${del.join(', ')}`;
+    toast(msg, 'success');
     fetchAll();
   }catch(e){toast('Error: ' + e.message, 'error');}
 }
@@ -6985,8 +7435,9 @@ function showCreateKey(){
   openModal('Create Client API Key', `
     <div class="form-grid">
       <label>Key Name / Description<input id="mk_name" placeholder="e.g. Claude Code Developer Key"></label>
-      <label>Rate Limit (req/min, 0 = unlimited)<input id="mk_rate" type="number" value="0"></label>
+      <label>Rate Limit (req/min, 0 = unlimited)<input id="mk_rate" type="number" value="0" min="0"></label>
       <label class="full">Token Saver (RTK Engine)<select id="mk_token_saver"><option value="inherit">Default (Inherit Global Setting)</option><option value="true">Force Always ON for this key</option><option value="false">Force Always OFF for this key</option></select></label>
+      <label class="full">Privacy Filter<select id="mk_privacy"><option value="inherit">Default (Inherit Global Setting)</option><option value="true">Force Always ON for this key</option><option value="false">Force Always OFF for this key</option></select></label>
       <div class="full" style="margin-top:0.5rem;">
         <div style="font-size:0.78rem;font-weight:600;color:var(--text2);margin-bottom:0.4rem;">Allowed Models (* = all models)</div>
         <label style="display:flex;align-items:center;gap:0.4rem;font-weight:600;margin-bottom:0.4rem;"><input type="checkbox" id="ck_all_models" checked onchange="document.querySelectorAll('input[name=ck_models]').forEach(c=>c.disabled=this.checked)"> Allow All Models (*)</label>
@@ -7006,17 +7457,22 @@ async function submitCreateKey(){
   let token_saver = null;
   if(tsChoice === 'true') token_saver = true;
   if(tsChoice === 'false') token_saver = false;
+  const privChoice = document.getElementById('mk_privacy').value;
+  let privacy = null;
+  if(privChoice === 'true') privacy = true;
+  if(privChoice === 'false') privacy = false;
 
   let allowed_models = ['*'];
   const allowAll = document.getElementById('ck_all_models').checked;
   if(!allowAll){
     allowed_models = Array.from(document.querySelectorAll('input[name=ck_models]:checked')).map(c => c.value);
+    if(!allowed_models.length){ toast('Pilih minimal 1 model atau aktifkan Allow All', 'error'); return; }
   }
 
   if(!name){toast('Key name is required','error');return;}
 
   try{
-    const r = await api('/admin/keys', {method:'POST', body:JSON.stringify({name, allowed_models, rate_limit, token_saver})});
+    const r = await api('/admin/keys', {method:'POST', body:JSON.stringify({name, allowed_models, rate_limit, token_saver, privacy})});
     closeModal();
     openModal('New API Key Generated', `
       <p style="color:var(--green);font-weight:600;">Your API key has been created. Copy it now, it will not be shown in full again!</p>
@@ -7030,10 +7486,101 @@ async function submitCreateKey(){
   }catch(e){toast('Error: ' + e.message, 'error');}
 }
 
-async function deleteKey(key, name){
+function showEditKey(id){
+  const k = (_currentKeys || []).find(x => x.id === id);
+  if(!k){ toast('API key tidak ditemukan', 'error'); return; }
+  const allowAll = !k.allowed_models || !k.allowed_models.length || k.allowed_models.includes('*');
+  const modelOpts = (_currentModels || []).map(m => {
+    const checked = allowAll || (k.allowed_models || []).includes(m.name);
+    return `<label style="display:flex;align-items:center;gap:0.4rem;font-weight:normal;font-size:0.78rem;"><input type="checkbox" name="ek_models" value="${esc(m.name)}" ${checked ? 'checked' : ''} ${allowAll ? 'disabled' : ''}> ${esc(m.name)}</label>`;
+  }).join('');
+  const triOpts = (cur) => `
+    <option value="inherit" ${cur === null || cur === undefined ? 'selected' : ''}>Default (Inherit Global Setting)</option>
+    <option value="true" ${cur === true ? 'selected' : ''}>Force Always ON for this key</option>
+    <option value="false" ${cur === false ? 'selected' : ''}>Force Always OFF for this key</option>`;
+
+  openModal('Edit API Key: ' + k.name, `
+    <div class="form-grid">
+      <label>Key Name / Description<input id="ek_name" value="${esc(k.name)}"></label>
+      <label>Rate Limit (req/min, 0 = unlimited)<input id="ek_rate" type="number" min="0" value="${k.rate_limit || 0}"></label>
+      <label class="full">Token Saver (RTK Engine)<select id="ek_token_saver">${triOpts(k.token_saver)}</select></label>
+      <label class="full">Privacy Filter<select id="ek_privacy">${triOpts(k.privacy)}</select></label>
+      <label class="full">Status<select id="ek_disabled"><option value="false" ${k.disabled ? '' : 'selected'}>Active</option><option value="true" ${k.disabled ? 'selected' : ''}>Disabled</option></select></label>
+      <div class="full" style="margin-top:0.5rem;">
+        <div style="font-size:0.78rem;font-weight:600;color:var(--text2);margin-bottom:0.4rem;">Allowed Models (* = all models)</div>
+        <label style="display:flex;align-items:center;gap:0.4rem;font-weight:600;margin-bottom:0.4rem;"><input type="checkbox" id="ek_all_models" ${allowAll ? 'checked' : ''} onchange="document.querySelectorAll('input[name=ek_models]').forEach(c=>c.disabled=this.checked)"> Allow All Models (*)</label>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:0.35rem;max-height:120px;overflow-y:auto;padding:0.4rem;background:var(--surface-subtle);border-radius:var(--radius);border:1px solid var(--border);">
+          ${modelOpts || '<span style="color:var(--text3);font-size:0.75rem;">No models defined yet</span>'}
+        </div>
+      </div>
+      <div class="full mono" style="font-size:0.72rem;color:var(--text3);">ID: ${esc(k.id || '')}${k.created_at ? ' &bull; Created: ' + esc(k.created_at) : ''}</div>
+    </div>
+    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditKey('${esc(k.id || '')}')">Save Changes</button></div>
+  `, null);
+}
+
+async function submitEditKey(id){
+  const name = document.getElementById('ek_name').value.trim();
+  const rate_limit = parseInt(document.getElementById('ek_rate').value);
+  const tsChoice = document.getElementById('ek_token_saver').value;
+  let token_saver = null;
+  if(tsChoice === 'true') token_saver = true;
+  if(tsChoice === 'false') token_saver = false;
+  const privChoice = document.getElementById('ek_privacy').value;
+  let privacy = null;
+  if(privChoice === 'true') privacy = true;
+  if(privChoice === 'false') privacy = false;
+  const disabled = document.getElementById('ek_disabled').value === 'true';
+
+  let allowed_models = ['*'];
+  const allowAll = document.getElementById('ek_all_models').checked;
+  if(!allowAll){
+    allowed_models = Array.from(document.querySelectorAll('input[name=ek_models]:checked')).map(c => c.value);
+    if(!allowed_models.length){ toast('Pilih minimal 1 model atau aktifkan Allow All', 'error'); return; }
+  }
+
+  if(!name){ toast('Key name is required', 'error'); return; }
+
+  try{
+    await api('/admin/keys/' + encodeURIComponent(id), {method:'PUT', body:JSON.stringify({
+      name, allowed_models,
+      rate_limit: isNaN(rate_limit) ? 0 : rate_limit,
+      token_saver, privacy, disabled
+    })});
+    closeModal();
+    toast('API key updated', 'success');
+    fetchAll();
+  }catch(e){ toast('Error: ' + e.message, 'error'); }
+}
+
+async function toggleKeyDisabled(id, setDisabled){
+  try{
+    await api('/admin/keys/' + encodeURIComponent(id), {method:'PUT', body:JSON.stringify({disabled: setDisabled})});
+    toast(setDisabled ? 'Key disabled' : 'Key enabled', 'info');
+    fetchAll();
+  }catch(e){ toast('Error: ' + e.message, 'error'); }
+}
+
+async function regenerateKey(id, name){
+  if(!await confirm(`Regenerate secret untuk key "${name}"?\n\nKey lama langsung MATI dan tidak bisa dipakai lagi. Key baru hanya ditampilkan sekali.`)) return;
+  try{
+    const r = await api('/admin/keys/' + encodeURIComponent(id) + '/regenerate', {method:'POST'});
+    openModal('API Key Regenerated', `
+      <p style="color:var(--green);font-weight:600;">Secret baru untuk "${esc(name)}". Key lama sudah tidak berlaku. Copy sekarang, tidak akan ditampilkan lagi!</p>
+      <div class="code-box">
+        <button class="copy-btn" onclick="navigator.clipboard.writeText('${r.key}');toast('Key copied!','success');">Copy</button>
+        <pre>${esc(r.key)}</pre>
+      </div>
+      <div class="form-actions"><button class="btn btn-primary" onclick="closeModal()">Done</button></div>
+    `, null);
+    fetchAll();
+  }catch(e){ toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteKey(id, name){
   if(!await confirm(`Revoke API key "${name}"? Client requests using this key will immediately fail.`)) return;
   try{
-    await api('/admin/keys/' + encodeURIComponent(key), {method:'DELETE'});
+    await api('/admin/keys/' + encodeURIComponent(id), {method:'DELETE'});
     toast('Key revoked: ' + name, 'success');
     fetchAll();
   }catch(e){toast('Error: ' + e.message, 'error');}

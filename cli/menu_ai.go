@@ -2151,14 +2151,14 @@ func deleteModel(cfg *config.Config) {
 
 	deleted := 0
 	for _, name := range selectedNames {
-		if err := cfg.DeleteModel(name); err != nil {
+		if _, _, err := cfg.DeleteModel(name); err != nil {
 			printError(fmt.Sprintf("Gagal hapus '%s': %v", name, err))
 		} else {
 			deleted++
 		}
 	}
 	printSuccess(fmt.Sprintf("%d model berhasil dihapus", deleted))
-	printInfo("  ↳ Model juga dihapus dari provider list & allowed_models API key (cascade)")
+	printInfo("  ↳ Model juga dihapus dari provider list, combo backends & allowed_models API key (cascade)")
 }
 
 func deleteModelsByProvider(cfg *config.Config) {
@@ -2215,7 +2215,7 @@ func deleteModelsByProvider(cfg *config.Config) {
 
 	deleted := 0
 	for _, name := range modelsToDelete {
-		if err := cfg.DeleteModel(name); err != nil {
+		if _, _, err := cfg.DeleteModel(name); err != nil {
 			printError(fmt.Sprintf(T("Gagal hapus '%s': %v", "Failed to delete '%s': %v"), name, err))
 		} else {
 			deleted++

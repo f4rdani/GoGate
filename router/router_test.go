@@ -156,6 +156,89 @@ func TestRoundRobinRouting(t *testing.T) {
 	}
 }
 
+func TestRoundRobinSkipsUnhealthyProvider(t *testing.T) {
+	p1 := newMockProvider("provider1")
+	p2 := newMockProvider("provider2")
+	p1.SetHealthy(false) // simulates a disabled provider
+	registry := provider.NewRegistry()
+	registry.Register("p1", p1)
+	registry.Register("p2", p2)
+
+	cfg := &config.Config{
+		Retry: config.RetryConfig{MaxRetries: 1, InitialBackoff: 10, MaxBackoff: 50},
+		Models: []config.ModelConfig{
+			{
+				Name:     "fast-mix",
+				Strategy: "round-robin",
+				Backends: []config.BackendConfig{
+					{Provider: "p1", Model: "model-a"},
+					{Provider: "p2", Model: "model-b"},
+				},
+			},
+		},
+	}
+
+	r, err := NewRouter(cfg, registry)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	for i := 0; i < 4; i++ {
+		req := &models.ChatCompletionRequest{Model: "fast-mix"}
+		resp, _, err := r.ChatCompletion(context.Background(), "fast-mix", req)
+		if err != nil {
+			t.Fatalf("request %d failed: %v", i, err)
+		}
+		if resp.ID != "resp-provider2" {
+			t.Errorf("request %d: expected 'resp-provider2', got '%s'", i, resp.ID)
+		}
+	}
+	if p1.callCount.Load() != 0 {
+		t.Errorf("disabled provider should never receive traffic, got %d calls", p1.callCount.Load())
+	}
+	if p2.callCount.Load() != 4 {
+		t.Errorf("healthy provider should serve all 4 requests, got %d", p2.callCount.Load())
+	}
+}
+
+func TestRoundRobinAllUnhealthyErrors(t *testing.T) {
+	p1 := newMockProvider("provider1")
+	p2 := newMockProvider("provider2")
+	p1.SetHealthy(false)
+	p2.SetHealthy(false)
+	registry := provider.NewRegistry()
+	registry.Register("p1", p1)
+	registry.Register("p2", p2)
+
+	cfg := &config.Config{
+		Retry: config.RetryConfig{MaxRetries: 1, InitialBackoff: 10, MaxBackoff: 50},
+		Models: []config.ModelConfig{
+			{
+				Name:     "fast-mix",
+				Strategy: "round-robin",
+				Backends: []config.BackendConfig{
+					{Provider: "p1", Model: "model-a"},
+					{Provider: "p2", Model: "model-b"},
+				},
+			},
+		},
+	}
+
+	r, err := NewRouter(cfg, registry)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	req := &models.ChatCompletionRequest{Model: "fast-mix"}
+	_, _, err = r.ChatCompletion(context.Background(), "fast-mix", req)
+	if err == nil {
+		t.Fatal("expected error when all backends unavailable, got nil")
+	}
+	if p1.callCount.Load() != 0 || p2.callCount.Load() != 0 {
+		t.Errorf("no provider should receive traffic, got p1=%d p2=%d", p1.callCount.Load(), p2.callCount.Load())
+	}
+}
+
 func TestFallbackRouting(t *testing.T) {
 	p1 := newMockProvider("primary")
 	p2 := newMockProvider("fallback")

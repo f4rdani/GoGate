@@ -143,21 +143,32 @@ func TestConfig_CascadeOperations(t *testing.T) {
 		},
 	}
 
-	// Test DeleteModel
-	err := cfg.DeleteModel("alias1")
+	// Test DeleteModel — alias1 (prov1/mod1) is also a combo1 backend, so the
+	// cascade strips it; combo1 is left with 1 backend (<2) and is deleted too.
+	combosUpdated, combosDeleted, err := cfg.DeleteModel("alias1")
 	if err != nil {
 		t.Fatalf("DeleteModel failed: %v", err)
+	}
+	if len(combosUpdated) != 0 {
+		t.Errorf("expected no combosUpdated, got: %v", combosUpdated)
+	}
+	if len(combosDeleted) != 1 || combosDeleted[0] != "combo1" {
+		t.Errorf("expected combo1 in combosDeleted, got: %v", combosDeleted)
+	}
+	if cfg.GetModel("combo1") != nil {
+		t.Errorf("expected combo1 to be deleted by the cascade")
 	}
 	if cfg.GetModel("alias1") != nil {
 		t.Errorf("expected alias1 to be deleted")
 	}
-	// Check API key allowed models cascade
-	if len(cfg.APIKeys[0].AllowedModels) != 1 || cfg.APIKeys[0].AllowedModels[0] != "combo1" {
+	// Check API key allowed models cascade — both alias1 and combo1 are gone.
+	if len(cfg.APIKeys[0].AllowedModels) != 0 {
 		t.Errorf("cascade failed on APIKeys, got: %v", cfg.APIKeys[0].AllowedModels)
 	}
 
-	// Test RenameModelCascade
-	cfg.RenameModelCascade("combo1", "renamed-combo")
+	// Test RenameModelCascade on a surviving key entry
+	cfg.APIKeys[0].AllowedModels = []string{"comboX"}
+	cfg.RenameModelCascade("comboX", "renamed-combo")
 	if cfg.APIKeys[0].AllowedModels[0] != "renamed-combo" {
 		t.Errorf("expected renamed-combo in API key, got %s", cfg.APIKeys[0].AllowedModels[0])
 	}
@@ -172,6 +183,63 @@ func TestConfig_CascadeOperations(t *testing.T) {
 	}
 	_ = routesRemoved
 	_ = combosRemoved
+}
+
+func TestConfig_DeleteModelComboCascade(t *testing.T) {
+	newCfg := func() *Config {
+		return &Config{
+			Providers: []ProviderConfig{
+				{Name: "prov1", Type: "openai", BaseURL: "https://api1.com", Models: []string{"mod1"}},
+				{Name: "prov2", Type: "openai", BaseURL: "https://api2.com", Models: []string{"mod2"}},
+				{Name: "prov3", Type: "openai", BaseURL: "https://api3.com", Models: []string{"mod3"}},
+			},
+			Models: []ModelConfig{
+				{Name: "alias1", Provider: "prov1", Model: "mod1"},
+				{
+					Name:     "combo3",
+					Strategy: "fallback",
+					Backends: []BackendConfig{
+						{Provider: "prov1", Model: "mod1"},
+						{Provider: "prov2", Model: "mod2"},
+						{Provider: "prov3", Model: "mod3"},
+					},
+				},
+			},
+		}
+	}
+
+	// Deleting one of three backends keeps the combo alive with 2 backends.
+	cfg := newCfg()
+	updated, deleted, err := cfg.DeleteModel("alias1")
+	if err != nil {
+		t.Fatalf("DeleteModel failed: %v", err)
+	}
+	if len(updated) != 1 || updated[0] != "combo3" {
+		t.Errorf("expected combo3 updated, got updated=%v deleted=%v", updated, deleted)
+	}
+	if len(deleted) != 0 {
+		t.Errorf("expected no deleted combos, got: %v", deleted)
+	}
+	combo := cfg.GetModel("combo3")
+	if combo == nil || len(combo.Backends) != 2 {
+		t.Fatalf("expected combo3 with 2 backends, got: %+v", combo)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("config should stay valid after cascade, got: %v", err)
+	}
+
+	// Deleting a combo route itself needs no backend cascade.
+	cfg = newCfg()
+	updated, deleted, err = cfg.DeleteModel("combo3")
+	if err != nil {
+		t.Fatalf("DeleteModel(combo) failed: %v", err)
+	}
+	if len(updated) != 0 || len(deleted) != 0 {
+		t.Errorf("expected no cascade for combo delete, got updated=%v deleted=%v", updated, deleted)
+	}
+	if cfg.GetModel("alias1") == nil {
+		t.Errorf("alias1 should survive a combo delete")
+	}
 }
 
 func TestNormalizeProxyURL(t *testing.T) {

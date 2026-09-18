@@ -19,6 +19,7 @@ type KeyInfo struct {
 	TokenSaver    *bool    `json:"token_saver,omitempty"` // nil=follow global, true/false=override
 	Privacy       *bool    `json:"privacy,omitempty"`     // nil=follow global, true/false=override
 	Disabled      bool     `json:"disabled"`
+	CreatedAt     string   `json:"created_at,omitempty"` // RFC3339 creation timestamp
 
 	// Rate limiting state (sliding window counter, not serialized)
 	currentWindow time.Time
@@ -117,6 +118,7 @@ func NewKeyStore(configs []config.APIKeyConfig) *KeyStore {
 			TokenSaver:    cfg.TokenSaver,
 			Privacy:       cfg.Privacy,
 			Disabled:      cfg.Disabled,
+			CreatedAt:     cfg.CreatedAt,
 		}
 	}
 	return store
@@ -137,6 +139,11 @@ func (s *KeyStore) Validate(key string) (*KeyInfo, bool) {
 // AddKey creates a new API key and returns its info.
 // The key is generated with format: sk-gw-{uuid}
 func (s *KeyStore) AddKey(name string, allowedModels []string, rateLimit int, tokenSaver *bool) *KeyInfo {
+	return s.AddKeyFull(name, allowedModels, rateLimit, tokenSaver, nil)
+}
+
+// AddKeyFull creates a new API key with token-saver and privacy overrides.
+func (s *KeyStore) AddKeyFull(name string, allowedModels []string, rateLimit int, tokenSaver *bool, privacy *bool) *KeyInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -147,10 +154,42 @@ func (s *KeyStore) AddKey(name string, allowedModels []string, rateLimit int, to
 		AllowedModels: allowedModels,
 		RateLimit:     rateLimit,
 		TokenSaver:    tokenSaver,
+		Privacy:       privacy,
+		CreatedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
 	h := HashKey(key)
 	s.keys[h] = info
 	return info
+}
+
+// GetByHash returns the key info for a hash. Returns false if not found.
+func (s *KeyStore) GetByHash(hash string) (*KeyInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	info, ok := s.keys[hash]
+	return info, ok
+}
+
+// RegenerateKey replaces the secret of the key identified by hash with a fresh
+// value. All metadata (name, permissions, limits, overrides, created_at) is
+// preserved; only the credential itself changes. Returns the updated info and
+// true, or nil/false when the hash is unknown.
+func (s *KeyStore) RegenerateKey(hash string) (*KeyInfo, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, ok := s.keys[hash]
+	if !ok {
+		return nil, false
+	}
+	newKey := "sk-gw-" + uuid.New().String()
+	delete(s.keys, hash)
+	info.Key = newKey
+	// Reset the sliding-window counters so the fresh credential starts clean.
+	info.currentWindow = time.Time{}
+	info.prevCount = 0
+	info.currCount = 0
+	s.keys[HashKey(newKey)] = info
+	return info, true
 }
 
 // DeleteKey removes an API key by its hash. Returns true if the key existed.
@@ -177,7 +216,8 @@ func (s *KeyStore) ListKeys() []*KeyInfo {
 }
 
 // UpdateKey updates an existing API key's metadata by its hash. Returns true if the key existed.
-func (s *KeyStore) UpdateKey(hash string, name string, allowedModels []string, rateLimit int, tokenSaver *bool, disabled bool) bool {
+// A nil tokenSaver/privacy preserves the existing override.
+func (s *KeyStore) UpdateKey(hash string, name string, allowedModels []string, rateLimit int, tokenSaver *bool, privacy *bool, disabled bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	info, ok := s.keys[hash]
@@ -192,6 +232,7 @@ func (s *KeyStore) UpdateKey(hash string, name string, allowedModels []string, r
 	}
 	info.RateLimit = rateLimit
 	info.TokenSaver = tokenSaver
+	info.Privacy = privacy
 	info.Disabled = disabled
 	return true
 }

@@ -217,6 +217,7 @@ type APIKeyConfig struct {
 	TokenSaver    *bool    `yaml:"token_saver,omitempty" json:"token_saver,omitempty"` // per-key toggle (nil = follow global, true/false = override)
 	Privacy       *bool    `yaml:"privacy,omitempty" json:"privacy,omitempty"`         // per-key privacy toggle (nil = follow global, true/false = override)
 	Disabled      bool     `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+	CreatedAt     string   `yaml:"created_at,omitempty" json:"created_at,omitempty"` // RFC3339 creation timestamp
 }
 
 var envVarRegex = regexp.MustCompile(`\$\{([^}]+)\}`)

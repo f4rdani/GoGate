@@ -261,6 +261,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("POST /admin/tunnel/toggle", adminHandler.HandleToggleTunnel)
 	wrapAdmin("GET /admin/proxy-pool", adminHandler.HandleGetProxyPool)
 	wrapAdmin("POST /admin/proxy-pool/refresh", adminHandler.HandleRefreshProxyPool)
+	wrapAdmin("POST /admin/proxy-pool/revalidate", adminHandler.HandleRevalidateProxyPool)
 	wrapAdmin("POST /admin/proxy-pool/toggle", adminHandler.HandleToggleProxyPool)
 	wrapAdmin("POST /admin/proxy-pool/manual", adminHandler.HandleAddManualProxy)
 	wrapAdmin("DELETE /admin/proxy-pool/manual", adminHandler.HandleRemoveManualProxy)
@@ -290,6 +291,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 
 	// API Key update
 	wrapAdmin("PUT /admin/keys/", adminHandler.HandleUpdateKey)
+	wrapAdmin("POST /admin/keys/", adminHandler.HandleRegenerateKey)
 
 	// Config sections
 	wrapAdmin("GET /admin/config", adminHandler.HandleConfig)

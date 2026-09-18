@@ -84,6 +84,14 @@ func doAdmin(t *testing.T, adm *AdminHandler, method, target, body string) *http
 		adm.HandleTemplates(w, req)
 	case target == "/admin/keys" && method == "POST":
 		adm.HandleCreateKey(w, req)
+	case target == "/admin/keys" && method == "GET":
+		adm.HandleListKeys(w, req)
+	case strings.HasPrefix(target, "/admin/keys/") && strings.HasSuffix(target, "/regenerate") && method == "POST":
+		adm.HandleRegenerateKey(w, req)
+	case strings.HasPrefix(target, "/admin/keys/") && method == "PUT":
+		adm.HandleUpdateKey(w, req)
+	case strings.HasPrefix(target, "/admin/keys/") && method == "DELETE":
+		adm.HandleDeleteKey(w, req)
 	case target == "/admin/proxy-pool" && method == "GET":
 		adm.HandleGetProxyPool(w, req)
 	case target == "/admin/proxy-pool/toggle":
@@ -387,5 +395,107 @@ func TestAdminUpdateConfigAndReload(t *testing.T) {
 	}
 	if adm.getRegistry() != nil {
 		t.Fatal("registry must be swappable to nil")
+	}
+}
+
+func TestAdminKeysCreateUpdateRegenerate(t *testing.T) {
+	adm, _ := setupFullAdmin(t)
+
+	// Create returns the full secret once, plus id + created_at.
+	w := doAdmin(t, adm, "POST", "/admin/keys", `{"name":"edit-me","allowed_models":["m1"],"rate_limit":30,"token_saver":true,"privacy":false}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create key: %d %s", w.Code, w.Body.String())
+	}
+	var created map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	id, _ := created["id"].(string)
+	secret, _ := created["key"].(string)
+	if id == "" || secret == "" {
+		t.Fatalf("create must return id + full key: %v", created)
+	}
+	if _, ok := created["created_at"]; !ok {
+		t.Fatalf("create must return created_at: %v", created)
+	}
+
+	// List exposes masked key + metadata including created_at.
+	w = doAdmin(t, adm, "GET", "/admin/keys", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("list keys: %d %s", w.Code, w.Body.String())
+	}
+	var listed []map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	var found map[string]interface{}
+	for _, k := range listed {
+		if k["id"] == id {
+			found = k
+		}
+	}
+	if found == nil {
+		t.Fatalf("created key missing from list: %v", listed)
+	}
+	if found["created_at"] == nil || found["created_at"] == "" {
+		t.Fatalf("list must include created_at: %v", found)
+	}
+	if found["key"] == secret {
+		t.Fatal("list must mask the secret, never return it in full")
+	}
+
+	// Update allowed models + limits + overrides by id.
+	w = doAdmin(t, adm, "PUT", "/admin/keys/"+id, `{"allowed_models":["*"],"rate_limit":5,"token_saver":false,"privacy":true,"disabled":false}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update key: %d %s", w.Code, w.Body.String())
+	}
+	info, ok := adm.getKeyStore().GetByHash(id)
+	if !ok {
+		t.Fatal("key must still exist after update")
+	}
+	if info.RateLimit != 5 || info.TokenSaver == nil || *info.TokenSaver != false {
+		t.Fatalf("rate limit / token saver must update: %+v", info)
+	}
+	if info.Privacy == nil || *info.Privacy != true || info.Disabled {
+		t.Fatalf("privacy / disabled must update: %+v", info)
+	}
+	if len(info.AllowedModels) != 1 || info.AllowedModels[0] != "*" {
+		t.Fatalf("allowed models must update: %+v", info.AllowedModels)
+	}
+
+	// Regenerate swaps the secret, preserves metadata.
+	w = doAdmin(t, adm, "POST", "/admin/keys/"+id+"/regenerate", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("regenerate: %d %s", w.Code, w.Body.String())
+	}
+	var regen map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&regen); err != nil {
+		t.Fatalf("decode regenerate: %v", err)
+	}
+	newSecret, _ := regen["key"].(string)
+	if newSecret == "" || newSecret == secret {
+		t.Fatalf("regenerate must issue a fresh secret: %v", regen)
+	}
+	if _, ok := adm.getKeyStore().Validate(secret); ok {
+		t.Fatal("old secret must stop validating after regenerate")
+	}
+	if _, ok := adm.getKeyStore().Validate(newSecret); !ok {
+		t.Fatal("new secret must validate after regenerate")
+	}
+
+	// Disable toggle is honored by validation.
+	newID, _ := regen["id"].(string)
+	w = doAdmin(t, adm, "PUT", "/admin/keys/"+newID, `{"disabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("disable key: %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := adm.getKeyStore().Validate(newSecret); ok {
+		t.Fatal("disabled key must not validate")
+	}
+
+	// Unknown id → 404.
+	w = doAdmin(t, adm, "POST", "/admin/keys/deadbeef/regenerate", "")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown regenerate must 404: %d %s", w.Code, w.Body.String())
 	}
 }
