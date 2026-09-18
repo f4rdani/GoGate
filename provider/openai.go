@@ -116,6 +116,12 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			return nil, fmt.Errorf("do request: %w", err)
 		}
 		o.reportEgress(egressProxy, false)
+		if egressProxy != "" && resp != nil && resp.Body != nil {
+			reqBytes := int64(len(body))
+			resp.Body = NewBandwidthTrackingReader(resp.Body, func(respBytes int64) {
+				o.recordEgressBandwidth(egressProxy, reqBytes+respBytes)
+			})
+		}
 
 		if o.providerType == "opencode" {
 			defer resp.Body.Close()
@@ -276,6 +282,12 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			return fmt.Errorf("do request: %w", err)
 		}
 		o.reportEgress(egressProxy, false)
+		if egressProxy != "" && resp != nil && resp.Body != nil {
+			reqBytes := int64(len(body))
+			resp.Body = NewBandwidthTrackingReader(resp.Body, func(respBytes int64) {
+				o.recordEgressBandwidth(egressProxy, reqBytes+respBytes)
+			})
+		}
 
 		// Check status BEFORE writing to ResponseWriter (enables fallback)
 		if resp.StatusCode != http.StatusOK {

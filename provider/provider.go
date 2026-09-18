@@ -70,6 +70,8 @@ type EgressPool interface {
 	// Report feeds an attempt outcome back: failed=true only for
 	// transport-level failures (the proxy never reached upstream).
 	Report(proxyURL string, failed bool)
+	// RecordBandwidth records bytes transferred (in + out) through the proxy.
+	RecordBandwidth(proxyURL string, bytes int64)
 }
 
 // egressProxyCtxKey carries a checked-out proxy URL through request contexts
@@ -159,6 +161,14 @@ func (b *BaseProvider) reportEgress(proxyURL string, failed bool) {
 		return
 	}
 	b.egress.Report(proxyURL, failed)
+}
+
+// recordEgressBandwidth reports bandwidth bytes consumed through an egress proxy.
+func (b *BaseProvider) recordEgressBandwidth(proxyURL string, bytes int64) {
+	if b.egress == nil || proxyURL == "" || bytes <= 0 {
+		return
+	}
+	b.egress.RecordBandwidth(proxyURL, bytes)
 }
 
 // Name returns the provider's name.
@@ -766,3 +776,34 @@ func GetCachedDynamicModels(providerName string) []string {
 	defer dynamicModelsCacheMu.RUnlock()
 	return dynamicModelsCache[providerName]
 }
+
+// BandwidthTrackingReader wraps an io.ReadCloser to track total bytes read and report on close.
+type BandwidthTrackingReader struct {
+	io.ReadCloser
+	bytesRead int64
+	onClose   func(int64)
+}
+
+// NewBandwidthTrackingReader creates a new BandwidthTrackingReader.
+func NewBandwidthTrackingReader(rc io.ReadCloser, onClose func(int64)) *BandwidthTrackingReader {
+	return &BandwidthTrackingReader{
+		ReadCloser: rc,
+		onClose:   onClose,
+	}
+}
+
+func (b *BandwidthTrackingReader) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.bytesRead += int64(n)
+	return n, err
+}
+
+func (b *BandwidthTrackingReader) Close() error {
+	err := b.ReadCloser.Close()
+	if b.onClose != nil {
+		b.onClose(b.bytesRead)
+		b.onClose = nil
+	}
+	return err
+}
+

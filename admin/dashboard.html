@@ -2581,6 +2581,10 @@ input:focus, select:focus, textarea:focus {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               Scrape &amp; Refresh
             </button>
+            <button class="btn btn-cyan" onclick="showAddWebshareModal()">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              + Add Webshare Account
+            </button>
             <button class="btn" onclick="showAddManualProxyModal()">
               + Add Manual Proxy
             </button>
@@ -2618,6 +2622,40 @@ input:focus, select:focus, textarea:focus {
             </p>
             <div id="ppViewListPreview" style="display:flex; gap:0.4rem; flex-wrap:wrap; max-height:180px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border-radius:var(--radius); border:1px solid var(--border);">
               <span style="color:var(--text2); font-size:0.78rem; font-weight:600;">No proxies loaded yet. Click Refresh to scrape.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- CARD: Webshare Accounts & Bandwidth Guard -->
+        <div class="card" style="margin-bottom:1.5rem;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+              <span>Webshare Accounts &amp; Bandwidth Guard (1 GB / Month)</span>
+            </div>
+            <button class="btn btn-sm btn-cyan" onclick="showAddWebshareModal()">+ Add Webshare Account</button>
+          </div>
+          <div class="card-body">
+            <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.85rem;">
+              Manajemen akun Webshare (10 proxy per akun). GoGate melacak kuota bandwidth (request &amp; response) setiap bulan. Jika batas kuota 1 GB tercapai, seluruh 10 proxy pada akun tersebut otomatis diskip/dinonaktifkan agar tidak melebihi free tier.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nama Akun</th>
+                    <th>Tipe / Limit</th>
+                    <th>Jumlah Proxy</th>
+                    <th style="min-width:180px;">Pemakaian Bandwidth</th>
+                    <th>Status</th>
+                    <th>Bulan</th>
+                    <th style="text-align:right;">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="webshareAccountsTableBody">
+                  <tr><td colspan="7" style="text-align:center; color:var(--text3); padding:1.2rem;">Belum ada akun Webshare terdaftar. Klik "+ Add Webshare Account" untuk menambahkan.</td></tr>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -3741,6 +3779,247 @@ function renderProxyPool(data){
 
   // Render Manual Proxies Table
   renderManualProxies(data.manual_proxies || [], list);
+  // Render Webshare Accounts Table
+  renderWebshareAccounts(data.webshare_accounts || []);
+}
+
+function renderWebshareAccounts(accounts){
+  const tbody = document.getElementById('webshareAccountsTableBody');
+  if(!tbody) return;
+  if(!accounts || accounts.length === 0){
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text3); padding:1.2rem;">Belum ada akun Webshare terdaftar. Klik "+ Add Webshare Account" untuk menambahkan.</td></tr>';
+    return;
+  }
+
+  let rows = '';
+  accounts.forEach(acc => {
+    const isExhausted = acc.status === 'exhausted' || (acc.bandwidth_limit > 0 && acc.bandwidth_used >= acc.bandwidth_limit);
+    const statusBadge = isExhausted
+      ? `<span class="tag tag-red" title="Batas kuota bulanan tercapai. 10 proxy akun ini dinonaktifkan sementara.">Limit Tercapai (1 GB)</span>`
+      : `<span class="tag tag-green">Aktif</span>`;
+
+    const tierBadge = acc.is_free_tier
+      ? `<span class="tag tag-cyan">Free Tier (1 GB/bln)</span>`
+      : `<span class="tag tag-purple">Custom (${acc.limit_formatted || 'Unlimited'})</span>`;
+
+    const percent = Math.min(100, Math.max(0, acc.percent_used || 0));
+    const barColor = isExhausted ? 'var(--red)' : percent > 80 ? 'var(--orange)' : 'var(--cyan)';
+
+    rows += `
+      <tr>
+        <td style="font-weight:700; color:var(--text1);">
+          ${esc(acc.name)}
+        </td>
+        <td>${tierBadge}</td>
+        <td>
+          <button class="btn btn-sm" onclick="showWebshareProxiesModal('${esc(acc.name)}')" title="Lihat daftar proxy">
+            ${acc.proxies_count || (acc.proxies ? acc.proxies.length : 0)} Proxies ▾
+          </button>
+        </td>
+        <td>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; font-weight:600; margin-bottom:0.25rem;">
+            <span>${esc(acc.used_formatted || '0 B')}</span>
+            <span style="color:var(--text3);">${esc(acc.limit_formatted || '1.00 GB')} (${percent.toFixed(1)}%)</span>
+          </div>
+          <div style="background:var(--surface-subtle); height:6px; border-radius:3px; overflow:hidden; border:1px solid var(--border);">
+            <div style="background:${barColor}; width:${percent}%; height:100%; transition:width 0.3s;"></div>
+          </div>
+        </td>
+        <td>${statusBadge}</td>
+        <td><span class="tag tag-gray mono" style="font-size:0.75rem;">${esc(acc.current_month || '-')}</span></td>
+        <td style="text-align:right;">
+          <div style="display:inline-flex; gap:0.35rem;">
+            <button class="btn btn-sm" onclick="resetWebshareAccount('${esc(acc.name)}')" title="Reset pemakaian bandwidth bulan ini ke 0">Reset</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteWebshareAccount('${esc(acc.name)}')" title="Hapus akun dan proxynya">Hapus</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+function showAddWebshareModal(){
+  openModal('Tambah Akun Webshare (1 GB Free Tier Guard)', `
+    <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.85rem;">
+      Tambahkan akun Webshare.io Anda. Masukkan nama akun dan paste format file proxy (<code>IP:PORT:USER:PASS</code>) yang didownload dari dashboard Webshare. GoGate otomatis melacak batas 1 GB bandwidth per bulan.
+    </p>
+    <div class="form-grid">
+      <label class="full">
+        Nama Akun / Label
+        <input id="modal_ws_name" placeholder="Misal: Webshare Akun 1" style="font-weight:600;">
+      </label>
+
+      <label class="full" style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; margin-top:0.25rem;">
+        <input type="checkbox" id="modal_ws_free_tier" checked onchange="toggleWsLimitInput(this.checked)" style="width:auto; cursor:pointer;">
+        <span style="font-size:0.85rem; font-weight:600; color:var(--text1);">Free Tier (Limit 1 GB Bandwidth / Bulan)</span>
+      </label>
+
+      <div id="modal_ws_custom_limit_wrap" class="full" style="display:none; margin-top:0.25rem;">
+        <label>
+          Batas Bandwidth Kustom (dalam GB)
+          <input type="number" id="modal_ws_custom_gb" value="1" min="0.1" step="0.1" placeholder="Misal: 1">
+        </label>
+      </div>
+
+      <div class="full" style="margin-top:0.5rem;">
+        <label style="display:block; margin-bottom:0.35rem; font-weight:600;">
+          Pilih File Download Webshare (.txt)
+        </label>
+        <input type="file" id="modal_ws_file" accept=".txt" onchange="handleWebshareFileSelect(event)" style="font-size:0.82rem;">
+      </div>
+
+      <label class="full" style="margin-top:0.5rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.35rem;">
+          <span style="font-weight:600;">Isi File Proxy (IP:PORT:USER:PASS atau URL per baris)</span>
+          <span id="modalWsDetectedCount" class="tag tag-cyan" style="font-size:0.75rem;">0 proxies terdeteksi</span>
+        </div>
+        <textarea id="modal_ws_content" rows="6" oninput="updateWsDetectedCount()" placeholder="31.59.20.176:6754:bpjlxult:eqi2oa0onf9s&#10;45.38.107.97:6014:bpjlxult:eqi2oa0onf9s&#10;..." style="font-family:monospace; font-size:0.82rem;"></textarea>
+      </label>
+    </div>
+
+    <div class="form-actions" style="margin-top:1.25rem;">
+      <button class="btn" type="button" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" type="button" id="btnModalSaveWs" onclick="submitModalWebshareAccount()">Simpan &amp; Aktifkan</button>
+    </div>
+  `);
+}
+
+function toggleWsLimitInput(isFree){
+  const wrap = document.getElementById('modal_ws_custom_limit_wrap');
+  if(wrap) wrap.style.display = isFree ? 'none' : 'block';
+}
+
+function handleWebshareFileSelect(e){
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt){
+    const ta = document.getElementById('modal_ws_content');
+    if(ta){
+      ta.value = evt.target.result;
+      updateWsDetectedCount();
+    }
+  };
+  reader.readAsText(file);
+}
+
+function updateWsDetectedCount(){
+  const ta = document.getElementById('modal_ws_content');
+  const badge = document.getElementById('modalWsDetectedCount');
+  if(!ta || !badge) return;
+  const lines = ta.value.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+  badge.textContent = `${lines.length} proxies terdeteksi`;
+}
+
+async function submitModalWebshareAccount(){
+  const nameInp = document.getElementById('modal_ws_name');
+  const freeTierCheck = document.getElementById('modal_ws_free_tier');
+  const customGbInp = document.getElementById('modal_ws_custom_gb');
+  const contentInp = document.getElementById('modal_ws_content');
+  const btn = document.getElementById('btnModalSaveWs');
+
+  if(!nameInp || !contentInp) return;
+  const name = nameInp.value.trim();
+  const content = contentInp.value.trim();
+  const isFreeTier = freeTierCheck ? freeTierCheck.checked : true;
+
+  if(!name){
+    toast('Nama akun harus diisi (misal: Webshare Akun 1)', 'error');
+    return;
+  }
+  if(!content){
+    toast('Isi proxy harus diisi atau upload file .txt', 'error');
+    return;
+  }
+
+  let limitBytes = 1000000000; // 1 GB
+  if(!isFreeTier && customGbInp){
+    const gb = parseFloat(customGbInp.value) || 1;
+    limitBytes = Math.round(gb * 1000000000);
+  }
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Menyimpan...'; }
+  try{
+    const r = await api('/admin/proxy-pool/webshare', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: name,
+        is_free_tier: isFreeTier,
+        bandwidth_limit: limitBytes,
+        proxy_content: content
+      })
+    });
+    toast(r.message || 'Akun Webshare berhasil disimpan!', 'success');
+    closeModal();
+    const poolData = await api('/admin/proxy-pool');
+    renderProxyPool(poolData);
+  }catch(err){
+    toast(err.message || 'Gagal menyimpan akun Webshare', 'error');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Simpan & Aktifkan'; }
+  }
+}
+
+async function resetWebshareAccount(name){
+  if(!confirm(`Reset pemakaian bandwidth bulan ini untuk akun "${name}" menjadi 0? Seluruh proxy akun ini akan diaktifkan kembali.`)) return;
+  try{
+    const r = await api('/admin/proxy-pool/webshare/reset', {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+    toast(r.message || 'Bandwidth akun berhasil direset!', 'success');
+    const poolData = await api('/admin/proxy-pool');
+    renderProxyPool(poolData);
+  }catch(err){
+    toast(err.message || 'Gagal mereset bandwidth', 'error');
+  }
+}
+
+async function deleteWebshareAccount(name){
+  if(!confirm(`Hapus akun Webshare "${name}" beserta seluruh proxynya dari pool?`)) return;
+  try{
+    const r = await api(`/admin/proxy-pool/webshare?name=${encodeURIComponent(name)}`, {
+      method: 'DELETE'
+    });
+    toast(r.message || 'Akun Webshare berhasil dihapus', 'success');
+    const poolData = await api('/admin/proxy-pool');
+    renderProxyPool(poolData);
+  }catch(err){
+    toast(err.message || 'Gagal menghapus akun Webshare', 'error');
+  }
+}
+
+function showWebshareProxiesModal(accountName){
+  api('/admin/proxy-pool').then(data => {
+    const accounts = data.webshare_accounts || [];
+    const acc = accounts.find(a => a.name === accountName);
+    if(!acc){
+      toast('Akun tidak ditemukan', 'error');
+      return;
+    }
+    const proxies = acc.proxies || [];
+    const listHtml = proxies.length === 0
+      ? '<p style="color:var(--text3);">Tidak ada proxy pada akun ini.</p>'
+      : `<div style="max-height:300px; overflow-y:auto; border:1px solid var(--border); border-radius:var(--radius); padding:0.5rem; background:var(--surface-subtle);">` +
+        proxies.map((p, idx) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:0.4rem; border-bottom:1px solid var(--border); font-size:0.8rem;">
+            <span class="mono" style="font-weight:600; color:var(--text1);">${idx+1}. ${esc(p)}</span>
+            <span class="tag tag-cyan">Managed</span>
+          </div>
+        `).join('') +
+        `</div>`;
+
+    openModal(`Daftar Proxy: ${esc(acc.name)}`, `
+      <div style="margin-bottom:0.75rem; font-size:0.82rem; color:var(--text2);">
+        Total Proxy: <strong>${proxies.length}</strong> | Pemakaian: <strong>${acc.used_formatted} / ${acc.limit_formatted}</strong>
+      </div>
+      ${listHtml}
+      <div class="form-actions" style="margin-top:1rem;">
+        <button class="btn btn-primary" onclick="closeModal()">Tutup</button>
+      </div>
+    `);
+  }).catch(e => toast(e.message, 'error'));
 }
 
 function renderManualProxies(manualList, allProxies){

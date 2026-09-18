@@ -56,15 +56,29 @@ type BudgetConfig struct {
 	MonthlyTokens int64  `yaml:"monthly_tokens" json:"monthly_tokens"`
 }
 
+// WebshareAccountConfig defines a managed Webshare account with proxies and monthly bandwidth tracking.
+type WebshareAccountConfig struct {
+	Name           string   `yaml:"name" json:"name"`
+	IsFreeTier     bool     `yaml:"is_free_tier" json:"is_free_tier"`
+	BandwidthLimit int64    `yaml:"bandwidth_limit" json:"bandwidth_limit"` // bytes per month (default: 1GB = 1,000,000,000)
+	BandwidthUsed  int64    `yaml:"bandwidth_used" json:"bandwidth_used"`   // bytes used in current month
+	CurrentMonth   string   `yaml:"current_month,omitempty" json:"current_month,omitempty"` // e.g. "2026-09"
+	Proxies        []string `yaml:"proxies" json:"proxies"`                 // list of proxy URLs (normalized)
+	Status         string   `yaml:"status,omitempty" json:"status,omitempty"` // "active", "exhausted", "disabled"
+	CreatedAt      string   `yaml:"created_at,omitempty" json:"created_at,omitempty"`
+	UpdatedAt      string   `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
+}
+
 // ProxyPoolConfig holds settings for the free public proxy pool rotator.
 type ProxyPoolConfig struct {
-	Enabled       bool          `yaml:"enabled" json:"enabled"`
-	Sources       []string      `yaml:"sources,omitempty" json:"sources,omitempty"`
-	ManualProxies []string      `yaml:"manual_proxies,omitempty" json:"manual_proxies,omitempty"`
-	CheckInterval time.Duration `yaml:"check_interval,omitempty" json:"check_interval,omitempty"`
-	CheckTimeout  time.Duration `yaml:"check_timeout,omitempty" json:"check_timeout,omitempty"`
-	TestURL       string        `yaml:"test_url,omitempty" json:"test_url,omitempty"`
-	MaxProxies    int           `yaml:"max_proxies,omitempty" json:"max_proxies,omitempty"`
+	Enabled          bool                    `yaml:"enabled" json:"enabled"`
+	Sources          []string                `yaml:"sources,omitempty" json:"sources,omitempty"`
+	ManualProxies    []string                `yaml:"manual_proxies,omitempty" json:"manual_proxies,omitempty"`
+	WebshareAccounts []WebshareAccountConfig `yaml:"webshare_accounts,omitempty" json:"webshare_accounts,omitempty"`
+	CheckInterval    time.Duration           `yaml:"check_interval,omitempty" json:"check_interval,omitempty"`
+	CheckTimeout     time.Duration           `yaml:"check_timeout,omitempty" json:"check_timeout,omitempty"`
+	TestURL          string                  `yaml:"test_url,omitempty" json:"test_url,omitempty"`
+	MaxProxies       int                     `yaml:"max_proxies,omitempty" json:"max_proxies,omitempty"`
 }
 
 // TokenSaverConfig holds settings for the RTK-style input token compression.

@@ -26,41 +26,76 @@ type ProxyEntry struct {
 	LastChecked time.Time     `json:"last_checked"`
 	Failures    atomic.Int32  `json:"failures"`
 	IsManual    bool          `json:"is_manual,omitempty"`
+	AccountName string        `json:"account_name,omitempty"`
+}
+
+// WebshareAccountView is the API/dashboard view model for a Webshare account.
+type WebshareAccountView struct {
+	Name           string   `json:"name"`
+	IsFreeTier     bool     `json:"is_free_tier"`
+	BandwidthLimit int64    `json:"bandwidth_limit"`
+	BandwidthUsed  int64    `json:"bandwidth_used"`
+	LimitFormatted string   `json:"limit_formatted"`
+	UsedFormatted  string   `json:"used_formatted"`
+	PercentUsed    float64  `json:"percent_used"`
+	CurrentMonth   string   `json:"current_month"`
+	ProxiesCount   int      `json:"proxies_count"`
+	Proxies        []string `json:"proxies"`
+	Status         string   `json:"status"` // "active", "exhausted", "disabled"
+	CreatedAt      string   `json:"created_at"`
+	UpdatedAt      string   `json:"updated_at"`
+}
+
+// WebshareAccountState tracks the live in-memory state of a Webshare account.
+type WebshareAccountState struct {
+	mu             sync.RWMutex
+	Name           string       `json:"name"`
+	IsFreeTier     bool         `json:"is_free_tier"`
+	BandwidthLimit int64        `json:"bandwidth_limit"`
+	BandwidthUsed  atomic.Int64 `json:"bandwidth_used"`
+	CurrentMonth   string       `json:"current_month"`
+	Proxies        []string     `json:"proxies"`
+	Status         string       `json:"status"`
+	CreatedAt      string       `json:"created_at"`
+	UpdatedAt      time.Time    `json:"updated_at"`
 }
 
 // ProxyPoolStats holds snapshot metrics of the proxy pool.
 type ProxyPoolStats struct {
-	Enabled        bool          `json:"enabled"`
-	ActiveCount    int           `json:"active_count"`
-	HealthyCount   int           `json:"healthy_count"`
-	TotalFound     int           `json:"total_found"`
-	TotalScraped   int           `json:"total_scraped"`
-	AverageLatency string        `json:"average_latency"`
-	LastRefresh    string        `json:"last_refresh"`
-	CheckInterval  string        `json:"check_interval"`
-	Sources        []string      `json:"sources"`
-	TopProxies     []*ProxyEntry `json:"top_proxies,omitempty"`
-	Proxies        []*ProxyEntry `json:"proxies,omitempty"`
-	ManualCount    int           `json:"manual_count"`
-	ManualProxies  []*ProxyEntry `json:"manual_proxies,omitempty"`
+	Enabled          bool                   `json:"enabled"`
+	ActiveCount      int                    `json:"active_count"`
+	HealthyCount     int                    `json:"healthy_count"`
+	TotalFound       int                    `json:"total_found"`
+	TotalScraped     int                    `json:"total_scraped"`
+	AverageLatency   string                 `json:"average_latency"`
+	LastRefresh      string                 `json:"last_refresh"`
+	CheckInterval    string                 `json:"check_interval"`
+	Sources          []string               `json:"sources"`
+	TopProxies       []*ProxyEntry          `json:"top_proxies,omitempty"`
+	Proxies          []*ProxyEntry          `json:"proxies,omitempty"`
+	ManualCount      int                    `json:"manual_count"`
+	ManualProxies    []*ProxyEntry          `json:"manual_proxies,omitempty"`
+	WebshareAccounts []*WebshareAccountView `json:"webshare_accounts,omitempty"`
 }
 
 // ProxyPool manages free public proxies, background validation, and round-robin rotation.
 type ProxyPool struct {
-	mu            sync.RWMutex
-	enabled       bool
-	sources       []string
-	manualProxies []string
-	manualEntries []*ProxyEntry
-	checkInterval time.Duration
-	checkTimeout  time.Duration
-	testURL       string
-	maxProxies    int
-	proxies       []*ProxyEntry
-	counter       atomic.Uint64
-	lastRefresh   time.Time
-	totalFound    int
-	isRefreshing  atomic.Bool
+	mu               sync.RWMutex
+	enabled          bool
+	sources          []string
+	manualProxies    []string
+	manualEntries    []*ProxyEntry
+	checkInterval    time.Duration
+	checkTimeout     time.Duration
+	testURL          string
+	maxProxies       int
+	proxies          []*ProxyEntry
+	counter          atomic.Uint64
+	lastRefresh      time.Time
+	totalFound       int
+	isRefreshing     atomic.Bool
+	webshareAccounts map[string]*WebshareAccountState
+	proxyToAccount   map[string]string
 }
 
 // NewProxyPool creates a new proxy pool instance from configuration.
@@ -98,15 +133,17 @@ func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
 	}
 
 	pool := &ProxyPool{
-		enabled:       cfg.Enabled,
-		sources:       sources,
-		manualProxies: cfg.ManualProxies,
-		manualEntries: make([]*ProxyEntry, 0),
-		checkInterval: checkInterval,
-		checkTimeout:  checkTimeout,
-		testURL:       testURL,
-		maxProxies:    maxProxies,
-		proxies:       make([]*ProxyEntry, 0),
+		enabled:          cfg.Enabled,
+		sources:          sources,
+		manualProxies:    cfg.ManualProxies,
+		manualEntries:    make([]*ProxyEntry, 0),
+		checkInterval:    checkInterval,
+		checkTimeout:     checkTimeout,
+		testURL:          testURL,
+		maxProxies:       maxProxies,
+		proxies:          make([]*ProxyEntry, 0),
+		webshareAccounts: make(map[string]*WebshareAccountState),
+		proxyToAccount:   make(map[string]string),
 	}
 
 	// Initialize manual proxies from config
@@ -124,6 +161,75 @@ func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
 		}
 		pool.manualEntries = append(pool.manualEntries, entry)
 		pool.proxies = append(pool.proxies, entry)
+	}
+
+	// Initialize Webshare accounts with monthly bandwidth guard
+	nowMonth := time.Now().Format("2006-01")
+	for _, wsCfg := range cfg.WebshareAccounts {
+		wsCfg.Name = strings.TrimSpace(wsCfg.Name)
+		if wsCfg.Name == "" {
+			continue
+		}
+		month := wsCfg.CurrentMonth
+		var used int64 = wsCfg.BandwidthUsed
+		status := wsCfg.Status
+		if month != nowMonth {
+			month = nowMonth
+			used = 0
+			status = "active"
+		}
+		if status == "" {
+			status = "active"
+		}
+		limit := wsCfg.BandwidthLimit
+		if limit <= 0 && wsCfg.IsFreeTier {
+			limit = 1_000_000_000 // 1 GB default for free tier
+		}
+
+		state := &WebshareAccountState{
+			Name:           wsCfg.Name,
+			IsFreeTier:     wsCfg.IsFreeTier,
+			BandwidthLimit: limit,
+			CurrentMonth:   month,
+			Status:         status,
+			CreatedAt:      wsCfg.CreatedAt,
+			UpdatedAt:      time.Now(),
+		}
+		state.BandwidthUsed.Store(used)
+
+		var cleanProxies []string
+		for _, pRaw := range wsCfg.Proxies {
+			norm := config.NormalizeProxyURL(pRaw)
+			if norm == "" {
+				continue
+			}
+			cleanProxies = append(cleanProxies, norm)
+			pool.proxyToAccount[norm] = wsCfg.Name
+
+			// Ensure it exists in manualEntries and proxies with AccountName tagged
+			found := false
+			for _, me := range pool.manualEntries {
+				if me.URL == norm {
+					me.AccountName = wsCfg.Name
+					found = true
+					break
+				}
+			}
+			if !found {
+				entry := &ProxyEntry{
+					URL:         norm,
+					Latency:     100 * time.Millisecond,
+					LatencyMs:   100,
+					LastChecked: time.Now(),
+					IsManual:    true,
+					AccountName: wsCfg.Name,
+				}
+				pool.manualEntries = append(pool.manualEntries, entry)
+				pool.proxies = append(pool.proxies, entry)
+			}
+		}
+		state.Proxies = cleanProxies
+		pool.webshareAccounts[wsCfg.Name] = state
 	}
 
 	return pool
@@ -451,8 +557,15 @@ func (p *ProxyPool) Next() *ProxyEntry {
 		return nil
 	}
 
-	idx := p.counter.Add(1) - 1
-	return p.proxies[idx%uint64(len(p.proxies))]
+	total = len(p.proxies)
+	startIdx := p.counter.Add(1) - 1
+	for i := 0; i < total; i++ {
+		pe := p.proxies[(startIdx+uint64(i))%uint64(total)]
+		if p.isProxyUsableLocked(pe) {
+			return pe
+		}
+	}
+	return nil
 }
 
 // Checkout returns a proxy URL for a single upstream attempt, or "" when the
@@ -697,8 +810,9 @@ func (p *ProxyPool) Stats() ProxyPoolStats {
 		Sources:        p.sources,
 		TopProxies:     top,
 		Proxies:        top,
-		ManualCount:    len(p.manualEntries),
-		ManualProxies:  manCopies,
+		ManualCount:      len(p.manualEntries),
+		ManualProxies:    manCopies,
+		WebshareAccounts: p.getWebshareAccountsLocked(),
 	}
 }
 
@@ -730,3 +844,352 @@ func (p *ProxyPool) ContextProxyFunc() func(*http.Request) (*url.URL, error) {
 		return fallback(req)
 	}
 }
+
+func (p *ProxyPool) isProxyUsableLocked(pe *ProxyEntry) bool {
+	if pe == nil {
+		return false
+	}
+	accName := pe.AccountName
+	if accName == "" {
+		accName = p.proxyToAccount[pe.URL]
+	}
+	if accName == "" {
+		return true
+	}
+
+	acc, exists := p.webshareAccounts[accName]
+	if !exists || acc == nil {
+		return true
+	}
+
+	nowMonth := time.Now().Format("2006-01")
+	if acc.CurrentMonth != nowMonth {
+		acc.CurrentMonth = nowMonth
+		acc.BandwidthUsed.Store(0)
+		acc.Status = "active"
+	}
+
+	if acc.Status == "exhausted" || acc.Status == "disabled" {
+		return false
+	}
+
+	if acc.BandwidthLimit > 0 && acc.BandwidthUsed.Load() >= acc.BandwidthLimit {
+		acc.Status = "exhausted"
+		return false
+	}
+
+	return true
+}
+
+// RecordBandwidth records byte consumption on any Webshare account linked to the proxy.
+func (p *ProxyPool) RecordBandwidth(proxyURL string, bytes int64) {
+	if bytes <= 0 || proxyURL == "" {
+		return
+	}
+	normURL := config.NormalizeProxyURL(proxyURL)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	accName, ok := p.proxyToAccount[normURL]
+	if !ok {
+		accName, ok = p.proxyToAccount[proxyURL]
+	}
+	if !ok {
+		return
+	}
+
+	acc, exists := p.webshareAccounts[accName]
+	if !exists || acc == nil {
+		return
+	}
+
+	nowMonth := time.Now().Format("2006-01")
+	if acc.CurrentMonth != nowMonth {
+		acc.CurrentMonth = nowMonth
+		acc.BandwidthUsed.Store(0)
+		acc.Status = "active"
+	}
+
+	used := acc.BandwidthUsed.Add(bytes)
+	acc.UpdatedAt = time.Now()
+
+	if acc.BandwidthLimit > 0 && used >= acc.BandwidthLimit {
+		if acc.Status != "exhausted" {
+			acc.Status = "exhausted"
+			slog.Warn("webshare account monthly bandwidth limit reached; excluding proxies from pool",
+				"account", acc.Name,
+				"used_bytes", used,
+				"limit_bytes", acc.BandwidthLimit,
+			)
+		}
+	}
+}
+
+func formatBandwidthBytes(b int64) string {
+	const unit = 1000.0
+	if b < 1000 {
+		return fmt.Sprintf("%d B", b)
+	}
+	f := float64(b)
+	exp := 0
+	for f >= unit && exp < 4 {
+		f /= unit
+		exp++
+	}
+	suffix := []string{"B", "KB", "MB", "GB", "TB"}[exp]
+	return fmt.Sprintf("%.2f %s", f, suffix)
+}
+
+func (p *ProxyPool) getWebshareAccountsLocked() []*WebshareAccountView {
+	nowMonth := time.Now().Format("2006-01")
+	var views []*WebshareAccountView
+	for _, acc := range p.webshareAccounts {
+		used := acc.BandwidthUsed.Load()
+		month := acc.CurrentMonth
+		status := acc.Status
+		if month != nowMonth {
+			month = nowMonth
+			used = 0
+			status = "active"
+		} else if acc.BandwidthLimit > 0 && used >= acc.BandwidthLimit {
+			status = "exhausted"
+		}
+
+		percent := 0.0
+		if acc.BandwidthLimit > 0 {
+			percent = (float64(used) / float64(acc.BandwidthLimit)) * 100
+			if percent > 100 {
+				percent = 100
+			}
+		}
+
+		limitFmt := "Unlimited"
+		if acc.BandwidthLimit > 0 {
+			limitFmt = formatBandwidthBytes(acc.BandwidthLimit)
+		}
+
+		views = append(views, &WebshareAccountView{
+			Name:           acc.Name,
+			IsFreeTier:     acc.IsFreeTier,
+			BandwidthLimit: acc.BandwidthLimit,
+			BandwidthUsed:  used,
+			LimitFormatted: limitFmt,
+			UsedFormatted:  formatBandwidthBytes(used),
+			PercentUsed:    percent,
+			CurrentMonth:   month,
+			ProxiesCount:   len(acc.Proxies),
+			Proxies:        append([]string(nil), acc.Proxies...),
+			Status:         status,
+			CreatedAt:      acc.CreatedAt,
+			UpdatedAt:      acc.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+
+	sort.Slice(views, func(i, j int) bool {
+		return views[i].Name < views[j].Name
+	})
+	return views
+}
+
+// GetWebshareAccounts returns a snapshot list of all tracked Webshare accounts.
+func (p *ProxyPool) GetWebshareAccounts() []*WebshareAccountView {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.getWebshareAccountsLocked()
+}
+
+// GetConfigAccounts returns serialized config representations of Webshare accounts.
+func (p *ProxyPool) GetConfigAccounts() []config.WebshareAccountConfig {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	var list []config.WebshareAccountConfig
+	for _, acc := range p.webshareAccounts {
+		list = append(list, config.WebshareAccountConfig{
+			Name:           acc.Name,
+			IsFreeTier:     acc.IsFreeTier,
+			BandwidthLimit: acc.BandwidthLimit,
+			BandwidthUsed:  acc.BandwidthUsed.Load(),
+			CurrentMonth:   acc.CurrentMonth,
+			Proxies:        append([]string(nil), acc.Proxies...),
+			Status:         acc.Status,
+			CreatedAt:      acc.CreatedAt,
+			UpdatedAt:      acc.UpdatedAt.Format(time.RFC3339),
+		})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		return list[i].Name < list[j].Name
+	})
+	return list
+}
+
+// AddWebshareAccount registers or updates a Webshare account with proxies and monthly bandwidth tracking.
+func (p *ProxyPool) AddWebshareAccount(name string, isFreeTier bool, limitBytes int64, rawProxyContent string) (*WebshareAccountView, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("account name cannot be empty")
+	}
+
+	if limitBytes <= 0 && isFreeTier {
+		limitBytes = 1_000_000_000 // 1 GB default for free tier
+	}
+
+	var parsedProxies []string
+	scanner := bufio.NewScanner(strings.NewReader(rawProxyContent))
+	seen := make(map[string]bool)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		norm := config.NormalizeProxyURL(line)
+		if norm != "" && !seen[norm] {
+			seen[norm] = true
+			parsedProxies = append(parsedProxies, norm)
+		}
+	}
+
+	if len(parsedProxies) == 0 {
+		return nil, fmt.Errorf("no valid proxies found in provided content")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	nowMonth := time.Now().Format("2006-01")
+	state, exists := p.webshareAccounts[name]
+	if !exists {
+		state = &WebshareAccountState{
+			Name:           name,
+			IsFreeTier:     isFreeTier,
+			BandwidthLimit: limitBytes,
+			CurrentMonth:   nowMonth,
+			Status:         "active",
+			CreatedAt:      time.Now().Format(time.RFC3339),
+			UpdatedAt:      time.Now(),
+		}
+		p.webshareAccounts[name] = state
+	} else {
+		state.IsFreeTier = isFreeTier
+		state.BandwidthLimit = limitBytes
+		state.Status = "active"
+		state.UpdatedAt = time.Now()
+	}
+
+	// Remove old proxy mappings for this account if any
+	for _, oldP := range state.Proxies {
+		delete(p.proxyToAccount, oldP)
+	}
+
+	// Add new proxies and map them
+	state.Proxies = parsedProxies
+	for _, prx := range parsedProxies {
+		p.proxyToAccount[prx] = name
+
+		found := false
+		for _, me := range p.manualEntries {
+			if me.URL == prx {
+				me.AccountName = name
+				found = true
+				break
+			}
+		}
+		if !found {
+			entry := &ProxyEntry{
+				URL:         prx,
+				Latency:     100 * time.Millisecond,
+				LatencyMs:   100,
+				LastChecked: time.Now(),
+				IsManual:    true,
+				AccountName: name,
+			}
+			p.manualEntries = append(p.manualEntries, entry)
+			p.proxies = append([]*ProxyEntry{entry}, p.proxies...)
+		}
+	}
+
+	used := state.BandwidthUsed.Load()
+	limitFmt := "Unlimited"
+	if limitBytes > 0 {
+		limitFmt = formatBandwidthBytes(limitBytes)
+	}
+
+	return &WebshareAccountView{
+		Name:           state.Name,
+		IsFreeTier:     state.IsFreeTier,
+		BandwidthLimit: state.BandwidthLimit,
+		BandwidthUsed:  used,
+		LimitFormatted: limitFmt,
+		UsedFormatted:  formatBandwidthBytes(used),
+		CurrentMonth:   state.CurrentMonth,
+		ProxiesCount:   len(state.Proxies),
+		Proxies:        state.Proxies,
+		Status:         state.Status,
+		CreatedAt:      state.CreatedAt,
+		UpdatedAt:      state.UpdatedAt.Format(time.RFC3339),
+	}, nil
+}
+
+// DeleteWebshareAccount removes a Webshare account and purges its proxies from the pool.
+func (p *ProxyPool) DeleteWebshareAccount(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	acc, exists := p.webshareAccounts[name]
+	if !exists {
+		return false
+	}
+
+	for _, prx := range acc.Proxies {
+		delete(p.proxyToAccount, prx)
+	}
+
+	delete(p.webshareAccounts, name)
+
+	var newManuals []*ProxyEntry
+	for _, me := range p.manualEntries {
+		if me.AccountName != name {
+			newManuals = append(newManuals, me)
+		}
+	}
+	p.manualEntries = newManuals
+
+	var newProxies []*ProxyEntry
+	for _, pe := range p.proxies {
+		if pe.AccountName != name {
+			newProxies = append(newProxies, pe)
+		}
+	}
+	p.proxies = newProxies
+
+	return true
+}
+
+// ResetWebshareAccount resets monthly bandwidth usage to zero and re-activates the account.
+func (p *ProxyPool) ResetWebshareAccount(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	acc, exists := p.webshareAccounts[name]
+	if !exists {
+		return false
+	}
+
+	acc.BandwidthUsed.Store(0)
+	acc.CurrentMonth = time.Now().Format("2006-01")
+	acc.Status = "active"
+	acc.UpdatedAt = time.Now()
+	return true
+}
+

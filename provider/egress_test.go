@@ -37,6 +37,8 @@ func (s *stubPool) Report(proxyURL string, failed bool) {
 	s.reports = append(s.reports, stubReport{url: proxyURL, failed: failed})
 }
 
+func (s *stubPool) RecordBandwidth(proxyURL string, bytes int64) {}
+
 // ctxAwareTransport honors per-attempt proxy checkouts like the server wiring.
 func ctxAwareTransport() *http.Transport {
 	tr := &http.Transport{}

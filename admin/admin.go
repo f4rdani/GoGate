@@ -2521,6 +2521,181 @@ func (a *AdminHandler) HandleTestProxy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleGetWebshareAccounts lists all managed Webshare accounts (GET /admin/proxy-pool/webshare).
+func (a *AdminHandler) HandleGetWebshareAccounts(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	accounts := a.proxyPool.GetWebshareAccounts()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":   "ok",
+		"accounts": accounts,
+		"count":    len(accounts),
+	})
+}
+
+// HandleAddWebshareAccount adds or updates a Webshare account (POST /admin/proxy-pool/webshare).
+func (a *AdminHandler) HandleAddWebshareAccount(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	var req struct {
+		Name           string `json:"name"`
+		IsFreeTier     bool   `json:"is_free_tier"`
+		BandwidthLimit int64  `json:"bandwidth_limit"`
+		ProxyContent   string `json:"proxy_content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		a.sendError(w, http.StatusBadRequest, "Account name cannot be empty")
+		return
+	}
+	if strings.TrimSpace(req.ProxyContent) == "" {
+		a.sendError(w, http.StatusBadRequest, "Proxy content cannot be empty")
+		return
+	}
+
+	accountView, err := a.proxyPool.AddWebshareAccount(req.Name, req.IsFreeTier, req.BandwidthLimit, req.ProxyContent)
+	if err != nil {
+		a.sendError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Persist to config
+	a.mu.Lock()
+	if a.cfg != nil {
+		a.cfg.ProxyPool.WebshareAccounts = a.proxyPool.GetConfigAccounts()
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		slog.Warn("failed to persist webshare account to config file", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("Webshare account %q added with %d proxies", accountView.Name, accountView.ProxiesCount),
+		"account": accountView,
+		"stats":   a.proxyPool.Stats(),
+	})
+}
+
+// HandleDeleteWebshareAccount removes a Webshare account (DELETE /admin/proxy-pool/webshare).
+func (a *AdminHandler) HandleDeleteWebshareAccount(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		name = req.Name
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		a.sendError(w, http.StatusBadRequest, "Account name cannot be empty")
+		return
+	}
+
+	if ok := a.proxyPool.DeleteWebshareAccount(name); !ok {
+		a.sendError(w, http.StatusNotFound, fmt.Sprintf("Account %q not found", name))
+		return
+	}
+
+	// Persist to config
+	a.mu.Lock()
+	if a.cfg != nil {
+		a.cfg.ProxyPool.WebshareAccounts = a.proxyPool.GetConfigAccounts()
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		slog.Warn("failed to persist webshare account deletion to config file", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("Webshare account %q removed", name),
+		"stats":   a.proxyPool.Stats(),
+	})
+}
+
+// HandleResetWebshareAccount resets monthly bandwidth on an account (POST /admin/proxy-pool/webshare/reset).
+func (a *AdminHandler) HandleResetWebshareAccount(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		a.sendError(w, http.StatusBadRequest, "Account name cannot be empty")
+		return
+	}
+
+	if ok := a.proxyPool.ResetWebshareAccount(name); !ok {
+		a.sendError(w, http.StatusNotFound, fmt.Sprintf("Account %q not found", name))
+		return
+	}
+
+	// Persist to config
+	a.mu.Lock()
+	if a.cfg != nil {
+		a.cfg.ProxyPool.WebshareAccounts = a.proxyPool.GetConfigAccounts()
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		slog.Warn("failed to persist webshare account reset to config file", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("Webshare account %q bandwidth reset to 0", name),
+		"stats":   a.proxyPool.Stats(),
+	})
+}
+
 // ==================== Cloudflare Relay (CF Relay) Endpoints ====================
 
 // HandleGetCFRelays lists all configured Cloudflare Relays (GET /admin/cf-relays).

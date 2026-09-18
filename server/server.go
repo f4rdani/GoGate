@@ -264,6 +264,10 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("POST /admin/proxy-pool/manual", adminHandler.HandleAddManualProxy)
 	wrapAdmin("DELETE /admin/proxy-pool/manual", adminHandler.HandleRemoveManualProxy)
 	wrapAdmin("POST /admin/proxy-pool/test", adminHandler.HandleTestProxy)
+	wrapAdmin("GET /admin/proxy-pool/webshare", adminHandler.HandleGetWebshareAccounts)
+	wrapAdmin("POST /admin/proxy-pool/webshare", adminHandler.HandleAddWebshareAccount)
+	wrapAdmin("DELETE /admin/proxy-pool/webshare", adminHandler.HandleDeleteWebshareAccount)
+	wrapAdmin("POST /admin/proxy-pool/webshare/reset", adminHandler.HandleResetWebshareAccount)
 
 	// Cloudflare Relay CRUD
 	wrapAdmin("GET /admin/cf-relays", adminHandler.HandleGetCFRelays)
