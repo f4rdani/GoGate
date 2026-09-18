@@ -898,6 +898,13 @@ func GetCachedDynamicModels(providerName string) []string {
 	return dynamicModelsCache[providerName]
 }
 
+// ClearCachedDynamicModels removes the cached dynamic models for a provider.
+func ClearCachedDynamicModels(providerName string) {
+	dynamicModelsCacheMu.Lock()
+	defer dynamicModelsCacheMu.Unlock()
+	delete(dynamicModelsCache, providerName)
+}
+
 // BandwidthTrackingReader wraps an io.ReadCloser to track total bytes read and report on close.
 type BandwidthTrackingReader struct {
 	io.ReadCloser

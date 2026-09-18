@@ -6610,15 +6610,22 @@ async function deleteHubModel(provName, routeName, upstreamTarget){
   if(!p) return;
 
   try{
-    // 1. Delete route if it exists (backend cascade ikut membersihkan combo)
+    // 1. Delete matching routes if they exist (backend cascade ikut membersihkan combo)
     let cascadeNote = '';
-    const hasRoute = (_currentModels || []).some(m => m.name === routeName);
-    if(hasRoute){
-      const r = await api('/admin/models/' + encodeURIComponent(routeName), { method: 'DELETE' });
-      const upd = (r && r.combos_updated) || [];
-      const del = (r && r.combos_deleted) || [];
-      if(upd.length) cascadeNote += ` — combo di-sync: ${upd.join(', ')}`;
-      if(del.length) cascadeNote += ` — combo ikut terhapus: ${del.join(', ')}`;
+    const matchingRoutes = (_currentModels || []).filter(m => 
+      m.provider === provName && (
+        m.name === routeName || m.name === upstreamTarget ||
+        m.model === upstreamTarget || m.model === routeName
+      )
+    );
+    for(const r of matchingRoutes){
+      try{
+        const res = await api('/admin/models/' + encodeURIComponent(r.name), { method: 'DELETE' });
+        const upd = (res && res.combos_updated) || [];
+        const del = (res && res.combos_deleted) || [];
+        if(upd.length) cascadeNote += ` — combo di-sync: ${upd.join(', ')}`;
+        if(del.length) cascadeNote += ` — combo ikut terhapus: ${del.join(', ')}`;
+      }catch(_){}
     }
 
     // 2. Remove from provider.models array
@@ -6704,13 +6711,17 @@ async function bulkDeleteHubModels(provName){
 
   try{
     // 1. Delete matching routes
-    const existingRouteNames = new Set((_currentModels || []).map(m => m.name));
-    for(const rName of routeNamesToDelete){
-      if(existingRouteNames.has(rName)){
-        try{
-          await api('/admin/models/' + encodeURIComponent(rName), { method: 'DELETE' });
-        }catch(_){}
-      }
+    const matchingRoutes = (_currentModels || []).filter(m => 
+      m.provider === provName && (
+        routeNamesToDelete.includes(m.name) ||
+        upstreamTargetsToDelete.has(m.model) ||
+        upstreamTargetsToDelete.has(m.name)
+      )
+    );
+    for(const r of matchingRoutes){
+      try{
+        await api('/admin/models/' + encodeURIComponent(r.name), { method: 'DELETE' });
+      }catch(_){}
     }
 
     // 2. Update provider models list
@@ -6935,8 +6946,12 @@ async function showSyncModelsModal(provName){
 
     const existingEntries = getProviderModelEntries(p);
     _syncModalExisting = new Set(existingEntries.map(e => e.upstreamTarget));
-    // Default: semua model baru ter-checklist, yang sudah terdaftar tidak.
-    _syncModalSelected = new Set(models.filter(mId => !_syncModalExisting.has(mId)));
+    // Default: checklist model baru hanya jika daftar kecil (<= 10) agar tidak otomatis memilih ratusan model berbayar.
+    if(models.length <= 10){
+      _syncModalSelected = new Set(models.filter(mId => !_syncModalExisting.has(mId)));
+    } else {
+      _syncModalSelected = new Set();
+    }
     _syncModalQuery = '';
     _syncModalFilter = 'all';
     renderSyncModelsTable(provName);

@@ -87,9 +87,8 @@ func wireEgressPool(p provider.Provider, pCfg config.ProviderConfig, proxyPool *
 }
 
 // prefetchDynamicCatalogs warms the in-memory model catalog used by virtual
-// prefetchDynamicCatalogs proactively fetches live catalog models for dynamic
-// auto routes and upstream providers so the first request never cold-fetches
-// and the provider catalog is immediately available in the dashboard.
+// prefetchDynamicCatalogs warms the in-memory model catalog used by virtual
+// auto routes (oc/auto, mimo/auto) so the first request never cold-fetches.
 // Catalogs always come from the live upstream /models endpoint — never hardcoded.
 func prefetchDynamicCatalogs(ctx context.Context, registry *provider.Registry) {
 	for _, p := range registry.All() {
@@ -100,7 +99,7 @@ func prefetchDynamicCatalogs(ctx context.Context, registry *provider.Registry) {
 		if !ok {
 			continue
 		}
-		if up.ProviderType() == "anthropic" || up.ProviderType() == "kiro" || up.BaseURL() == "" {
+		if up.ProviderType() != "opencode" && up.ProviderType() != "mimo" {
 			continue
 		}
 		if len(provider.GetCachedDynamicModels(p.Name())) > 0 {
@@ -124,11 +123,7 @@ func prefetchDynamicCatalogs(ctx context.Context, registry *provider.Registry) {
 					return
 				}
 			}
-			if up.ProviderType() == "opencode" || up.ProviderType() == "mimo" {
-				slog.Warn("could not prefetch dynamic model catalog (will lazy-fetch on first request)", "provider", prov.Name())
-			} else {
-				slog.Debug("could not prefetch dynamic model catalog", "provider", prov.Name())
-			}
+			slog.Warn("could not prefetch dynamic model catalog (will lazy-fetch on first request)", "provider", prov.Name())
 		}(p, up)
 	}
 }

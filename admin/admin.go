@@ -484,10 +484,12 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		for _, dm := range provider.GetCachedDynamicModels(p.Name) {
-			dm = strings.TrimSpace(dm)
-			if dm != "" {
-				modelsSet[dm] = true
+		if p.Type == "opencode" || p.Type == "mimo" {
+			for _, dm := range provider.GetCachedDynamicModels(p.Name) {
+				dm = strings.TrimSpace(dm)
+				if dm != "" {
+					modelsSet[dm] = true
+				}
 			}
 		}
 		modelsList := make([]string, 0, len(modelsSet))
@@ -723,6 +725,9 @@ func (a *AdminHandler) saveAndReload() error {
 func extractName(path, prefix string) string {
 	p := strings.TrimPrefix(path, prefix)
 	p = strings.TrimSuffix(p, "/")
+	if unescaped, err := url.PathUnescape(p); err == nil {
+		return unescaped
+	}
 	return p
 }
 
@@ -898,6 +903,7 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Models != nil {
 		existing.Models = req.Models
+		provider.ClearCachedDynamicModels(name)
 	}
 	if req.Tier != nil {
 		existing.Tier = *req.Tier
@@ -2558,9 +2564,6 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) · proxy %s · %dms", req.Provider, len(models), proxyLabel, latency))
-		if req.Provider != "" && len(models) > 0 {
-			provider.SetCachedDynamicModels(req.Provider, models)
-		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok": true, "models": models, "count": len(models),
@@ -2616,7 +2619,7 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 				resp["key_masked"] = maskDiagKey(cand.Key)
 			}
 			slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) via %s · %s", req.Provider, len(models), keyTag, proxySuffix))
-			if req.Provider != "" && len(models) > 0 {
+			if req.Provider != "" && len(models) > 0 && (req.Type == "opencode" || req.Type == "mimo") {
 				provider.SetCachedDynamicModels(req.Provider, models)
 			}
 			w.Header().Set("Content-Type", "application/json")
