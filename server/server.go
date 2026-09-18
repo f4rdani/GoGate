@@ -220,6 +220,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	tunnelMgr := tunnel.NewTunnelManager()
 
 	adminHandler := admin.NewAdminHandler(keyStore, cfg.Server.AdminSecret, proxyHandler.Stats, reloadFunc, configPath, cfg, registry, tunnelMgr, proxyPool)
+	adminHandler.SetRouter(r)
 
 	// 8. Setup routes (Go 1.22 pattern matching)
 	mux := http.NewServeMux()
@@ -767,6 +768,7 @@ func (s *Server) ReloadConfig() error {
 
 	// Thread-safe update of admin handler configs
 	s.admin.UpdateConfig(keyStore, newCfg.Server.AdminSecret, newCfg, registry)
+	s.admin.SetRouter(r)
 
 	// Sync proxy pool state
 	if s.proxyPool != nil {

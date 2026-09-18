@@ -7163,7 +7163,8 @@ async function submitImportSyncedModels(provName){
 }
 
 /* ===== Model Routing CRUD (Direct + Combo Builder) ===== */
-let _mmBackendIdx = 0;
+let _mmComboBackends = [];
+let _mmEditing = null;
 
 function mmProviderModels(provName){
   const p = (_currentProviders || []).find(x => x.name === provName);
@@ -7171,15 +7172,16 @@ function mmProviderModels(provName){
 }
 
 function mmStrategyDescHTML(strat){
-  if(strat === 'round-robin') return '<strong>Round-robin:</strong> request dibagi <strong>bergiliran</strong> ke semua backend (load-balance). Kalau satu backend gagal, otomatis dicoba ke backend lain.';
-  if(strat === 'tiered') return '<strong>Tiered:</strong> seperti fallback tapi per <strong>tier</strong> (Tier 1 &rarr; Tier 2 &rarr; Tier 3). Cocok untuk urutan langganan &rarr; murah &rarr; gratis.';
-  return '<strong>Fallback:</strong> coba backend <strong>1</strong>, kalau gagal/error lanjut ke <strong>2</strong>, lalu <strong>3</strong>, dst. Urutan = prioritas.';
+  if(strat === 'round-robin') return '<strong>Round-robin:</strong> Request dibagi <strong>bergiliran</strong> ke semua backend (load-balance). Jika satu backend gagal, otomatis dicoba ke backend lain.';
+  if(strat === 'tiered') return '<strong>Tiered:</strong> Berdasarkan tier provider (Tier 1 &rarr; Tier 2 &rarr; Tier 3). Prioritas utama dicoba ke tier tertinggi.';
+  return '<strong>Fallback:</strong> Request mencoba backend <strong>#1 (Utama)</strong>. Jika gagal/error, otomatis failover ke <strong>#2 (Cadangan)</strong>, lalu <strong>#3</strong>, dst. Urutan = prioritas.';
 }
 
 function mmRefreshStrategyDesc(){
   const sel = document.getElementById('mm_combo_strategy');
   const desc = document.getElementById('mm_strategy_desc');
   if(sel && desc) desc.innerHTML = mmStrategyDescHTML(sel.value);
+  mmUpdateBackendHint();
 }
 
 function mmSetType(t){
@@ -7190,135 +7192,398 @@ function mmSetType(t){
   if(btnC) btnC.className = 'btn btn-sm' + (isCombo ? ' btn-primary' : '');
   const dSec = document.getElementById('mm_direct_sec');
   const cSec = document.getElementById('mm_combo_sec');
-  if(dSec) dSec.style.display = isCombo ? 'none' : '';
-  if(cSec) cSec.style.display = isCombo ? '' : 'none';
+  if(dSec) dSec.style.display = isCombo ? 'none' : 'block';
+  if(cSec) cSec.style.display = isCombo ? 'block' : 'none';
   const submitBtn = document.getElementById('mm_submit_btn');
   if(submitBtn) submitBtn.textContent = (window._mmEditing ? 'Save Changes' : (isCombo ? 'Create Combo' : 'Add Route'));
+  if(isCombo){
+    mmRenderComboBackends();
+    mmRenderCatalog();
+  } else {
+    mmRefreshDirectModels();
+  }
 }
 
 function mmRefreshDirectModels(){
   const provSel = document.getElementById('mm_provider');
   const dl = document.getElementById('mm_direct_dl');
-  if(!provSel || !dl) return;
+  const chips = document.getElementById('mm_direct_chips');
+  if(!provSel) return;
   const models = mmProviderModels(provSel.value);
-  dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join('');
-}
-
-function mmOnBackendProviderChange(sel){
-  const row = sel.closest('.mm-backend-row');
-  if(!row) return;
-  const dl = row.querySelector('datalist');
-  const models = mmProviderModels(sel.value);
   if(dl) dl.innerHTML = models.map(m => `<option value="${esc(m)}">`).join('');
-  const p = (_currentProviders || []).find(x => x.name === sel.value);
-  const warn = row.querySelector('.mm-prov-warn');
-  if(warn) warn.innerHTML = (p && p.disabled) ? '<span class="tag tag-red" style="font-size:.62rem;" title="Provider ini di-disable — backend ini akan di-skip saat routing">DISABLED — di-skip</span>' : '';
-  mmRenumberBackends();
+  if(chips){
+    if(!models.length){
+      chips.innerHTML = '<span style="font-size:0.72rem;color:var(--text3);">Tidak ada model terdaftar untuk provider ini. Ketik manual upstream ID di atas.</span>';
+    } else {
+      chips.innerHTML = models.map(m => `
+        <button type="button" class="tag tag-blue" style="cursor:pointer;border:none;padding:0.25rem 0.5rem;font-size:0.72rem;font-family:var(--font-mono);" onclick="document.getElementById('mm_model').value='${esc(m)}'" title="Klik untuk memilih model ini">${esc(m)}</button>
+      `).join('');
+    }
+  }
 }
 
 function mmBackendProvOpts(selProv){
   return (_currentProviders || []).map(p => {
     const dis = p.disabled ? ' — DISABLED' : '';
-    return `<option value="${esc(p.name)}" ${p.name === selProv ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)}${dis})</option>`;
+    const mCount = (p.models || []).length;
+    return `<option value="${esc(p.name)}" ${p.name === selProv ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)}${dis} • ${mCount} model)</option>`;
   }).join('');
 }
 
-function mmMoveBackend(btn, dir){
-  const row = btn.closest('.mm-backend-row');
-  const wrap = document.getElementById('mm_backend_rows');
-  if(!row || !wrap) return;
-  const sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
-  if(!sibling) return;
-  if(dir < 0) wrap.insertBefore(row, sibling);
-  else wrap.insertBefore(sibling, row);
-  mmRenumberBackends();
-}
-
-function mmRenumberBackends(){
-  const rows = document.querySelectorAll('#mm_backend_rows .mm-backend-row');
-  rows.forEach((r, i) => {
-    const badge = r.querySelector('.mm-order');
-    if(badge) badge.textContent = (i + 1);
-    const upBtn = r.querySelector('.mm-up');
-    const dnBtn = r.querySelector('.mm-dn');
-    if(upBtn) upBtn.disabled = (i === 0);
-    if(dnBtn) dnBtn.disabled = (i === rows.length - 1);
-    if(upBtn) upBtn.style.opacity = (i === 0) ? '.35' : '';
-    if(dnBtn) dnBtn.style.opacity = (i === rows.length - 1) ? '.35' : '';
-  });
+function mmUpdateBackendHint(){
   const hint = document.getElementById('mm_backend_hint');
-  if(hint) hint.textContent = rows.length < 2 ? `Tambahkan minimal 2 backend (sekarang ${rows.length}).` : `${rows.length} backend dipilih. Urutan = prioritas Fallback/Tiered — pakai ↑ ↓ untuk menyusun.`;
+  if(!hint) return;
+  const len = _mmComboBackends.length;
+  const stratEl = document.getElementById('mm_combo_strategy');
+  const strat = stratEl ? stratEl.value : 'fallback';
+  if(len < 2){
+    hint.innerHTML = `<span style="color:var(--amber);font-weight:600;">⚠️ Butuh minimal 2 backend (saat ini ${len}).</span>`;
+  } else {
+    const modeText = strat === 'round-robin' ? 'Load-balance bergantian' : (strat === 'tiered' ? 'Tiered fallback' : 'Fallback prioritas');
+    hint.innerHTML = `<span style="color:var(--green);font-weight:600;">✓ ${len} backend aktif (${modeText}).</span>`;
+  }
 }
 
-function addComboBackendRow(provider, model){
-  const wrap = document.getElementById('mm_backend_rows');
-  if(!wrap) return;
+function mmRenderComboBackends(){
+  const tbody = document.getElementById('mm_active_backends_tbody');
+  if(!tbody) return;
+  if(!_mmComboBackends.length){
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="5" style="text-align:center;padding:1.5rem 1rem;color:var(--text3);font-size:0.8rem;background:var(--surface);">
+          Belum ada backend di urutan combo ini.<br>
+          <span style="font-size:0.75rem;color:var(--text2);">Pilih model dari <strong>Katalog Model Provider</strong> di bawah untuk memasukkan ke dalam urutan combo.</span>
+        </td>
+      </tr>`;
+    mmUpdateBackendHint();
+    mmRenderCatalog();
+    return;
+  }
+
   const provs = _currentProviders || [];
-  if(!provs.length){ toast('Tambahkan provider dulu sebelum membuat combo', 'error'); return; }
-  const idx = ++_mmBackendIdx;
-  const selProv = provider || provs[0].name;
-  const models = mmProviderModels(selProv);
-  const provOpts = mmBackendProvOpts(selProv);
-  const dlOpts = models.map(m => `<option value="${esc(m)}">`).join('');
-  const selP = provs.find(p => p.name === selProv);
-  const warnTag = (selP && selP.disabled) ? '<span class="tag tag-red" style="font-size:.62rem;" title="Provider ini di-disable — backend ini akan di-skip saat routing">DISABLED — di-skip</span>' : '';
-  const div = document.createElement('div');
-  div.className = 'mm-backend-row';
-  div.style.cssText = 'display:flex;gap:.4rem;align-items:center;background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.5rem .6rem;';
-  div.innerHTML = `
-    <span class="mm-order" title="Urutan prioritas (1 = dicoba pertama untuk Fallback)" style="min-width:1.4rem;height:1.4rem;display:inline-flex;align-items:center;justify-content:center;background:var(--accent-soft);color:var(--accent);font-weight:700;font-size:.72rem;border-radius:999px;">?</span>
-    <div style="display:flex;flex-direction:column;gap:0;">
-      <button class="btn btn-sm mm-up" onclick="mmMoveBackend(this,-1)" title="Naikkan prioritas (geser ke atas)" style="padding:.05rem .45rem;line-height:1;">↑</button>
-      <button class="btn btn-sm mm-dn" onclick="mmMoveBackend(this,1)" title="Turunkan prioritas (geser ke bawah)" style="padding:.05rem .45rem;line-height:1;">↓</button>
-    </div>
-    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:.2rem;">
-      <select class="mm-b-prov" onchange="mmOnBackendProviderChange(this)" style="width:100%;">${provOpts}</select>
-      <span class="mm-prov-warn">${warnTag}</span>
-    </div>
-    <input class="mm-b-model" list="mm-dl-${idx}" placeholder="ketik / pilih upstream model" value="${esc(model || '')}" style="flex:1.4;min-width:0;">
-    <datalist id="mm-dl-${idx}">${dlOpts}</datalist>
-    <button class="btn btn-sm btn-danger" onclick="this.closest('.mm-backend-row').remove();mmRenumberBackends();" title="Hapus backend ini">&times;</button>`;
-  wrap.appendChild(div);
-  mmRenumberBackends();
+  const stratEl = document.getElementById('mm_combo_strategy');
+  const isRR = stratEl && stratEl.value === 'round-robin';
+
+  tbody.innerHTML = _mmComboBackends.map((b, i) => {
+    const p = provs.find(x => x.name === b.provider);
+    const pType = p ? p.type : 'unknown';
+    const isDis = p ? p.disabled : false;
+    const isDeleted = !p;
+    let orderLabel = `#${i + 1} ` + (isRR ? '(RR)' : (i === 0 ? '(Utama)' : `(Cadangan ${i})`));
+    let orderClass = i === 0 ? 'tag-purple' : 'tag-gray';
+    if(isRR) orderClass = 'tag-cyan';
+
+    let statusBadge = '';
+    if(isDeleted) statusBadge = '<span class="tag tag-red" style="font-size:0.65rem;">DELETED</span>';
+    else if(isDis) statusBadge = '<span class="tag tag-red" style="font-size:0.65rem;">DISABLED</span>';
+
+    return `
+      <tr style="border-bottom:1px solid var(--border);background:var(--surface);">
+        <td style="padding:0.6rem 0.75rem;"><span class="tag ${orderClass}" style="font-weight:700;font-size:0.75rem;">${orderLabel}</span></td>
+        <td style="padding:0.6rem 0.75rem;">
+          <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap;">
+            <strong style="color:var(--text1);font-size:0.82rem;">${esc(b.provider)}</strong>
+            <span class="tag tag-blue" style="font-size:0.68rem;">${esc(pType)}</span>
+            ${statusBadge}
+          </div>
+        </td>
+        <td style="padding:0.6rem 0.75rem;">
+          <code class="mono" style="font-weight:600;font-size:0.82rem;color:var(--text1);word-break:break-all;">${esc(b.model)}</code>
+        </td>
+        <td style="padding:0.6rem 0.75rem;text-align:center;white-space:nowrap;">
+          <button type="button" class="btn btn-sm" onclick="mmMoveBackend(${i}, -1)" ${i === 0 ? 'disabled style="opacity:0.35;"' : ''} title="Naikkan prioritas (geser ke atas)" style="padding:0.15rem 0.5rem;font-size:0.75rem;margin-right:0.2rem;">↑</button>
+          <button type="button" class="btn btn-sm" onclick="mmMoveBackend(${i}, 1)" ${i === _mmComboBackends.length - 1 ? 'disabled style="opacity:0.35;"' : ''} title="Turunkan prioritas (geser ke bawah)" style="padding:0.15rem 0.5rem;font-size:0.75rem;">↓</button>
+        </td>
+        <td style="padding:0.6rem 0.75rem;text-align:center;">
+          <button type="button" class="btn btn-sm btn-danger" onclick="mmRemoveBackend(${i})" title="Hapus backend dari combo" style="padding:0.15rem 0.45rem;font-size:0.75rem;">🗑️</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  mmUpdateBackendHint();
+  mmRenderCatalog();
+}
+
+function mmMoveBackend(index, delta){
+  const target = index + delta;
+  if(target < 0 || target >= _mmComboBackends.length) return;
+  const tmp = _mmComboBackends[index];
+  _mmComboBackends[index] = _mmComboBackends[target];
+  _mmComboBackends[target] = tmp;
+  mmRenderComboBackends();
+}
+
+function mmRemoveBackend(index){
+  if(index >= 0 && index < _mmComboBackends.length){
+    const removed = _mmComboBackends.splice(index, 1)[0];
+    mmRenderComboBackends();
+    if(removed) toast(`Dihapus dari combo: ${removed.provider} / ${removed.model}`, 'info');
+  }
+}
+
+function mmRemoveBackendByModel(provider, model){
+  const idx = _mmComboBackends.findIndex(b => b.provider === provider && b.model === model);
+  if(idx >= 0) mmRemoveBackend(idx);
+}
+
+function mmAddBackend(provider, model){
+  if(!provider || !model){
+    toast('Provider dan Upstream Model wajib dipilih', 'error');
+    return;
+  }
+  const exists = _mmComboBackends.some(b => b.provider === provider && b.model === model);
+  if(exists){
+    toast(`Model ${provider}/${model} sudah ada di dalam combo!`, 'error');
+    return;
+  }
+  _mmComboBackends.push({ provider, model });
+  mmRenderComboBackends();
+  toast(`Ditambahkan ke combo (#${_mmComboBackends.length}): ${provider} / ${model}`, 'success');
+}
+
+function mmAddManualBackend(){
+  const provEl = document.getElementById('mm_manual_prov');
+  const modelEl = document.getElementById('mm_manual_model');
+  const prov = provEl ? provEl.value.trim() : '';
+  const model = modelEl ? modelEl.value.trim() : '';
+  if(!prov){ toast('Pilih provider terlebih dahulu', 'error'); return; }
+  if(!model){ toast('Ketik upstream model ID kustom', 'error'); return; }
+  mmAddBackend(prov, model);
+  if(modelEl) modelEl.value = '';
+}
+
+function mmFilterCatalog(){
+  mmRenderCatalog();
+}
+
+function mmRenderCatalog(){
+  const tbody = document.getElementById('mm_catalog_tbody');
+  const countBadge = document.getElementById('mm_cat_count');
+  if(!tbody) return;
+
+  const searchInput = document.getElementById('mm_cat_search');
+  const provSelect = document.getElementById('mm_cat_prov');
+  const q = (searchInput ? searchInput.value : '').toLowerCase().trim();
+  const filterProv = (provSelect ? provSelect.value : '').trim();
+
+  const provs = _currentProviders || [];
+  let totalCount = 0;
+  let rowsHTML = '';
+
+  for(const p of provs){
+    if(filterProv && p.name !== filterProv) continue;
+    const pModels = p.models || [];
+    for(const m of pModels){
+      totalCount++;
+      const pNameLow = (p.name || '').toLowerCase();
+      const mLow = (m || '').toLowerCase();
+      const pTypeLow = (p.type || '').toLowerCase();
+
+      if(q && !mLow.includes(q) && !pNameLow.includes(q) && !pTypeLow.includes(q)){
+        continue;
+      }
+
+      const activeIdx = _mmComboBackends.findIndex(b => b.provider === p.name && b.model === m);
+      const isSelected = activeIdx >= 0;
+
+      let actionHTML = '';
+      if(isSelected){
+        actionHTML = `
+          <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.35rem;">
+            <span class="tag tag-green" style="font-weight:700;font-size:0.72rem;">✓ Terpilih #${activeIdx + 1}</span>
+            <button type="button" class="btn btn-sm btn-danger" onclick="mmRemoveBackendByModel('${esc(p.name)}', '${esc(m)}')" title="Hapus dari urutan combo" style="padding:0.15rem 0.45rem;font-size:0.75rem;">✕</button>
+          </div>
+        `;
+      } else {
+        actionHTML = `
+          <button type="button" class="btn btn-sm btn-primary" onclick="mmAddBackend('${esc(p.name)}', '${esc(m)}')" style="white-space:nowrap;padding:0.25rem 0.65rem;font-size:0.74rem;">
+            + Tambahkan
+          </button>
+        `;
+      }
+
+      const disTag = p.disabled ? '<span class="tag tag-red" style="font-size:0.65rem;">DISABLED</span>' : '';
+
+      rowsHTML += `
+        <tr style="border-bottom:1px solid var(--border);background:var(--surface);">
+          <td style="padding:0.55rem 0.75rem;white-space:nowrap;">
+            <div style="display:flex;align-items:center;gap:0.35rem;">
+              <span class="tag tag-blue" style="font-weight:600;">${esc(p.name)}</span>
+              ${disTag}
+            </div>
+          </td>
+          <td style="padding:0.55rem 0.75rem;">
+            <code class="mono" style="font-size:0.8rem;color:var(--text1);word-break:break-all;">${esc(m)}</code>
+          </td>
+          <td style="padding:0.55rem 0.75rem;white-space:nowrap;">
+            <span class="tag tag-gray" style="font-size:0.7rem;">${esc(p.type)}</span>
+          </td>
+          <td style="padding:0.55rem 0.75rem;text-align:right;">
+            ${actionHTML}
+          </td>
+        </tr>
+      `;
+    }
+  }
+
+  if(countBadge){
+    countBadge.textContent = `${totalCount} model`;
+  }
+
+  if(!rowsHTML){
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" style="text-align:center;padding:1.5rem 1rem;color:var(--text3);font-size:0.8rem;background:var(--surface);">
+          ${q ? 'Tidak ada model yang cocok dengan pencarian "<strong>' + esc(q) + '</strong>".' : 'Tidak ada model tersedia pada provider ini.'}
+        </td>
+      </tr>
+    `;
+  } else {
+    tbody.innerHTML = rowsHTML;
+  }
 }
 
 function showAddModel(){
   window._mmEditing = null;
-  _mmBackendIdx = 0;
+  _mmComboBackends = [];
   const provs = _currentProviders || [];
   const provOpts = mmBackendProvOpts(provs.length ? provs[0].name : '');
+  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + (p.models||[]).length, 0) + ' model)</option>' +
+    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${(p.models||[]).length} model)</option>`).join('');
   const directDl = provs.length ? mmProviderModels(provs[0].name).map(m => `<option value="${esc(m)}">`).join('') : '';
+
   openModal('Add Model Route', `
-    <div style="display:flex;gap:.5rem;margin-bottom:1rem;">
-      <button id="mm_type_direct" class="btn btn-sm btn-primary" onclick="mmSetType('direct')">▫️ Direct (1 provider)</button>
-      <button id="mm_type_combo" class="btn btn-sm" onclick="mmSetType('combo')">🔗 Combo (multi-provider)</button>
+    <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+      <button id="mm_type_direct" class="btn btn-sm btn-primary" onclick="mmSetType('direct')">▫️ Direct Route (1 provider)</button>
+      <button id="mm_type_combo" class="btn btn-sm" onclick="mmSetType('combo')">🔗 Combo Route (multi-provider)</button>
     </div>
-    <div class="form-grid">
-      <label class="full">Route Model ID (nama yang dipakai client)<input id="mm_name" placeholder="e.g. gpt-4o atau combo-hemat"></label>
-      <div id="mm_direct_sec" class="full" style="display:contents;">
-        <label>Target Provider<select id="mm_provider" onchange="mmRefreshDirectModels()">${provOpts || '<option value="">(no providers)</option>'}</select></label>
-        <label>Upstream Model ID<input id="mm_model" list="mm_direct_dl" placeholder="ketik / pilih model upstream"><datalist id="mm_direct_dl">${directDl}</datalist></label>
+
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      <div>
+        <label style="font-weight:700;color:var(--text1);margin-bottom:0.35rem;">Route Model ID (Nama yang dipakai client / SDK)
+          <input id="mm_name" placeholder="contoh: gpt-4o, claude-3-5, atau smart-assistant" style="margin-top:0.3rem;">
+        </label>
+        <span style="font-size:0.74rem;color:var(--text3);">Client memanggil model dengan ID ini pada /v1/chat/completions</span>
       </div>
-      <div id="mm_combo_sec" class="full" style="display:none;">
-        <label class="full" style="margin-bottom:.4rem;">Metode Combo<select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()">
-          <option value="fallback">Fallback — prioritas 1 &rarr; 2 &rarr; 3</option>
-          <option value="round-robin">Round-robin — bergiliran (load-balance)</option>
-          <option value="tiered">Tiered — per tier T1 &rarr; T2 &rarr; T3</option>
-        </select></label>
-        <div id="mm_strategy_desc" class="full" style="font-size:.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.55rem .7rem;margin-bottom:.6rem;">${mmStrategyDescHTML('fallback')}</div>
-        <div class="full" style="font-size:.78rem;font-weight:700;color:var(--text1);margin-bottom:.35rem;">Backends <span style="font-weight:400;color:var(--text3);">— pilih beberapa model dari beberapa provider, susun urutan pakai ↑ ↓</span></div>
-        <div id="mm_backend_rows" class="full" style="display:flex;flex-direction:column;gap:.5rem;"></div>
-        <div class="full" style="display:flex;align-items:center;gap:.6rem;margin-top:.4rem;">
-          <button class="btn btn-sm" onclick="addComboBackendRow()">+ Tambah Backend</button>
-          <span id="mm_backend_hint" style="font-size:.74rem;color:var(--text3);"></span>
+
+      <!-- DIRECT ROUTE SECTION -->
+      <div id="mm_direct_sec" style="background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">
+        <div style="font-weight:700;font-size:0.86rem;color:var(--text1);margin-bottom:0.75rem;">▫️ Konfigurasi Direct Provider</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:0.85rem;margin-bottom:0.75rem;">
+          <label>Target Provider
+            <select id="mm_provider" onchange="mmRefreshDirectModels()" style="margin-top:0.3rem;">${provOpts || '<option value="">(no providers)</option>'}</select>
+          </label>
+          <label>Upstream Model ID
+            <input id="mm_model" list="mm_direct_dl" placeholder="ketik atau klik rekomendasi di bawah..." style="margin-top:0.3rem;">
+            <datalist id="mm_direct_dl">${directDl}</datalist>
+          </label>
+        </div>
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text2);margin-bottom:0.35rem;">Quick Select dari Provider Terpilih:</div>
+        <div id="mm_direct_chips" style="display:flex;flex-wrap:wrap;gap:0.35rem;max-height:100px;overflow-y:auto;padding:0.4rem;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);"></div>
+      </div>
+
+      <!-- COMBO ROUTE SECTION -->
+      <div id="mm_combo_sec" style="display:none;">
+        <div style="margin-bottom:1rem;">
+          <label style="margin-bottom:0.4rem;font-weight:700;color:var(--text1);">Metode / Strategi Combo
+            <select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()" style="margin-top:0.3rem;">
+              <option value="fallback">Fallback — prioritas 1 → 2 → 3 (Otomatis failover jika error/rate-limit)</option>
+              <option value="round-robin">Round-robin — bergiliran (Load balance merata)</option>
+              <option value="tiered">Tiered — per tier provider T1 → T2 → T3</option>
+            </select>
+          </label>
+          <div id="mm_strategy_desc" style="font-size:0.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:0.6rem 0.8rem;margin-top:0.4rem;">
+            ${mmStrategyDescHTML('fallback')}
+          </div>
+        </div>
+
+        <!-- 1. Active Backends Table -->
+        <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.5rem;">
+            <div>
+              <strong style="font-size:0.88rem;color:var(--text1);">📋 Urutan Eksekusi Backend (Combo Sequence)</strong>
+              <div style="font-size:0.75rem;color:var(--text3);margin-top:0.15rem;">Urutan menentukan prioritas eksekusi fallback. Gunakan tombol ↑ / ↓ untuk menyusun urutan.</div>
+            </div>
+            <span id="mm_backend_hint" style="font-size:0.76rem;font-weight:600;"></span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
+            <table style="width:100%;font-size:0.8rem;border-collapse:collapse;">
+              <thead style="background:var(--surface-subtle);border-bottom:1px solid var(--border);">
+                <tr>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:18%;">Prioritas</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:24%;">Provider</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;">Upstream Model ID</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:center;width:12%;">Urutan</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:center;width:8%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="mm_active_backends_tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 2. Searchable Model Catalog Table -->
+        <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem;">
+            <div>
+              <strong style="font-size:0.88rem;color:var(--text1);">🔍 Katalog Model Provider (Pilih Backend / Model Selanjutnya)</strong>
+              <div style="font-size:0.75rem;color:var(--text3);margin-top:0.15rem;">Cari model dan klik "+ Tambahkan" untuk memasukkan ke urutan combo di atas.</div>
+            </div>
+            <span id="mm_cat_count" class="tag tag-gray" style="font-size:0.75rem;">0 model</span>
+          </div>
+
+          <div style="display:flex;gap:0.6rem;margin-bottom:0.75rem;flex-wrap:wrap;">
+            <div style="flex:1;min-width:240px;">
+              <input id="mm_cat_search" placeholder="🔍 Cari nama model atau provider (contoh: claude, gpt, deepseek, groq)..." oninput="mmFilterCatalog()" style="width:100%;">
+            </div>
+            <select id="mm_cat_prov" onchange="mmFilterCatalog()" style="max-width:280px;">
+              ${catProvOpts}
+            </select>
+          </div>
+
+          <div style="max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);">
+            <table style="width:100%;font-size:0.8rem;border-collapse:collapse;">
+              <thead style="background:var(--surface-subtle);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;">
+                <tr>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:24%;">Provider</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;">Upstream Model ID</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:16%;">Tipe</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:right;width:24%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="mm_catalog_tbody"></tbody>
+            </table>
+          </div>
+
+          <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.75rem;padding:0.6rem 0.8rem;background:var(--surface-subtle);border:1px dashed var(--border);border-radius:var(--radius);flex-wrap:wrap;">
+            <span style="font-size:0.76rem;font-weight:600;color:var(--text2);white-space:nowrap;">Model Custom / Tidak Ada di List:</span>
+            <select id="mm_manual_prov" style="max-width:200px;">
+              ${provOpts}
+            </select>
+            <input id="mm_manual_model" placeholder="Ketik upstream model ID kustom..." style="flex:1;min-width:180px;">
+            <button type="button" class="btn btn-sm btn-primary" onclick="mmAddManualBackend()" style="white-space:nowrap;">+ Tambah Custom</button>
+          </div>
         </div>
       </div>
-      <label class="full">Reasoning / Thinking Model?<select id="mm_reasoning"><option value="false">False (Standard LLM)</option><option value="true">True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option></select></label>
+
+      <div>
+        <label style="font-weight:700;color:var(--text1);margin-bottom:0.35rem;">Reasoning / Thinking Model?
+          <select id="mm_reasoning" style="margin-top:0.3rem;">
+            <option value="false">False (Standard LLM)</option>
+            <option value="true">True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option>
+          </select>
+        </label>
+      </div>
     </div>
-    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Add Route</button></div>
-  `, null);
-  addComboBackendRow();
-  addComboBackendRow();
+
+    <div class="form-actions" style="margin-top:1.25rem;">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Add Route</button>
+    </div>
+  `, null, 'modal-xl');
+
+  mmRefreshDirectModels();
 }
 
 function showEditModel(encName){
@@ -7327,43 +7592,152 @@ function showEditModel(encName){
   if(!m){ toast('Model tidak ditemukan: ' + name, 'error'); return; }
   const combo = isModelCombo(m);
   window._mmEditing = name;
-  _mmBackendIdx = 0;
+  _mmComboBackends = (m.backends && m.backends.length) ? JSON.parse(JSON.stringify(m.backends)) : [];
   const provs = _currentProviders || [];
-  const provOpts = (sel) => mmBackendProvOpts(sel);
+  const provOpts = mmBackendProvOpts(m.provider || (provs[0] && provs[0].name));
+  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + (p.models||[]).length, 0) + ' model)</option>' +
+    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${(p.models||[]).length} model)</option>`).join('');
   const directDl = mmProviderModels(m.provider || (provs[0] && provs[0].name)).map(x => `<option value="${esc(x)}">`).join('');
   const strat = (m.strategy || 'fallback').toLowerCase();
+
   openModal('Edit Model: ' + m.name, `
-    <div style="display:flex;gap:.5rem;margin-bottom:1rem;">
-      <button id="mm_type_direct" class="btn btn-sm ${combo ? '' : 'btn-primary'}" onclick="mmSetType('direct')">▫️ Direct (1 provider)</button>
-      <button id="mm_type_combo" class="btn btn-sm ${combo ? 'btn-primary' : ''}" onclick="mmSetType('combo')">🔗 Combo (multi-provider)</button>
+    <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+      <button id="mm_type_direct" class="btn btn-sm ${combo ? '' : 'btn-primary'}" onclick="mmSetType('direct')">▫️ Direct Route (1 provider)</button>
+      <button id="mm_type_combo" class="btn btn-sm ${combo ? 'btn-primary' : ''}" onclick="mmSetType('combo')">🔗 Combo Route (multi-provider)</button>
     </div>
-    <div class="form-grid">
-      <label class="full">Route Model ID (tidak bisa diganti)<input id="mm_name" value="${esc(m.name)}" disabled></label>
-      <div id="mm_direct_sec" class="full" style="display:${combo ? 'none' : 'contents'};">
-        <label>Target Provider<select id="mm_provider" onchange="mmRefreshDirectModels()">${provOpts(m.provider)}</select></label>
-        <label>Upstream Model ID<input id="mm_model" list="mm_direct_dl" value="${esc(m.model || '')}" placeholder="ketik / pilih model upstream"><datalist id="mm_direct_dl">${directDl}</datalist></label>
+
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      <div>
+        <label style="font-weight:700;color:var(--text1);margin-bottom:0.35rem;">Route Model ID (tidak bisa diganti)
+          <input id="mm_name" value="${esc(m.name)}" disabled style="margin-top:0.3rem;">
+        </label>
+        <span style="font-size:0.74rem;color:var(--text3);">Model ID yang digunakan oleh client API</span>
       </div>
-      <div id="mm_combo_sec" class="full" style="display:${combo ? '' : 'none'};">
-        <label class="full" style="margin-bottom:.4rem;">Metode Combo<select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()">
-          <option value="fallback" ${strat === 'fallback' ? 'selected' : ''}>Fallback — prioritas 1 &rarr; 2 &rarr; 3</option>
-          <option value="round-robin" ${strat === 'round-robin' ? 'selected' : ''}>Round-robin — bergiliran (load-balance)</option>
-          <option value="tiered" ${strat === 'tiered' ? 'selected' : ''}>Tiered — per tier T1 &rarr; T2 &rarr; T3</option>
-        </select></label>
-        <div id="mm_strategy_desc" class="full" style="font-size:.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:.55rem .7rem;margin-bottom:.6rem;">${mmStrategyDescHTML(strat)}</div>
-        <div class="full" style="font-size:.78rem;font-weight:700;color:var(--text1);margin-bottom:.35rem;">Backends <span style="font-weight:400;color:var(--text3);">— pilih beberapa model dari beberapa provider, susun urutan pakai ↑ ↓</span></div>
-        <div id="mm_backend_rows" class="full" style="display:flex;flex-direction:column;gap:.5rem;"></div>
-        <div class="full" style="display:flex;align-items:center;gap:.6rem;margin-top:.4rem;">
-          <button class="btn btn-sm" onclick="addComboBackendRow()">+ Tambah Backend</button>
-          <span id="mm_backend_hint" style="font-size:.74rem;color:var(--text3);"></span>
+
+      <!-- DIRECT ROUTE SECTION -->
+      <div id="mm_direct_sec" style="display:${combo ? 'none' : 'block'};background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">
+        <div style="font-weight:700;font-size:0.86rem;color:var(--text1);margin-bottom:0.75rem;">▫️ Konfigurasi Direct Provider</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:0.85rem;margin-bottom:0.75rem;">
+          <label>Target Provider
+            <select id="mm_provider" onchange="mmRefreshDirectModels()" style="margin-top:0.3rem;">${provOpts}</select>
+          </label>
+          <label>Upstream Model ID
+            <input id="mm_model" list="mm_direct_dl" value="${esc(m.model || '')}" placeholder="ketik atau klik rekomendasi di bawah..." style="margin-top:0.3rem;">
+            <datalist id="mm_direct_dl">${directDl}</datalist>
+          </label>
+        </div>
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text2);margin-bottom:0.35rem;">Quick Select dari Provider Terpilih:</div>
+        <div id="mm_direct_chips" style="display:flex;flex-wrap:wrap;gap:0.35rem;max-height:100px;overflow-y:auto;padding:0.4rem;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);"></div>
+      </div>
+
+      <!-- COMBO ROUTE SECTION -->
+      <div id="mm_combo_sec" style="display:${combo ? 'block' : 'none'};">
+        <div style="margin-bottom:1rem;">
+          <label style="margin-bottom:0.4rem;font-weight:700;color:var(--text1);">Metode / Strategi Combo
+            <select id="mm_combo_strategy" onchange="mmRefreshStrategyDesc()" style="margin-top:0.3rem;">
+              <option value="fallback" ${strat === 'fallback' ? 'selected' : ''}>Fallback — prioritas 1 → 2 → 3 (Otomatis failover jika error/rate-limit)</option>
+              <option value="round-robin" ${strat === 'round-robin' ? 'selected' : ''}>Round-robin — bergiliran (Load balance merata)</option>
+              <option value="tiered" ${strat === 'tiered' ? 'selected' : ''}>Tiered — per tier provider T1 → T2 → T3</option>
+            </select>
+          </label>
+          <div id="mm_strategy_desc" style="font-size:0.76rem;color:var(--text2);background:var(--surface-subtle);border:1px solid var(--border);border-radius:var(--radius);padding:0.6rem 0.8rem;margin-top:0.4rem;">
+            ${mmStrategyDescHTML(strat)}
+          </div>
+        </div>
+
+        <!-- 1. Active Backends Table -->
+        <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;margin-bottom:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.5rem;">
+            <div>
+              <strong style="font-size:0.88rem;color:var(--text1);">📋 Urutan Eksekusi Backend (Combo Sequence)</strong>
+              <div style="font-size:0.75rem;color:var(--text3);margin-top:0.15rem;">Urutan menentukan prioritas eksekusi fallback. Gunakan tombol ↑ / ↓ untuk menyusun urutan.</div>
+            </div>
+            <span id="mm_backend_hint" style="font-size:0.76rem;font-weight:600;"></span>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;">
+            <table style="width:100%;font-size:0.8rem;border-collapse:collapse;">
+              <thead style="background:var(--surface-subtle);border-bottom:1px solid var(--border);">
+                <tr>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:18%;">Prioritas</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:24%;">Provider</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;">Upstream Model ID</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:center;width:12%;">Urutan</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:center;width:8%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="mm_active_backends_tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 2. Searchable Model Catalog Table -->
+        <div class="card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;gap:0.5rem;">
+            <div>
+              <strong style="font-size:0.88rem;color:var(--text1);">🔍 Katalog Model Provider (Pilih Backend / Model Selanjutnya)</strong>
+              <div style="font-size:0.75rem;color:var(--text3);margin-top:0.15rem;">Cari model dan klik "+ Tambahkan" untuk memasukkan ke urutan combo di atas.</div>
+            </div>
+            <span id="mm_cat_count" class="tag tag-gray" style="font-size:0.75rem;">0 model</span>
+          </div>
+
+          <div style="display:flex;gap:0.6rem;margin-bottom:0.75rem;flex-wrap:wrap;">
+            <div style="flex:1;min-width:240px;">
+              <input id="mm_cat_search" placeholder="🔍 Cari nama model atau provider (contoh: claude, gpt, deepseek, groq)..." oninput="mmFilterCatalog()" style="width:100%;">
+            </div>
+            <select id="mm_cat_prov" onchange="mmFilterCatalog()" style="max-width:280px;">
+              ${catProvOpts}
+            </select>
+          </div>
+
+          <div style="max-height:230px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius);">
+            <table style="width:100%;font-size:0.8rem;border-collapse:collapse;">
+              <thead style="background:var(--surface-subtle);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2;">
+                <tr>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:24%;">Provider</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;">Upstream Model ID</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:left;width:16%;">Tipe</th>
+                  <th style="padding:0.5rem 0.75rem;text-align:right;width:24%;">Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="mm_catalog_tbody"></tbody>
+            </table>
+          </div>
+
+          <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.75rem;padding:0.6rem 0.8rem;background:var(--surface-subtle);border:1px dashed var(--border);border-radius:var(--radius);flex-wrap:wrap;">
+            <span style="font-size:0.76rem;font-weight:600;color:var(--text2);white-space:nowrap;">Model Custom / Tidak Ada di List:</span>
+            <select id="mm_manual_prov" style="max-width:200px;">
+              ${provOpts}
+            </select>
+            <input id="mm_manual_model" placeholder="Ketik upstream model ID kustom..." style="flex:1;min-width:180px;">
+            <button type="button" class="btn btn-sm btn-primary" onclick="mmAddManualBackend()" style="white-space:nowrap;">+ Tambah Custom</button>
+          </div>
         </div>
       </div>
-      <label class="full">Reasoning / Thinking Model?<select id="mm_reasoning"><option value="false" ${m.reasoning ? '' : 'selected'}>False (Standard LLM)</option><option value="true" ${m.reasoning ? 'selected' : ''}>True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option></select></label>
+
+      <div>
+        <label style="font-weight:700;color:var(--text1);margin-bottom:0.35rem;">Reasoning / Thinking Model?
+          <select id="mm_reasoning" style="margin-top:0.3rem;">
+            <option value="false" ${m.reasoning ? '' : 'selected'}>False (Standard LLM)</option>
+            <option value="true" ${m.reasoning ? 'selected' : ''}>True (Extracts &lt;thought&gt; &amp; reasoning tokens)</option>
+          </select>
+        </label>
+      </div>
     </div>
-    <div class="form-actions"><button class="btn" onclick="closeModal()">Cancel</button><button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Save Changes</button></div>
-  `, null);
-  const backends = (m.backends && m.backends.length) ? m.backends : [{ provider: provs[0] ? provs[0].name : '', model: '' }, { provider: provs[0] ? provs[0].name : '', model: '' }];
-  backends.forEach(b => addComboBackendRow(b.provider, b.model));
-  mmSetType(combo ? 'combo' : 'direct');
+
+    <div class="form-actions" style="margin-top:1.25rem;">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button id="mm_submit_btn" class="btn btn-primary" onclick="submitAddModelRoute()">Save Changes</button>
+    </div>
+  `, null, 'modal-xl');
+
+  if(combo){
+    mmSetType('combo');
+    mmRenderComboBackends();
+    mmRenderCatalog();
+  } else {
+    mmSetType('direct');
+    mmRefreshDirectModels();
+  }
 }
 
 async function submitAddModelRoute(){
@@ -7375,23 +7749,23 @@ async function submitAddModelRoute(){
   const btnC = document.getElementById('mm_type_combo');
   const isCombo = comboVisible || (btnC && btnC.className.includes('btn-primary'));
 
-  if(!name){ toast('Model name is required', 'error'); return; }
+  if(!name){ toast('Route Model ID is required', 'error'); return; }
 
   let payload;
   if(isCombo){
     const strategy = document.getElementById('mm_combo_strategy').value;
-    const rows = Array.from(document.querySelectorAll('#mm_backend_rows .mm-backend-row'));
-    const backends = rows.map(r => ({
-      provider: r.querySelector('.mm-b-prov').value,
-      model: r.querySelector('.mm-b-model').value.trim()
-    })).filter(b => b.provider);
-    const missingModel = backends.find(b => !b.model);
-    if(backends.length < 2){ toast(`Combo butuh minimal 2 backend (sekarang ${backends.length})`, 'error'); return; }
-    if(missingModel){ toast('Setiap backend wajib punya upstream model (ketik / pilih dari provider)', 'error'); return; }
+    const backends = (_mmComboBackends || []).filter(b => b.provider && b.model);
+    if(backends.length < 2){
+      toast(`Combo butuh minimal 2 backend (saat ini ${backends.length})`, 'error');
+      return;
+    }
     const seen = new Set();
     for(const b of backends){
       const k = b.provider + '|' + b.model;
-      if(seen.has(k)){ toast(`Backend duplikat: ${b.provider} / ${b.model}`, 'error'); return; }
+      if(seen.has(k)){
+        toast(`Backend duplikat: ${b.provider} / ${b.model}`, 'error');
+        return;
+      }
       seen.add(k);
     }
     payload = { name, strategy, backends, reasoning };
@@ -7771,18 +8145,44 @@ async function runTestKey(){
 }
 
 function showTestModel(initialProvider, initialModel){
-  const modelOpts = _currentModels.map(m => `<option value="${esc(m.name)}" ${m.name===initialModel?'selected':''}>${esc(m.name)}</option>`).join('');
-  const provOpts = '<option value="">(Auto-route via Model ID)</option>' + _currentProviders.map(p => `<option value="${esc(p.name)}" ${p.name===initialProvider?'selected':''}>${esc(p.name)}</option>`).join('');
+  const modelOpts = _currentModels.map(m => {
+    const isCombo = isModelCombo(m);
+    const tag = isCombo ? ` [Combo: ${m.strategy || 'fallback'}]` : ` [Direct: ${m.provider || ''}]`;
+    return `<option value="${esc(m.name)}" ${m.name===initialModel?'selected':''}>${esc(m.name)}${tag}</option>`;
+  }).join('');
+  const provOpts = '<option value="">(Auto-route via Model ID / Combo Sequence)</option>' + _currentProviders.map(p => `<option value="${esc(p.name)}" ${p.name===initialProvider?'selected':''}>${esc(p.name)}</option>`).join('');
 
   openModal('Test Model Completion', `
     <div class="form-grid">
-      <label>Model<select id="tm_model">${modelOpts}</select></label>
-      <label>Provider Override<select id="tm_prov">${provOpts}</select></label>
+      <label class="full">Model<select id="tm_model" onchange="tmOnModelChange()">${modelOpts}</select></label>
+      <label class="full">Provider Override<select id="tm_prov">${provOpts}</select></label>
+      <div id="tm_model_hint" class="full" style="font-size:.76rem;color:var(--text3);margin-top:-.4rem;"></div>
       <label class="full">Prompt<input id="tm_prompt" value="Hi, answer in one short sentence."></label>
-      <div id="tm_res" class="full test-res-box" style="max-height:280px;overflow-y:auto;"></div>
+      <div id="tm_res" class="full test-res-box" style="max-height:280px;overflow-y:auto;display:none;"></div>
     </div>
     <div class="form-actions"><button class="btn" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="runTestModel()">Send Prompt</button></div>
-  `, null);
+  `, null, 'modal-lg');
+  tmOnModelChange();
+}
+
+function tmOnModelChange(){
+  const modelName = document.getElementById('tm_model')?.value;
+  const hint = document.getElementById('tm_model_hint');
+  const provSel = document.getElementById('tm_prov');
+  if(!modelName || !hint) return;
+  const m = (_currentModels || []).find(x => x.name === modelName);
+  if(m && isModelCombo(m)){
+    const bCount = (m.backends || []).length;
+    const strat = m.strategy || 'fallback';
+    hint.innerHTML = `<span class="tag tag-purple">Combo Route</span> Model ini memiliki <strong>${bCount} backend</strong> dengan strategi <strong>${esc(strat)}</strong>. Provider Override otomatis menggunakan <em>(Auto-route via Model ID / Combo Sequence)</em> agar request dieksekusi melalui live router combo.`;
+    if(provSel) {
+      provSel.value = '';
+    }
+  } else if(m && m.provider){
+    hint.innerHTML = `<span class="tag tag-blue">Direct Route</span> Ditujukan langsung ke provider <strong>${esc(m.provider)}</strong> (upstream: <code class="mono">${esc(m.model||m.name)}</code>).`;
+  } else {
+    hint.innerHTML = '';
+  }
 }
 
 async function runTestModel(){

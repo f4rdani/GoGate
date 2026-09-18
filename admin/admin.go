@@ -21,6 +21,7 @@ import (
 	"github.com/aigateway/provider"
 	"github.com/aigateway/proxy"
 	"github.com/aigateway/relay"
+	"github.com/aigateway/router"
 	"github.com/aigateway/tunnel"
 )
 
@@ -36,6 +37,7 @@ type AdminHandler struct {
 	registry    *provider.Registry
 	tunnelMgr   *tunnel.TunnelManager
 	proxyPool   *relay.ProxyPool
+	router      *router.Router
 
 	quotaMu    sync.Mutex
 	quotaCache map[string]kiroQuotaEntry
@@ -70,6 +72,20 @@ func (a *AdminHandler) UpdateConfig(keyStore *auth.KeyStore, adminSecret string,
 	a.adminSecret = adminSecret
 	a.cfg = cfg
 	a.registry = registry
+}
+
+// SetRouter sets the live router (thread-safe).
+func (a *AdminHandler) SetRouter(r *router.Router) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.router = r
+}
+
+// getRouter returns the live router (thread-safe).
+func (a *AdminHandler) getRouter() *router.Router {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.router
 }
 
 // getKeyStore returns the current keyStore (thread-safe).
@@ -1512,13 +1528,19 @@ func detectReasoning(modelID, rawBody string) bool {
 // Returns the response text, latency, whether reasoning was detected, and error.
 // proxyURL pins this attempt to a checked-out egress proxy ("" = direct);
 // the caller's client transport resolves it via ContextProxyFunc.
-func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, proxyURL string) (string, int64, bool, error) {
+func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, proxyURL string, optionalPrompt ...string) (string, int64, bool, error) {
+	prompt := "Say OK"
+	if len(optionalPrompt) > 0 && strings.TrimSpace(optionalPrompt[0]) != "" {
+		prompt = strings.TrimSpace(optionalPrompt[0])
+	}
+	promptJSON, _ := json.Marshal(prompt)
+
 	var url string
 	var reqBody []byte
 	headers := make(map[string]string)
 	if providerType == "anthropic" {
 		url = strings.TrimRight(baseURL, "/") + "/v1/messages"
-		body := map[string]interface{}{"model": modelID, "max_tokens": 10, "messages": []map[string]string{{"role": "user", "content": "Say OK"}}}
+		body := map[string]interface{}{"model": modelID, "max_tokens": 120, "messages": []map[string]string{{"role": "user", "content": prompt}}}
 		reqBody, _ = json.Marshal(body)
 		headers["Content-Type"] = "application/json"
 		headers["anthropic-version"] = "2023-06-01"
@@ -1530,7 +1552,7 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 		chatReq := &models.ChatCompletionRequest{
 			Model: modelID,
 			Messages: []models.Message{
-				{Role: "user", Content: json.RawMessage(`"Say OK"`)},
+				{Role: "user", Content: promptJSON},
 			},
 			Stream: true,
 		}
@@ -1555,7 +1577,7 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 		}
 	} else {
 		url = strings.TrimRight(baseURL, "/") + "/chat/completions"
-		body := map[string]interface{}{"model": modelID, "messages": []map[string]string{{"role": "user", "content": "Say OK"}}, "max_tokens": 10}
+		body := map[string]interface{}{"model": modelID, "messages": []map[string]string{{"role": "user", "content": prompt}}, "max_tokens": 120}
 		reqBody, _ = json.Marshal(body)
 		headers["Content-Type"] = "application/json"
 		if apiKey != "" {
@@ -2122,6 +2144,85 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// diagTestRouterModel tests a model route directly through the router pipeline.
+// Useful for combo models (fallback, round-robin, tiered) and auto-routed models.
+func (a *AdminHandler) diagTestRouterModel(w http.ResponseWriter, r *http.Request, modelName, prompt string) {
+	rt := a.getRouter()
+	if rt == nil {
+		a.sendDiagError(w, http.StatusServiceUnavailable, "Router is not initialized", map[string]interface{}{
+			"model":  modelName,
+			"target": "router",
+		})
+		return
+	}
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "Hi, answer in one short sentence."
+	}
+	promptJSON, _ := json.Marshal(prompt)
+	maxTokens := 150
+	chatReq := &models.ChatCompletionRequest{
+		Model: modelName,
+		Messages: []models.Message{
+			{Role: "user", Content: promptJSON},
+		},
+		MaxTokens: &maxTokens,
+	}
+
+	start := time.Now()
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	resp, backendProv, err := rt.ChatCompletion(ctx, modelName, chatReq)
+	latency := time.Since(start).Milliseconds()
+
+	if err != nil {
+		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
+			"model":    modelName,
+			"provider": backendProv,
+			"target":   "gateway combo router",
+		})
+		return
+	}
+
+	content := ""
+	reasoning := false
+	if len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.ContentString()
+		if resp.Choices[0].Message.ReasoningContent != "" {
+			reasoning = true
+			if content == "" {
+				content = resp.Choices[0].Message.ReasoningContent
+			}
+		}
+	}
+
+	m := a.cfg.GetModel(modelName)
+	targetDesc := "gateway route"
+	providerLabel := backendProv
+	if m != nil && m.Strategy != "" {
+		targetDesc = fmt.Sprintf("combo (%s, %d backends)", m.Strategy, len(m.Backends))
+		providerLabel = fmt.Sprintf("%s (combo %s)", backendProv, m.Strategy)
+	} else if m != nil {
+		targetDesc = fmt.Sprintf("direct (%s/%s)", m.Provider, m.Model)
+	}
+
+	slog.Info("✅ [DIAG] test-model via router ok", "model", modelName, "provider", backendProv, "latency_ms", latency)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok":                 true,
+		"response":           content,
+		"latency_ms":         latency,
+		"status":             "OK",
+		"provider":           providerLabel,
+		"model":              modelName,
+		"target":             targetDesc,
+		"attempts":           1,
+		"key_count":          1,
+		"reasoning_detected": reasoning,
+	})
+}
+
 // HandleDiagTestModel handles POST /admin/diag/test-model.
 // Auto-fallback: when provider is given WITHOUT explicit api_key/key_index,
 // tries each active key in order until one succeeds (e.g. on 429 rate limit).
@@ -2138,6 +2239,7 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		Type     string `json:"type"`
 		Model    string `json:"model"`
 		Provider string `json:"provider"`
+		Prompt   string `json:"prompt"`
 		KeyIndex *int   `json:"key_index"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -2148,6 +2250,31 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		a.sendError(w, http.StatusBadRequest, "model required")
 		return
 	}
+
+	// Auto-route via Model ID when provider is not specified:
+	if req.Provider == "" {
+		m := a.cfg.GetModel(req.Model)
+		if m != nil && (m.Strategy != "" || len(m.Backends) > 0) {
+			// Combo model (fallback, round-robin, tiered) — execute via live router
+			a.diagTestRouterModel(w, r, req.Model, req.Prompt)
+			return
+		}
+		if m != nil && m.Strategy == "" && m.Provider != "" {
+			// Direct model route — resolve provider and upstream model
+			req.Provider = m.Provider
+			if m.Model != "" {
+				req.Model = m.Model
+			}
+		} else if a.getRouter() != nil {
+			// Try testing via router (handles dynamic prefixes like oc/, mimo/)
+			a.diagTestRouterModel(w, r, req.Model, req.Prompt)
+			return
+		} else {
+			a.sendError(w, http.StatusBadRequest, fmt.Sprintf("model '%s' not found; specify provider override", req.Model))
+			return
+		}
+	}
+
 	// Kiro speaks CodeWhisperer EventStream, not OpenAI HTTP — run the test
 	// through the registered provider (which rotates keys/surfaces itself).
 	if prov := a.cfg.GetProvider(req.Provider); prov != nil && prov.Type == "kiro" {
@@ -2187,7 +2314,7 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		keyTag := diagKeyTag(cand.Index, cand.Key)
 		px := a.diagCheckoutProxy(req.Provider)
 		proxySuffix := diagProxySuffix(px)
-		response, latency, reasoning, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type, px.URL)
+		response, latency, reasoning, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type, px.URL, req.Prompt)
 		a.diagReportProxy(px.URL, err)
 		if err == nil {
 			resp := map[string]interface{}{

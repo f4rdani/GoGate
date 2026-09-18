@@ -9,8 +9,10 @@ import (
 
 	"github.com/aigateway/auth"
 	"github.com/aigateway/config"
+	"github.com/aigateway/provider"
 	"github.com/aigateway/proxy"
 	"github.com/aigateway/relay"
+	"github.com/aigateway/router"
 	"github.com/aigateway/tunnel"
 )
 
@@ -497,5 +499,70 @@ func TestAdminKeysCreateUpdateRegenerate(t *testing.T) {
 	w = doAdmin(t, adm, "POST", "/admin/keys/deadbeef/regenerate", "")
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("unknown regenerate must 404: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAdminDiagTestModel_ComboAndAutoRoute(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"I am smart assistant"}}]}`))
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{AdminSecret: "test-secret-123"},
+		Providers: []config.ProviderConfig{
+			{Name: "p1", Type: "openai", BaseURL: upstream.URL, APIKeys: []string{"sk-1"}, Models: []string{"m1"}},
+			{Name: "p2", Type: "openai", BaseURL: upstream.URL, APIKeys: []string{"sk-2"}, Models: []string{"m2"}},
+		},
+		Models: []config.ModelConfig{
+			{
+				Name:     "smart-assistant",
+				Strategy: "fallback",
+				Backends: []config.BackendConfig{
+					{Provider: "p1", Model: "m1"},
+					{Provider: "p2", Model: "m2"},
+				},
+			},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	p1, _ := provider.NewProviderFromConfig(cfg.Providers[0])
+	p2, _ := provider.NewProviderFromConfig(cfg.Providers[1])
+	reg.Register("p1", p1)
+	reg.Register("p2", p2)
+
+	rt, err := router.NewRouter(cfg, reg)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	adm := NewAdminHandler(auth.NewKeyStore(nil), "test-secret-123", nil, nil, "", cfg, reg, nil, nil)
+	adm.SetRouter(rt)
+
+	// Test combo model WITHOUT provider override (Auto-route via Model ID)
+	req := httptest.NewRequest("POST", "/admin/diag/test-model", strings.NewReader(`{"model":"smart-assistant","prompt":"Hello"}`))
+	req.Header.Set("X-Admin-Secret", "test-secret-123")
+	w := httptest.NewRecorder()
+	adm.HandleDiagTestModel(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for combo test, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["ok"] != true {
+		t.Fatalf("expected ok=true, got %v", resp)
+	}
+	if resp["response"] != "I am smart assistant" {
+		t.Errorf("expected 'I am smart assistant', got %v", resp["response"])
+	}
+	if resp["model"] != "smart-assistant" {
+		t.Errorf("expected model 'smart-assistant', got %v", resp["model"])
 	}
 }
