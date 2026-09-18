@@ -3762,7 +3762,19 @@ function renderProxyPool(data){
   const m1 = document.getElementById('ppManual'); if(m1) m1.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
   const h1 = document.getElementById('ppHealthy'); if(h1) h1.textContent = healthyCount;
   const l1 = document.getElementById('ppLatency'); if(l1) l1.textContent = (data.avg_latency_ms||0) + 'ms';
-  const r1 = document.getElementById('ppLastRef'); if(r1) r1.textContent = data.last_refresh ? new Date(data.last_refresh).toLocaleTimeString() : 'Never';
+  const r1 = document.getElementById('ppLastRef');
+  if(r1){
+    if(!data.last_refresh) r1.textContent = 'Never';
+    else if(typeof data.last_refresh === 'string' && data.last_refresh.includes('ago')) r1.textContent = data.last_refresh;
+    else {
+      try {
+        const d = new Date(data.last_refresh);
+        r1.textContent = isNaN(d.getTime()) ? String(data.last_refresh) : d.toLocaleTimeString();
+      } catch(e) {
+        r1.textContent = String(data.last_refresh);
+      }
+    }
+  }
 
   const t2 = document.getElementById('ppViewTotal'); if(t2) t2.textContent = data.total_scraped || data.total || 0;
   const m2 = document.getElementById('ppViewManual'); if(m2) m2.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
@@ -3972,7 +3984,7 @@ async function submitModalWebshareAccount(){
 }
 
 async function resetWebshareAccount(name){
-  if(!confirm(`Reset pemakaian bandwidth bulan ini untuk akun "${name}" menjadi 0? Seluruh proxy akun ini akan diaktifkan kembali.`)) return;
+  if(!await confirm(`Reset pemakaian bandwidth bulan ini untuk akun "${name}" menjadi 0? Seluruh proxy akun ini akan diaktifkan kembali.`)) return;
   try{
     const r = await api('/admin/proxy-pool/webshare/reset', {
       method: 'POST',
@@ -3987,7 +3999,7 @@ async function resetWebshareAccount(name){
 }
 
 async function deleteWebshareAccount(name){
-  if(!confirm(`Hapus akun Webshare "${name}" beserta seluruh proxynya dari pool?`)) return;
+  if(!await confirm(`Hapus akun Webshare "${name}" beserta seluruh proxynya dari pool?`)) return;
   try{
     const r = await api(`/admin/proxy-pool/webshare?name=${encodeURIComponent(name)}`, {
       method: 'DELETE'
@@ -4042,29 +4054,32 @@ function renderManualProxies(manualList, allProxies){
 
   const proxyMap = {};
   (allProxies || []).forEach(p => {
-    proxyMap[p.url] = p;
+    if(p && p.url) proxyMap[p.url] = p;
   });
 
   let rows = '';
-  manualList.forEach(rawUrl => {
-    const p = proxyMap[rawUrl] || null;
+  manualList.forEach(item => {
+    const rawUrl = typeof item === 'string' ? item : (item && item.url ? item.url : '');
+    if(!rawUrl) return;
+    const p = (typeof item === 'object' && item.latency_ms !== undefined) ? item : (proxyMap[rawUrl] || null);
     let proto = 'HTTP';
     if(rawUrl.startsWith('socks5://')) proto = 'SOCKS5';
     else if(rawUrl.startsWith('https://')) proto = 'HTTPS';
     else if(rawUrl.startsWith('http://')) proto = 'HTTP';
 
-    const isHealthy = p ? (p.latency_ms > 0 && p.fail_count === 0) : null;
+    const isHealthy = p ? (p.latency_ms > 0 && (p.fail_count === 0 || p.fail_count === undefined)) : null;
     const latencyStr = p ? (p.latency_ms > 0 ? `${p.latency_ms}ms` : 'Testing...') : 'Ready';
     const statusBadge = isHealthy === true 
       ? `<span class="tag tag-green">Online (${latencyStr})</span>` 
       : isHealthy === false 
         ? `<span class="tag tag-orange">Degraded</span>` 
         : `<span class="tag tag-gray">Configured</span>`;
-    const failCount = p ? p.fail_count : 0;
+    const failCount = p ? (p.fail_count || 0) : 0;
+    const accountTag = (p && p.account_name) ? `<span class="tag tag-cyan" style="font-size:0.7rem; margin-left:0.35rem;">${esc(p.account_name)}</span>` : '';
 
     rows += `
       <tr>
-        <td class="mono" style="font-weight:600; color:var(--text1);">${esc(rawUrl)}</td>
+        <td class="mono" style="font-weight:600; color:var(--text1);">${esc(rawUrl)} ${accountTag}</td>
         <td><span class="tag tag-blue">${proto}</span></td>
         <td>${statusBadge}</td>
         <td><span class="mono" style="color:${failCount>0?'var(--orange)':'var(--text3)'}">${failCount}</span></td>
