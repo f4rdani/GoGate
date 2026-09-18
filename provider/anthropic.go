@@ -360,7 +360,7 @@ func (a *AnthropicProvider) ChatCompletion(ctx context.Context, req *models.Chat
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		a.logAttempt(req.Model, req, keyObj, false)
+		a.logAttempt(req.Model, req, keyObj, false, egressProxy)
 
 		start := time.Now()
 		resp, err := a.client.Do(httpReq)
@@ -462,7 +462,7 @@ func (a *AnthropicProvider) ChatCompletionStream(ctx context.Context, req *model
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		a.logAttempt(req.Model, req, keyObj, true)
+		a.logAttempt(req.Model, req, keyObj, true, egressProxy)
 
 		streamStart = time.Now()
 		resp, err = a.client.Do(httpReq)

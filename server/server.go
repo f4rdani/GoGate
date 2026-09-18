@@ -160,6 +160,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 			"tier", pCfg.Tier,
 			"models", len(pCfg.Models),
 			"api_keys", len(pCfg.APIKeys),
+			"key_rotation", pCfg.KeyRotationMode(),
 		)
 	}
 

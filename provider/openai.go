@@ -97,7 +97,7 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		o.logAttempt(req.Model, req, keyObj, false)
+		o.logAttempt(req.Model, req, keyObj, false, egressProxy)
 
 		start := time.Now()
 		resp, err := o.client.Do(httpReq)
@@ -264,7 +264,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			httpReq.Header.Set("Authorization", "Bearer "+tok)
 		}
 
-		o.logAttempt(req.Model, req, keyObj, true)
+		o.logAttempt(req.Model, req, keyObj, true, egressProxy)
 
 		streamStart = time.Now()
 		resp, err = o.client.Do(httpReq)

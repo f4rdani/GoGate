@@ -136,6 +136,7 @@ type ProviderConfig struct {
 	HealthCheckURL      string        `yaml:"health_check_url,omitempty" json:"health_check_url,omitempty"` // custom health check endpoint
 	HealthCheckInterval time.Duration `yaml:"health_check_interval,omitempty" json:"health_check_interval,omitempty"` // e.g. 30s, 0=disabled
 	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"`               // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
+	KeyRotation         string        `yaml:"key_rotation,omitempty" json:"key_rotation,omitempty"`       // "round-robin" (default: rotate keys per request) or "sticky" (primary key first, failover on error)
 	RelayURL            string        `yaml:"relay_url,omitempty" json:"relay_url,omitempty"`               // Cloudflare Worker or reverse proxy relay URL (e.g. https://my-worker.workers.dev)
 	RelaySecret         string        `yaml:"relay_secret,omitempty" json:"relay_secret,omitempty"`         // optional secret passed in X-Relay-Secret header
 	TokenURL            string        `yaml:"token_url,omitempty" json:"token_url,omitempty"`               // OAuth2 token endpoint (type oauth)
@@ -145,6 +146,16 @@ type ProviderConfig struct {
 	ProfileARN          string        `yaml:"profile_arn,omitempty" json:"profile_arn,omitempty"`           // Kiro CodeWhisperer profile ARN (type kiro, optional)
 	Region              string        `yaml:"region,omitempty" json:"region,omitempty"`                       // AWS region for OIDC/Kiro endpoints (default us-east-1)
 	Disabled            bool          `yaml:"disabled,omitempty" json:"disabled,omitempty"`                 // true if provider is disabled / turned off
+}
+
+// KeyRotationMode returns the normalized API-key rotation strategy:
+// "sticky" (always the first healthy key, fail over on error) or
+// "round-robin" (default: rotate keys on every request).
+func (p *ProviderConfig) KeyRotationMode() string {
+	if strings.EqualFold(strings.TrimSpace(p.KeyRotation), "sticky") {
+		return "sticky"
+	}
+	return "round-robin"
 }
 
 // HasCredentials reports whether the provider can authenticate requests:
@@ -382,6 +393,10 @@ func (c *Config) Validate() error {
 		}
 		if !validTypes[p.Type] {
 			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare, oauth, kiro, mimo)", p.Name, p.Type)
+		}
+
+		if kr := strings.TrimSpace(p.KeyRotation); kr != "" && !strings.EqualFold(kr, "round-robin") && !strings.EqualFold(kr, "sticky") {
+			return fmt.Errorf("provider %s: invalid key_rotation %q (valid: round-robin, sticky)", p.Name, p.KeyRotation)
 		}
 
 		if p.Type == "kiro" {

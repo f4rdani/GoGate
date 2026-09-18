@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -350,6 +351,7 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 		RelayURL    string   `json:"relay_url,omitempty"`
 		RelaySecret string   `json:"relay_secret,omitempty"`
 		ProxyURL    string   `json:"proxy_url,omitempty"`
+		KeyRotation string   `json:"key_rotation,omitempty"`
 		Models      []string `json:"models"`
 		Healthy     bool     `json:"healthy"`
 		HasKey      bool     `json:"has_key"`
@@ -399,6 +401,7 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			RelayURL:     p.RelayURL,
 			RelaySecret:  p.RelaySecret,
 			ProxyURL:     p.ProxyURL,
+			KeyRotation:  p.KeyRotationMode(),
 			Models:       modelsList,
 			HasKey:       len(p.APIKeys) > 0,
 			KeyCount:     len(p.APIKeys),
@@ -678,6 +681,7 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 		RelayURL     *string  `json:"relay_url"`
 		RelaySecret  *string  `json:"relay_secret"`
 		ProxyURL     *string  `json:"proxy_url"`
+		KeyRotation  *string  `json:"key_rotation"`
 		TokenURL     *string  `json:"token_url"`
 		ClientID     *string  `json:"client_id"`
 		ClientSecret *string  `json:"client_secret"`
@@ -712,6 +716,17 @@ func (a *AdminHandler) HandleUpdateProvider(w http.ResponseWriter, r *http.Reque
 	}
 	if req.ProxyURL != nil {
 		existing.ProxyURL = *req.ProxyURL
+	}
+	if req.KeyRotation != nil {
+		kr := strings.ToLower(strings.TrimSpace(*req.KeyRotation))
+		if kr != "" && kr != "round-robin" && kr != "sticky" {
+			a.sendError(w, http.StatusBadRequest, "invalid key_rotation (valid: round-robin, sticky)")
+			return
+		}
+		if kr == "round-robin" {
+			kr = "" // default — keep config file clean
+		}
+		existing.KeyRotation = kr
 	}
 	if req.TokenURL != nil {
 		existing.TokenURL = *req.TokenURL
@@ -1234,7 +1249,9 @@ func (a *AdminHandler) HandleTemplates(w http.ResponseWriter, r *http.Request) {
 }
 
 // diagFetchModels calls a provider's /models endpoint to get available models.
-func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) ([]string, error) {
+// proxyURL pins this attempt to a checked-out egress proxy ("" = direct);
+// the caller's client transport resolves it via ContextProxyFunc.
+func diagFetchModels(client *http.Client, baseURL, apiKey, providerType, proxyURL string) ([]string, error) {
 	if providerType == "anthropic" {
 		return nil, fmt.Errorf("Anthropic does not have a /models endpoint")
 	}
@@ -1243,10 +1260,15 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) 
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
+	reqCtx := context.Background()
+	if strings.TrimSpace(proxyURL) != "" {
+		reqCtx = provider.WithEgressProxy(reqCtx, proxyURL)
+	}
+
 	if providerType == "cloudflare" {
 		url := strings.TrimRight(baseURL, "/")
 		url = strings.Replace(url, "/v1", "/models/search", 1)
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -1291,7 +1313,7 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) 
 	if !strings.HasSuffix(url, "/models") {
 		url += "/models"
 	}
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1379,7 +1401,9 @@ func detectReasoning(modelID, rawBody string) bool {
 
 // diagTestModel sends a minimal chat completion request to verify the model works.
 // Returns the response text, latency, whether reasoning was detected, and error.
-func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType string) (string, int64, bool, error) {
+// proxyURL pins this attempt to a checked-out egress proxy ("" = direct);
+// the caller's client transport resolves it via ContextProxyFunc.
+func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, proxyURL string) (string, int64, bool, error) {
 	var url string
 	var reqBody []byte
 	headers := make(map[string]string)
@@ -1432,7 +1456,11 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 			headers["X-Mimo-Source"] = "mimocode-cli"
 		}
 	}
-	req, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
+	reqCtx := context.Background()
+	if strings.TrimSpace(proxyURL) != "" {
+		reqCtx = provider.WithEgressProxy(reqCtx, proxyURL)
+	}
+	req, err := http.NewRequestWithContext(reqCtx, "POST", url, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", 0, false, err
 	}
@@ -1507,6 +1535,137 @@ func maskDiagKey(k string) string {
 		return "***"
 	}
 	return "-"
+}
+
+// maskProxyURL returns a credential-stripped display form of a proxy URL
+// (e.g. "http://user:pass@1.2.3.4:8080" → "http://1.2.3.4:8080").
+// Returns "none" when empty/direct so logs explicitly show proxy absence.
+func maskProxyURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "none" || raw == "direct" {
+		return "none"
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "***"
+	}
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s", scheme, u.Host)
+}
+
+// diagProxyInfo describes which egress proxy a diag attempt will use.
+type diagProxyInfo struct {
+	URL     string // raw proxy URL ("" = direct)
+	Mode    string // "pool" | "custom" | "none" | "pool (empty)" | "none (pool disabled)"
+	Display string // masked URL or "none" — safe for logs/JSON
+}
+
+// diagCheckoutProxy resolves the egress proxy for ONE diag attempt on providerName.
+// Pool mode checks out a fresh proxy per call so each key attempt can rotate.
+// Custom proxy_url returns the configured URL; anything else is direct ("none").
+func (a *AdminHandler) diagCheckoutProxy(providerName string) diagProxyInfo {
+	prov := a.cfg.GetProvider(providerName)
+	if prov == nil {
+		return diagProxyInfo{Mode: "none", Display: "none"}
+	}
+	raw := strings.TrimSpace(prov.ProxyURL)
+	poolEnabled := a.proxyPool != nil && a.proxyPool.IsEnabled()
+	// Explicit custom proxy — transport already pins it, just display masked.
+	if raw != "" && raw != "auto" && raw != "pool" && raw != "direct" && raw != "none" {
+		return diagProxyInfo{URL: raw, Mode: "custom", Display: maskProxyURL(raw)}
+	}
+	if raw == "direct" || raw == "none" {
+		return diagProxyInfo{Mode: "none", Display: "none"}
+	}
+	isPoolMode := raw == "pool" || raw == "auto"
+	isKeylessAuto := raw == "" && (prov.Type == "opencode" || prov.Type == "mimo")
+	if isPoolMode || isKeylessAuto {
+		if !poolEnabled {
+			return diagProxyInfo{Mode: "none (pool disabled)", Display: "none"}
+		}
+		checked := a.proxyPool.Checkout()
+		if checked == "" {
+			return diagProxyInfo{Mode: "pool (empty)", Display: "none"}
+		}
+		return diagProxyInfo{URL: checked, Mode: "pool", Display: maskProxyURL(checked)}
+	}
+	return diagProxyInfo{Mode: "none", Display: "none"}
+}
+
+// diagProxyModeLabel returns the configured proxy mode for a provider without
+// checking out a URL (for start-lines and Kiro rotation where the exact egress
+// URL is chosen inside the provider).
+func (a *AdminHandler) diagProxyModeLabel(providerName string) string {
+	prov := a.cfg.GetProvider(providerName)
+	if prov == nil {
+		return "none"
+	}
+	raw := strings.TrimSpace(prov.ProxyURL)
+	if raw != "" && raw != "auto" && raw != "pool" && raw != "direct" && raw != "none" {
+		return "custom:" + maskProxyURL(raw)
+	}
+	if raw == "pool" || raw == "auto" {
+		if a.proxyPool != nil && a.proxyPool.IsEnabled() {
+			return "pool"
+		}
+		return "none (pool disabled)"
+	}
+	if raw == "" && (prov.Type == "opencode" || prov.Type == "mimo") {
+		if a.proxyPool != nil && a.proxyPool.IsEnabled() {
+			return "pool"
+		}
+		return "none"
+	}
+	return "none"
+}
+
+// diagReportProxy feeds a per-attempt outcome back to the pool.
+// Only transport-level failures (proxy never reached upstream) count as proxy
+// failures; upstream HTTP errors prove the proxy works.
+func (a *AdminHandler) diagReportProxy(proxyURL string, err error) {
+	if a.proxyPool == nil || strings.TrimSpace(proxyURL) == "" {
+		return
+	}
+	if err == nil {
+		a.proxyPool.Report(proxyURL, false)
+		return
+	}
+	msg := err.Error()
+	// Upstream answered with HTTP status / parse error → proxy itself is fine.
+	if strings.Contains(msg, "HTTP ") || strings.Contains(msg, "parse ") {
+		a.proxyPool.Report(proxyURL, false)
+		return
+	}
+	a.proxyPool.Report(proxyURL, true)
+}
+
+// diagKeyTag returns a human-readable key label for logs (e.g. "key #1 (sk-XXXX...YYYY)").
+func diagKeyTag(index int, key string) string {
+	if strings.TrimSpace(key) == "" {
+		return "keyless"
+	}
+	if index >= 0 {
+		return fmt.Sprintf("key #%d (%s)", index+1, maskDiagKey(key))
+	}
+	return fmt.Sprintf("custom key (%s)", maskDiagKey(key))
+}
+
+// diagProxySuffix formats "proxy ..." for one-line diag logs:
+// "proxy none", "proxy none (pool empty)", or "proxy http://1.2.3.4:8080 (pool)".
+func diagProxySuffix(px diagProxyInfo) string {
+	if px.Display == "" || px.Display == "none" {
+		if px.Mode == "" || px.Mode == "none" {
+			return "proxy none"
+		}
+		return fmt.Sprintf("proxy none (%s)", px.Mode)
+	}
+	if px.Mode == "" {
+		return fmt.Sprintf("proxy %s", px.Display)
+	}
+	return fmt.Sprintf("proxy %s (%s)", px.Display, px.Mode)
 }
 
 // diagKeyCandidate is one upstream key to try during a diag request.
@@ -1673,17 +1832,19 @@ func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request,
 	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
 	start := time.Now()
-	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → kiro rotation", providerName, model))
+	proxyLabel := a.diagProxyModeLabel(providerName)
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → kiro rotation · proxy %s", providerName, model, proxyLabel))
 	resp, err := p.ChatCompletion(ctx, &models.ChatCompletionRequest{
 		Model:    model,
 		Messages: []models.Message{{Role: "user", Content: json.RawMessage(`"Say OK"`)}},
 	})
 	latency := time.Since(start).Milliseconds()
 	if err != nil {
-		slog.Warn("diagnostic kiro model test failed", "provider", providerName, "model", model, "error", err)
+		slog.Warn(fmt.Sprintf("❌ [DIAG] test-model %s/%s fail via kiro rotation · proxy %s · %dms · %s", providerName, model, proxyLabel, latency, err.Error()))
 		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
 			"provider": providerName, "model": model, "type": "kiro",
 			"target": "kiro-generateAssistantResponse", "latency_ms": latency,
+			"proxy": proxyLabel, "proxy_mode": proxyLabel,
 		})
 		return
 	}
@@ -1691,13 +1852,15 @@ func (a *AdminHandler) diagTestKiroModel(w http.ResponseWriter, r *http.Request,
 	if len(resp.Choices) > 0 && resp.Choices[0].Message != nil {
 		text = resp.Choices[0].Message.ContentString()
 	}
-	slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via kiro rotation · %dms", providerName, model, latency))
+	slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via kiro rotation · proxy %s · %dms", providerName, model, proxyLabel, latency))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok": true, "response": text, "latency_ms": latency, "status": "OK",
 		"provider": providerName, "model": model, "type": "kiro",
 		"target":              "kiro-generateAssistantResponse",
 		"key_label":           "auto (kiro rotation)",
+		"proxy":               proxyLabel,
+		"proxy_mode":          proxyLabel,
 		"reasoning_detected":  detectReasoning(model, text),
 	})
 }
@@ -1765,20 +1928,26 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if isKiro {
+		proxyLabel := a.diagProxyModeLabel(req.Provider)
+		slog.Info(fmt.Sprintf("🧪 [DIAG] test-key %s → kiro-catalog · proxy %s", req.Provider, proxyLabel))
 		start := time.Now()
 		models, ferr := provider.KiroListModels(r.Context(), nil, cred)
 		latency := time.Since(start).Milliseconds()
 		targetURL := "kiro-catalog"
 		if ferr != nil {
+			slog.Warn(fmt.Sprintf("❌ [DIAG] test-key %s fail · proxy %s · %dms · %s", req.Provider, proxyLabel, latency, ferr.Error()))
 			a.sendDiagError(w, http.StatusBadGateway, ferr.Error(), map[string]interface{}{
 				"provider":   req.Provider,
 				"target":     targetURL,
 				"key_index":  req.KeyIndex,
 				"type":       "kiro",
 				"latency_ms": latency,
+				"proxy":      proxyLabel,
+				"proxy_mode": proxyLabel,
 			})
 			return
 		}
+		slog.Info(fmt.Sprintf("✅ [DIAG] test-key %s ok (%d models) · proxy %s · %dms", req.Provider, len(models), proxyLabel, latency))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok":          true,
@@ -1788,6 +1957,8 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 			"status":      "OK",
 			"provider":    req.Provider,
 			"target":      targetURL,
+			"proxy":       proxyLabel,
+			"proxy_mode":  proxyLabel,
 		})
 		return
 	}
@@ -1799,21 +1970,33 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+	px := a.diagCheckoutProxy(req.Provider)
+	keyLog := maskDiagKey(req.APIKey)
+	if strings.TrimSpace(req.APIKey) == "" {
+		keyLog = "keyless"
+	}
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-key %s → %s/models · key %s · %s", req.Provider, strings.TrimRight(req.BaseURL, "/"), keyLog, diagProxySuffix(px)))
 	start := time.Now()
-	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type)
+	models, err := diagFetchModels(client, req.BaseURL, req.APIKey, req.Type, px.URL)
 	latency := time.Since(start).Milliseconds()
+	a.diagReportProxy(px.URL, err)
 	targetURL := strings.TrimRight(req.BaseURL, "/") + "/models"
 	if err != nil {
+		slog.Warn(fmt.Sprintf("❌ [DIAG] test-key %s fail · key %s · %s · %dms · %s", req.Provider, keyLog, diagProxySuffix(px), latency, err.Error()))
 		a.sendDiagError(w, http.StatusBadGateway, err.Error(), map[string]interface{}{
 			"provider":   req.Provider,
 			"base_url":   req.BaseURL,
 			"target":     targetURL,
 			"key_index":  req.KeyIndex,
+			"key_masked": keyLog,
 			"type":       req.Type,
 			"latency_ms": latency,
+			"proxy":      px.Display,
+			"proxy_mode": px.Mode,
 		})
 		return
 	}
+	slog.Info(fmt.Sprintf("✅ [DIAG] test-key %s ok (%d models) · key %s · %s · %dms", req.Provider, len(models), keyLog, diagProxySuffix(px), latency))
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"ok":          true,
@@ -1824,6 +2007,9 @@ func (a *AdminHandler) HandleDiagTestKey(w http.ResponseWriter, r *http.Request)
 		"provider":    req.Provider,
 		"base_url":    req.BaseURL,
 		"target":      targetURL,
+		"key_masked":  keyLog,
+		"proxy":       px.Display,
+		"proxy_mode":  px.Mode,
 	})
 }
 
@@ -1879,17 +2065,21 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	type keyFailure struct {
 		KeyIndex  interface{} `json:"key_index"`
 		KeyMasked string      `json:"key_masked"`
+		Proxy     string      `json:"proxy,omitempty"`
+		ProxyMode string      `json:"proxy_mode,omitempty"`
 		Error     string      `json:"error"`
 	}
 	failures := make([]keyFailure, 0, len(candidates))
 	var lastLatency int64
-	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → trying %d key(s)", req.Provider, req.Model, len(candidates)))
+	var lastProxy diagProxyInfo
+	proxyModeLabel := a.diagProxyModeLabel(req.Provider)
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → trying %d key(s) · proxy %s", req.Provider, req.Model, len(candidates), proxyModeLabel))
 	for i, cand := range candidates {
-		keyTag := "custom key"
-		if cand.Index >= 0 {
-			keyTag = fmt.Sprintf("key #%d (%s)", cand.Index+1, maskDiagKey(cand.Key))
-		}
-		response, latency, reasoning, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type)
+		keyTag := diagKeyTag(cand.Index, cand.Key)
+		px := a.diagCheckoutProxy(req.Provider)
+		proxySuffix := diagProxySuffix(px)
+		response, latency, reasoning, err := diagTestModel(client, req.BaseURL, cand.Key, req.Model, req.Type, px.URL)
+		a.diagReportProxy(px.URL, err)
 		if err == nil {
 			resp := map[string]interface{}{
 				"ok":                 true,
@@ -1902,6 +2092,8 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 				"attempts":           i + 1,
 				"key_count":          len(candidates),
 				"reasoning_detected": reasoning,
+				"proxy":              px.Display,
+				"proxy_mode":         px.Mode,
 			}
 			if cand.Index >= 0 {
 				resp["key_index"] = cand.Index
@@ -1909,23 +2101,25 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 				resp["key_label"] = fmt.Sprintf("Key #%d", cand.Index+1)
 				resp["key_masked"] = maskDiagKey(cand.Key)
 				resp["fallback_used"] = i > 0
+			} else {
+				resp["key_masked"] = maskDiagKey(cand.Key)
 			}
 			if len(failures) > 0 {
 				resp["failed_attempts"] = failures
 			}
-			slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via %s · %dms", req.Provider, req.Model, keyTag, latency))
+			slog.Info(fmt.Sprintf("✅ [DIAG] test-model %s/%s ok via %s · %s · %dms", req.Provider, req.Model, keyTag, proxySuffix, latency))
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
 		lastLatency = latency
+		lastProxy = px
 		var idx interface{}
 		if cand.Index >= 0 {
 			idx = cand.Index
 		}
-		failures = append(failures, keyFailure{KeyIndex: idx, KeyMasked: maskDiagKey(cand.Key), Error: err.Error()})
-		slog.Warn("diagnostic model test attempt failed",
-			"provider", req.Provider, "model", req.Model, "key", keyTag, "error", err)
+		failures = append(failures, keyFailure{KeyIndex: idx, KeyMasked: maskDiagKey(cand.Key), Proxy: px.Display, ProxyMode: px.Mode, Error: err.Error()})
+		slog.Warn(fmt.Sprintf("❌ [DIAG] test-model %s/%s fail via %s · %s · %dms · %s", req.Provider, req.Model, keyTag, proxySuffix, latency, err.Error()))
 		if i < len(candidates)-1 {
 			if !isDiagFallbackRetryable(err) {
 				break
@@ -1940,6 +2134,9 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	if len(failures) > 0 {
 		lastErrMsg = failures[len(failures)-1].Error
 	}
+	if strings.TrimSpace(lastErrMsg) == "" {
+		lastErrMsg = fmt.Sprintf("upstream %s/%s failed without detail (target %s, %d attempt(s))", req.Provider, req.Model, targetURL, len(failures))
+	}
 	details := map[string]interface{}{
 		"provider":   req.Provider,
 		"base_url":   req.BaseURL,
@@ -1950,6 +2147,12 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		"attempts":   len(failures),
 		"key_count":  len(candidates),
 		"failures":   failures,
+		"proxy":      lastProxy.Display,
+		"proxy_mode": lastProxy.Mode,
+	}
+	if lastProxy.Display == "" {
+		details["proxy"] = proxyModeLabel
+		details["proxy_mode"] = proxyModeLabel
 	}
 	if len(candidates) == 1 && candidates[0].Index >= 0 {
 		details["key_index"] = candidates[0].Index
@@ -1979,19 +2182,25 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		a.sendError(w, http.StatusBadRequest, err.Error())
 		return
 	} else if isKiro {
+		proxyLabel := a.diagProxyModeLabel(req.Provider)
+		slog.Info(fmt.Sprintf("🧪 [DIAG] fetch-models %s → kiro-catalog · proxy %s", req.Provider, proxyLabel))
 		start := time.Now()
 		models, ferr := provider.KiroListModels(r.Context(), nil, cred)
 		latency := time.Since(start).Milliseconds()
 		if ferr != nil {
+			slog.Warn(fmt.Sprintf("❌ [DIAG] fetch-models %s fail · proxy %s · %dms · %s", req.Provider, proxyLabel, latency, ferr.Error()))
 			a.sendDiagError(w, http.StatusBadGateway, ferr.Error(), map[string]interface{}{
 				"provider": req.Provider, "target": "kiro-catalog", "type": "kiro",
+				"latency_ms": latency, "proxy": proxyLabel, "proxy_mode": proxyLabel,
 			})
 			return
 		}
+		slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) · proxy %s · %dms", req.Provider, len(models), proxyLabel, latency))
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok": true, "models": models, "count": len(models),
 			"provider": req.Provider, "target": "kiro-catalog", "latency_ms": latency,
+			"proxy": proxyLabel, "proxy_mode": proxyLabel,
 		})
 		return
 	}
@@ -2010,8 +2219,15 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 	}
 	targetURL := strings.TrimRight(req.BaseURL, "/") + "/models"
 	var lastErr error
+	var lastProxy diagProxyInfo
+	proxyModeLabel := a.diagProxyModeLabel(req.Provider)
+	slog.Info(fmt.Sprintf("🧪 [DIAG] fetch-models %s → trying %d key(s) · proxy %s", req.Provider, len(candidates), proxyModeLabel))
 	for i, cand := range candidates {
-		models, err := diagFetchModels(client, req.BaseURL, cand.Key, req.Type)
+		keyTag := diagKeyTag(cand.Index, cand.Key)
+		px := a.diagCheckoutProxy(req.Provider)
+		proxySuffix := diagProxySuffix(px)
+		models, err := diagFetchModels(client, req.BaseURL, cand.Key, req.Type, px.URL)
+		a.diagReportProxy(px.URL, err)
 		if err == nil {
 			resp := map[string]interface{}{
 				"ok":        true,
@@ -2022,6 +2238,8 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 				"target":    targetURL,
 				"attempts":  i + 1,
 				"key_count": len(candidates),
+				"proxy":     px.Display,
+				"proxy_mode": px.Mode,
 			}
 			if cand.Index >= 0 {
 				resp["key_index"] = cand.Index
@@ -2029,12 +2247,17 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 				resp["key_label"] = fmt.Sprintf("Key #%d", cand.Index+1)
 				resp["key_masked"] = maskDiagKey(cand.Key)
 				resp["fallback_used"] = i > 0
+			} else {
+				resp["key_masked"] = maskDiagKey(cand.Key)
 			}
+			slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) via %s · %s", req.Provider, len(models), keyTag, proxySuffix))
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 			return
 		}
 		lastErr = err
+		lastProxy = px
+		slog.Warn(fmt.Sprintf("❌ [DIAG] fetch-models %s fail via %s · %s · %s", req.Provider, keyTag, proxySuffix, err.Error()))
 		if i < len(candidates)-1 {
 			if !isDiagFallbackRetryable(err) {
 				break
@@ -2043,6 +2266,12 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 			continue
 		}
 	}
+	proxyDisplay := lastProxy.Display
+	proxyMode := lastProxy.Mode
+	if proxyDisplay == "" {
+		proxyDisplay = proxyModeLabel
+		proxyMode = proxyModeLabel
+	}
 	details := map[string]interface{}{
 		"provider":  req.Provider,
 		"base_url":  req.BaseURL,
@@ -2050,6 +2279,8 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		"type":      req.Type,
 		"attempts":  1,
 		"key_count": len(candidates),
+		"proxy":     proxyDisplay,
+		"proxy_mode": proxyMode,
 	}
 	if len(candidates) == 1 && candidates[0].Index >= 0 {
 		details["key_index"] = candidates[0].Index
@@ -2057,6 +2288,9 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 	msg := ""
 	if lastErr != nil {
 		msg = lastErr.Error()
+	}
+	if strings.TrimSpace(msg) == "" {
+		msg = fmt.Sprintf("upstream %s catalog failed without detail (target %s)", req.Provider, targetURL)
 	}
 	a.sendDiagError(w, http.StatusBadGateway, msg, details)
 }
@@ -2102,7 +2336,7 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 	// must supply "models" explicitly.
 	models := req.Models
 	if len(models) == 0 {
-		fetched, err := diagFetchModels(nil, tmpl.BaseURL, req.APIKey, tmpl.Type)
+		fetched, err := diagFetchModels(nil, tmpl.BaseURL, req.APIKey, tmpl.Type, "")
 		if err != nil {
 			if isKeyless {
 				if tmpl.Type == "mimo" {

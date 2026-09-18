@@ -1776,7 +1776,7 @@ func (k *KiroProvider) doKiro(ctx context.Context, routeModel string, raw []byte
 			}
 
 			slog.Debug(fmt.Sprintf("ℹ️ [AUTH] Using %s surface: %s (attempt %d)", k.name, surface, attempt+1))
-			slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s | key=%s | surface=%s", k.name, routeModel, k.keyLabel(keyObj), surface))
+			slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s | key=%s | surface=%s | %s", k.name, routeModel, k.keyLabel(keyObj), surface, egressLabel(egressProxy)))
 			resp, err := k.client.Do(httpReq)
 			slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", k.name, routeModel))
 			if err != nil {
@@ -1872,7 +1872,7 @@ func (k *KiroProvider) openKiroStream(ctx context.Context, routeModel string, ra
 				httpReq.Header.Set("Authorization", "Bearer "+tok)
 			}
 
-			slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s | key=%s | surface=%s", k.name, routeModel, k.keyLabel(keyObj), surface))
+			slog.Info(fmt.Sprintf("[PENDING] START | provider=%s | model=%s | key=%s | surface=%s | %s", k.name, routeModel, k.keyLabel(keyObj), surface, egressLabel(egressProxy)))
 			resp, err := k.client.Do(httpReq)
 			slog.Info(fmt.Sprintf("[PENDING] END | provider=%s | model=%s", k.name, routeModel))
 			if err != nil {

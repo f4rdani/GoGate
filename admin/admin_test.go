@@ -75,7 +75,7 @@ func TestDiagTestModelReasoningFlag(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "k", "my-reasoner", "openai")
+	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "k", "my-reasoner", "openai", "")
 	if err != nil {
 		t.Fatalf("diag test failed: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestDiagTestModelReasoningFlag(t *testing.T) {
 		t.Error("reasoning flag must be true")
 	}
 
-	text2, _, reasoning2, err := diagTestModel(nil, srv.URL, "k", "plain", "openai")
+	text2, _, reasoning2, err := diagTestModel(nil, srv.URL, "k", "plain", "openai", "")
 	if err != nil || text2 != "ok" || !reasoning2 {
 		// NOTE: body still carries reasoning_content, so detection stays true
 		// regardless of model id — this asserts body-evidence wins.
@@ -118,7 +118,7 @@ func TestDiagTestModelOpenCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "sk-test", "mimo-v2.5-free", "opencode")
+	text, latency, reasoning, err := diagTestModel(nil, srv.URL, "sk-test", "mimo-v2.5-free", "opencode", "")
 	if err != nil {
 		t.Fatalf("diag opencode test failed: %v", err)
 	}

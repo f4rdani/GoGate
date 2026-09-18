@@ -106,6 +106,7 @@ type BaseProvider struct {
 	relaySecret  string
 	apiKeys      []*UpstreamKey
 	counter      atomic.Uint64
+	keyRotation  string // "round-robin" (default) or "sticky" (primary key first)
 	client       *http.Client
 	models       map[string]bool
 	healthy      atomic.Bool // current health status
@@ -206,7 +207,10 @@ func (b *BaseProvider) APIKeys() []*UpstreamKey {
 	return b.apiKeys
 }
 
-// NextAPIKey returns the next active API key in round-robin order.
+// NextAPIKey returns the next active API key.
+// Round-robin (default) rotates keys on every request to spread quota usage.
+// Sticky always serves the first healthy key (config order) and only fails
+// over when it is circuit-broken — useful for primary/backup key setups.
 // Returns error if all keys are currently circuit-broken.
 func (b *BaseProvider) NextAPIKey() (*UpstreamKey, error) {
 	total := uint64(len(b.apiKeys))
@@ -214,8 +218,18 @@ func (b *BaseProvider) NextAPIKey() (*UpstreamKey, error) {
 		return &UpstreamKey{Key: ""}, nil
 	}
 
-	startIdx := b.counter.Add(1) - 1
 	now := time.Now().UnixNano()
+
+	if b.keyRotation == "sticky" {
+		for _, key := range b.apiKeys {
+			if now >= key.DisabledUntil.Load() {
+				return key, nil
+			}
+		}
+		return nil, fmt.Errorf("all %d API keys for provider %s are currently circuit-broken", total, b.name)
+	}
+
+	startIdx := b.counter.Add(1) - 1
 
 	for i := uint64(0); i < total; i++ {
 		idx := (startIdx + i) % total
@@ -304,15 +318,34 @@ func describeChatRequest(req *models.ChatCompletionRequest) (msgs, tools int) {
 }
 
 // logAttempt emits one 9router-style request line showing exactly which
-// provider, model, format, mode, and key serve the attempt.
-func (b *BaseProvider) logAttempt(model string, req *models.ChatCompletionRequest, key *UpstreamKey, stream bool) {
+// provider, model, format, mode, key, and egress proxy serve the attempt.
+// egressProxy is the checked-out pool URL ("" = direct); credentials are
+// never printed, only scheme://host.
+func (b *BaseProvider) logAttempt(model string, req *models.ChatCompletionRequest, key *UpstreamKey, stream bool, egressProxy string) {
 	msgs, tools := describeChatRequest(req)
 	mode := "UNARY"
 	if stream {
 		mode = "STREAM"
 	}
-	slog.Info(fmt.Sprintf("▶ POST %s/%s · FMT:%s · %s · %d MSG · %d TOOL · KEY:%s",
-		b.name, model, b.formatTag(), mode, msgs, tools, b.keyLabel(key)))
+	slog.Info(fmt.Sprintf("▶ POST %s/%s · FMT:%s · %s · %d MSG · %d TOOL · KEY:%s · %s",
+		b.name, model, b.formatTag(), mode, msgs, tools, b.keyLabel(key), egressLabel(egressProxy)))
+}
+
+// egressLabel formats a checked-out proxy URL for one-line logs:
+// "PROXY http://1.2.3.4:8080" or "DIRECT". Credentials are stripped.
+func egressLabel(proxyURL string) string {
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		return "DIRECT"
+	}
+	if u, err := url.Parse(proxyURL); err == nil && u.Host != "" {
+		scheme := u.Scheme
+		if scheme == "" {
+			scheme = "http"
+		}
+		return fmt.Sprintf("PROXY %s://%s", scheme, u.Host)
+	}
+	return "PROXY ***"
 }
 
 // IsSaturationError reports whether err is a per-provider concurrency
@@ -582,6 +615,7 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		baseURL:      cfg.BaseURL,
 		relayURL:     cfg.RelayURL,
 		relaySecret:  cfg.RelaySecret,
+		keyRotation:  cfg.KeyRotationMode(),
 		apiKeys:      keys,
 		client:       &http.Client{Transport: transport}, // no Timeout — streaming-safe
 		models:       modelSet,

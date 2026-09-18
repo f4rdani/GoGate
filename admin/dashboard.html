@@ -86,6 +86,9 @@
 
   --terminal-bg: #050811;
   --terminal-border: #162032;
+
+  --scroll-thumb: rgba(148, 163, 184, 0.32);
+  --scroll-thumb-hover: rgba(148, 163, 184, 0.55);
 }
 
 [data-theme="light"] {
@@ -138,9 +141,28 @@
 
   --terminal-bg: #090d16;
   --terminal-border: #1e293b;
+
+  --scroll-thumb: rgba(100, 116, 139, 0.45);
+  --scroll-thumb-hover: rgba(100, 116, 139, 0.7);
 }
 
-html { font-size: 14px; }
+html { font-size: 14px; color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }
+
+/* Slim translucent scrollbars (theme-aware, never covering content) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 body {
   font-family: var(--font-sans);
   background-color: var(--bg);
@@ -939,20 +961,58 @@ label {
   color: var(--text2);
 }
 label.full { grid-column: 1 / -1; }
-input[type="text"],
-input[type="password"],
-input[type="number"],
+/* NOTE: plain `input` (no type attr, e.g. modal + hub fields) must be styled too,
+   otherwise it falls back to the white native browser control in dark mode. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="hidden"]):not([type="submit"]):not([type="button"]),
 select,
 textarea {
-  padding: 0.5rem 0.75rem;
+  padding: 0.62rem 0.8rem;
+  min-height: 2.5rem;
+  line-height: 1.5;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text1);
-  font-size: 0.82rem;
+  font-size: 0.85rem;
   font-family: inherit;
   outline: none;
   transition: all 0.15s ease;
+}
+input::placeholder, select::placeholder, textarea::placeholder {
+  color: var(--text4);
+  opacity: 0.65;
+}
+select option {
+  background: var(--surface);
+  color: var(--text1);
+}
+input[type="file"] {
+  padding: 0.5rem 0.6rem;
+  background: var(--surface);
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--radius);
+  color: var(--text1);
+  font-size: 0.82rem;
+  width: 100%;
+}
+input[type="file"]::file-selector-button {
+  background: var(--surface-active);
+  border: 1px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  color: var(--text1);
+  padding: 0.35rem 0.7rem;
+  margin-right: 0.6rem;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+/* Chrome autofill keeps its pale-yellow sheet in dark mode — force theme colors */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--text1);
+  -webkit-box-shadow: 0 0 0 1000px var(--surface) inset;
+  transition: background-color 9999s ease-in-out 0s;
 }
 input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
@@ -1299,6 +1359,16 @@ input:focus, select:focus, textarea:focus {
 .ingress-desc {
   font-size: 0.82rem;
   color: var(--text2);
+}
+
+/* Free Proxy Pool overview: same grid flow as its neighbours, but visually
+   distinct via a green accent so it never feels cramped nor oversized */
+#proxyRelayPanel {
+  border-color: var(--green-border);
+  border-left: 3px solid var(--green);
+}
+#proxyListPreview {
+  scrollbar-width: thin;
 }
 
 /* Console Logs Terminal */
@@ -2053,15 +2123,15 @@ input:focus, select:focus, textarea:focus {
             <p id="proxyPoolStatusText" class="ingress-desc">
               Automatic free rotating public proxy pool per-request for providers with custom manual proxies and Cloudflare Relays.
             </p>
-            <div id="proxyPoolDetails" style="display:none; border-top:1px solid var(--border-subtle); padding-top:0.5rem;">
-              <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.75rem; color:var(--text2);">
+            <div id="proxyPoolDetails" style="display:none; border-top:1px solid var(--border-subtle); padding-top:0.65rem;">
+              <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.8rem; color:var(--text2);">
                 <div>Scraped: <strong id="ppTotal" class="mono" style="color:var(--text1)">0</strong></div>
                 <div>Manual: <strong id="ppManual" class="mono" style="color:var(--purple)">0</strong></div>
                 <div>Active &amp; Ready: <strong id="ppHealthy" class="mono" style="color:var(--green)">0</strong></div>
                 <div>Avg Latency: <strong id="ppLatency" class="mono" style="color:var(--cyan)">0ms</strong></div>
                 <div>Last Checked: <span id="ppLastRef" class="mono" style="color:var(--text3)">Never</span></div>
               </div>
-              <div id="proxyListPreview" style="margin-top:0.45rem; display:flex; gap:0.35rem; flex-wrap:wrap; max-height:65px; overflow-y:auto;"></div>
+              <div id="proxyListPreview" style="margin-top:0.5rem; display:flex; gap:0.35rem; flex-wrap:wrap; max-height:120px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border:1px solid var(--border); border-radius:var(--radius);"></div>
             </div>
           </div>
 
@@ -2136,7 +2206,7 @@ input:focus, select:focus, textarea:focus {
             <div class="table-wrap" style="border:none; border-radius:0;">
               <table>
                 <thead>
-                  <tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Avg Latency</th><th>Errors</th></tr>
+                  <tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Cache Hits</th><th>Errors</th></tr>
                 </thead>
                 <tbody id="usageModelTable">
                   <tr><td colspan="5" style="text-align:center;color:var(--text2);font-weight:600;padding:1.5rem 0;">No model usage recorded yet</td></tr>
@@ -2155,7 +2225,7 @@ input:focus, select:focus, textarea:focus {
             <div class="table-wrap" style="border:none; border-radius:0;">
               <table>
                 <thead>
-                  <tr><th>Key Name</th><th>Requests</th><th>Tokens</th><th>Errors</th><th>Last Used</th></tr>
+                  <tr><th>Key Name</th><th>Requests</th><th>Tokens</th><th>Cache Hits</th><th>Errors</th></tr>
                 </thead>
                 <tbody id="usageKeyTable">
                   <tr><td colspan="5" style="text-align:center;color:var(--text2);font-weight:600;padding:1.5rem 0;">No key usage recorded yet</td></tr>
@@ -2195,6 +2265,7 @@ input:focus, select:focus, textarea:focus {
                 <tr>
                   <th>Provider</th>
                   <th>Type</th>
+                  <th>Tier</th>
                   <th>Base URL</th>
                   <th>Keys</th>
                   <th>Models</th>
@@ -2204,7 +2275,7 @@ input:focus, select:focus, textarea:focus {
                 </tr>
               </thead>
               <tbody id="providerTable">
-                <tr><td colspan="8" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Loading providers...</td></tr>
+                <tr><td colspan="9" style="text-align:center;color:var(--text3);padding:1.5rem 0;">Loading providers...</td></tr>
               </tbody>
             </table>
           </div>
@@ -2569,6 +2640,23 @@ input:focus, select:focus, textarea:focus {
                 <pre id="pvRestoredPreview" class="mono" style="font-size:0.78rem; color:var(--green); white-space:pre-wrap; margin:0;"></pre>
               </div>
             </div>
+          </div>
+        </div>
+
+        <!-- Covered Providers: which backends privacy filtering applies to -->
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span>Covered Providers</span>
+            </div>
+            <span class="tag tag-gray" id="pvCoveredCount">0 covered</span>
+          </div>
+          <div class="card-body">
+            <p style="font-size:0.8rem; color:var(--text2); margin-bottom:0.75rem;" id="pvCoveredDesc">
+              Provider yang prompt-nya difilter Privacy Vault sebelum diteruskan ke upstream.
+            </p>
+            <div id="pvCoveredList" style="display:flex; gap:0.45rem; flex-wrap:wrap;"></div>
           </div>
         </div>
       </section>
@@ -3068,17 +3156,15 @@ async function api(path, opts = {}) {
 
 function parseTestErrorDetails(e, ctx = {}) {
   const data = (e && e.data) ? e.data : {};
-  let raw = '';
+  let raw = '', hasMsg = false;
   if (e && typeof e.message === 'string' && e.message) {
-    raw = e.message;
+    raw = e.message; hasMsg = true;
   } else if (typeof e === 'string') {
-    raw = e;
+    raw = e; hasMsg = true;
   } else if (data.error && typeof data.error.message === 'string') {
-    raw = data.error.message;
+    raw = data.error.message; hasMsg = true;
   } else if (typeof data.error === 'string') {
-    raw = data.error;
-  } else {
-    raw = JSON.stringify(e || 'Unknown error');
+    raw = data.error; hasMsg = true;
   }
 
   const provider = ctx.provider || data.provider || '';
@@ -3092,7 +3178,7 @@ function parseTestErrorDetails(e, ctx = {}) {
   let statusBadge = e && e.status ? `HTTP ${e.status}` : 'Request Failed';
   let suggestion = 'Periksa kembali parameter konfigurasi atau log server.';
 
-  const lower = (raw + ' ' + (data.type || '')).toLowerCase();
+  const lower = (raw + ' ' + (data.type || '') + ' ' + (e && e.status ? 'http ' + e.status : '')).toLowerCase();
 
   if (lower.includes('401') || lower.includes('unauthorized') || lower.includes('invalid_api_key') || lower.includes('invalid api key') || lower.includes('incorrect api key')) {
     title = 'Autentikasi Gagal (401 Unauthorized)';
@@ -3141,7 +3227,37 @@ function parseTestErrorDetails(e, ctx = {}) {
     suggestion = 'Server provider AI sedang mengalami gangguan atau pemeliharaan. Silakan coba beberapa saat lagi atau aktifkan model fallback.';
   }
 
-  return { title, location, statusBadge, target: target || data.base_url || '--', latency, raw, suggestion, provider, model };
+  // Rich backend context: diag endpoints return per-key failures (key, proxy,
+  // error), attempts and key_count — surface them so users never must dig logs.
+  const failures = Array.isArray(data.failures) ? data.failures.map(f => {
+    const ki = (f.key_index !== undefined && f.key_index !== null && f.key_index !== '') ? ('Key #' + (parseInt(f.key_index) + 1)) : 'custom key';
+    const km = f.key_masked ? ' (' + f.key_masked + ')' : '';
+    const px = (f.proxy && f.proxy !== 'none') ? ' via ' + f.proxy + (f.proxy_mode && f.proxy_mode !== 'pool' ? ' [' + f.proxy_mode + ']' : '') : ' (direct)';
+    return { label: ki + km + px, error: f.error || 'unknown error' };
+  }) : [];
+  if(data.attempts > 1 && !/sudah coba|dicoba/.test(suggestion)){
+    title += ` (${data.attempts} key dicoba)`;
+    suggestion += ` Semua ${data.attempts} key dicoba dan gagal — kemungkinan limit kuota di semua key atau gangguan upstream.`;
+  }
+  if(!hasMsg){
+    // No usable message from the server — synthesize one from status, backend
+    // message, target and the first per-key failure instead of a JSON dump.
+    const bits = [];
+    if(e && e.status) bits.push('HTTP ' + e.status);
+    if(typeof data.message === 'string' && data.message) bits.push(data.message);
+    if(failures.length && failures[0].error) bits.push('→ ' + failures[0].error);
+    else if(target && target !== '--') bits.push('@ ' + target);
+    raw = bits.join(' ') || 'Unknown error (no detail from server)';
+  }
+
+  return { title, location, statusBadge, target: target || data.base_url || '--', latency, raw, suggestion, provider, model, failures, attempts: data.attempts || 0, keyCount: data.key_count || 0 };
+}
+
+function renderFailureDetailsHTML(parsed){
+  if(!parsed.failures || !parsed.failures.length) return '';
+  const rows = parsed.failures.map(f => `<div style="font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;margin-top:0.2rem;">🔑 ${esc(f.label)} → ${esc(f.error)}</div>`).join('');
+  const head = parsed.attempts > 1 ? `Rincian ${parsed.failures.length} key yang dicoba (gagal semua)` : 'Rincian percobaan key';
+  return `<details style="margin-top:0.35rem;"><summary style="cursor:pointer;font-size:0.73rem;font-weight:700;color:var(--text2);">🔍 ${esc(head)} — klik untuk melihat</summary><div style="margin-top:0.25rem;">${rows}</div></details>`;
 }
 
 function renderTestFailureHTML(parsed) {
@@ -3168,6 +3284,7 @@ function renderTestFailureHTML(parsed) {
     <div style="margin-bottom:0.55rem;">
       <div style="font-size:0.72rem;font-weight:700;color:var(--text3);text-transform:uppercase;margin-bottom:0.25rem;">🔍 Detail Pesan Error dari Server:</div>
       <div class="test-raw-box">${esc(parsed.raw)}</div>
+      ${renderFailureDetailsHTML(parsed)}
     </div>
 
     <div class="test-tip-box">
@@ -4544,6 +4661,41 @@ function renderPrivacy(cfg){
     vBadge.textContent = cfg.enabled ? 'Active' : 'Disabled';
     vBadge.className = 'tag ' + (cfg.enabled ? 'tag-green' : 'tag-gray');
   }
+  renderPrivacyCoverage();
+}
+
+// renderPrivacyCoverage lists which providers privacy filtering applies to,
+// mirroring the backend rule (scope all → everything; free-only → opencode/mimo/tier>=3).
+function renderPrivacyCoverage(){
+  const box = document.getElementById('pvCoveredList');
+  if(!box) return;
+  const cfg = _currentPrivacy || {};
+  const providers = _currentProviders || [];
+  const desc = document.getElementById('pvCoveredDesc');
+  const cnt = document.getElementById('pvCoveredCount');
+  if(!cfg.enabled){
+    if(desc) desc.textContent = 'Privacy Vault nonaktif — tidak ada provider yang difilter.';
+    box.innerHTML = '<span class="tag tag-gray">Vault OFF — semua dilewati</span>';
+    if(cnt) cnt.textContent = '0 covered';
+    return;
+  }
+  const scope = cfg.scope || 'free-only';
+  const covered = [], skipped = [];
+  providers.forEach(p => {
+    if(scope === 'all'){ covered.push(p); return; }
+    const t = String(p.type || '').toLowerCase();
+    if(t === 'opencode' || t === 'mimo' || (parseInt(p.tier) || 1) >= 3) covered.push(p);
+    else skipped.push(p);
+  });
+  if(desc) desc.textContent = scope === 'all'
+    ? 'Scope "all" — semua request ke semua provider difilter.'
+    : 'Scope "free-only" — hanya tier gratis/publik (OpenCode, MiMo, Tier 3) yang difilter; model paid dilewati.';
+  if(cnt) cnt.textContent = covered.length + ' covered';
+  const chip = (p, ok) => ok
+    ? `<span class="tag tag-green" title="Prompt ke ${esc(p.name)} difilter Privacy Vault">🛡️ ${esc(p.name)}</span>`
+    : `<span class="tag tag-gray" title="${esc(p.name)} paid — dilewati">⏭️ ${esc(p.name)}</span>`;
+  box.innerHTML = covered.map(p => chip(p, true)).join('') + skipped.map(p => chip(p, false)).join('')
+    || '<span style="color:var(--text3);font-size:0.8rem;">Belum ada provider.</span>';
 }
 
 async function togglePrivacyGlobal(){
@@ -4690,7 +4842,7 @@ function renderProviders(list){
   const tb = document.getElementById('providerTable');
   if(!tb) return;
   if(!list.length){
-    tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No providers configured yet</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No providers configured yet</td></tr>';
     return;
   }
   tb.innerHTML = list.map(p => {
@@ -4708,6 +4860,11 @@ function renderProviders(list){
                       : p.healthy ? '<span class="tag tag-green">HEALTHY</span>'
                       : '<span class="tag tag-orange">DOWN</span>';
 
+    const tierNum = parseInt(p.tier) || 1;
+    const tierBadge = tierNum >= 3 ? '<span class="tag tag-green" title="Tier 3 — Free">T3 Free</span>'
+                    : tierNum === 2 ? '<span class="tag tag-cyan" title="Tier 2 — Cheap">T2 Cheap</span>'
+                    : '<span class="tag tag-blue" title="Tier 1 — Subscription">T1 Sub</span>';
+
     const healthDot = `<span class="health-dot ${p.disabled?'disabled':p.healthy?'up':'down'}"></span>`;
     const latencyPill = p.latency_ms ? `<span class="tag tag-gray mono" style="font-size:0.65rem;">${p.latency_ms}ms</span>` : '';
 
@@ -4720,6 +4877,7 @@ function renderProviders(list){
         </div>
       </td>
       <td><span class="tag tag-blue">${esc(p.type)}</span></td>
+      <td>${tierBadge}</td>
       <td class="mono" style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.base_url||'--')}</td>
       <td><span class="tag tag-gray">${(p.api_keys||[]).length} keys</span></td>
       <td><span class="tag tag-gray">${(p.models||[]).length} models</span></td>
@@ -4732,6 +4890,7 @@ function renderProviders(list){
       </td>
     </tr>`;
   }).join('');
+  renderPrivacyCoverage();
 }
 
 function isModelCombo(m){
@@ -4858,33 +5017,63 @@ function renderKeys(list){
 }
 
 function renderUsage(usage){
+  // Backend shape: {by_model: {name: {total_requests, total_tokens, total_cache_hits, total_errors}}, ...}
+  // (legacy dashboard builds used `models`/`keys` with short field names — accept both).
+  const num = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+  const stat = m => ({
+    requests: num(m.total_requests ?? m.requests),
+    tokens: num(m.total_tokens),
+    hits: num(m.total_cache_hits ?? m.cache_hits),
+    errors: num(m.total_errors ?? m.errors),
+  });
+  const sortByActivity = entries => entries.sort((a, b) =>
+    ((b[1].total_requests || b[1].requests || 0) + (b[1].total_errors || b[1].errors || 0)) -
+    ((a[1].total_requests || a[1].requests || 0) + (a[1].total_errors || a[1].errors || 0)));
+
   const mTable = document.getElementById('usageModelTable');
-  if(mTable && usage && usage.models){
-    const entries = Object.entries(usage.models);
+  const modelMap = (usage && (usage.by_model || usage.models)) || {};
+  if(mTable){
+    const entries = sortByActivity(Object.entries(modelMap));
     if(entries.length){
-      mTable.innerHTML = entries.map(([name, m]) => `<tr>
+      mTable.innerHTML = entries.map(([name, m]) => {
+        const s = stat(m);
+        return `<tr>
         <td><strong class="mono">${esc(name)}</strong></td>
-        <td>${fmt(m.requests||0)}</td>
-        <td>${fmt(m.total_tokens||0)}</td>
-        <td>${(m.avg_latency_ms||0).toFixed(0)}ms</td>
-        <td>${m.errors ? `<span class="tag tag-red">${m.errors}</span>` : '<span style="color:var(--green)">0</span>'}</td>
-      </tr>`).join('');
+        <td>${fmt(s.requests)}</td>
+        <td>${fmt(s.tokens)}</td>
+        <td>${s.hits ? fmt(s.hits) : '<span style="color:var(--text3)">0</span>'}</td>
+        <td>${s.errors ? `<span class="tag tag-red">${s.errors}</span>` : '<span style="color:var(--green)">0</span>'}</td>
+      </tr>`;
+      }).join('');
     } else {
       mTable.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No model usage recorded yet</td></tr>';
     }
   }
 
+  // by_api_key is keyed by key prefix (first 8 chars) — resolve display names
+  // against the known client keys so the table shows real names, not prefixes.
+  const nameByPrefix = {};
+  try{
+    ((_currentKeys || []).forEach(k => {
+      if(k && k.key) nameByPrefix[String(k.key).substring(0, 8)] = k.name || String(k.key).substring(0, 8);
+    }));
+  }catch(e){}
   const kTable = document.getElementById('usageKeyTable');
-  if(kTable && usage && usage.keys){
-    const entries = Object.entries(usage.keys);
+  const keyMap = (usage && (usage.by_api_key || usage.keys)) || {};
+  if(kTable){
+    const entries = sortByActivity(Object.entries(keyMap));
     if(entries.length){
-      kTable.innerHTML = entries.map(([keyHash, k]) => `<tr>
-        <td><strong class="mono">${esc(k.name||keyHash.substring(0,8))}</strong></td>
-        <td>${fmt(k.requests||0)}</td>
-        <td>${fmt(k.total_tokens||0)}</td>
-        <td>${k.errors ? `<span class="tag tag-red">${k.errors}</span>` : '<span style="color:var(--green)">0</span>'}</td>
-        <td style="font-size:0.75rem;color:var(--text3);">${k.last_used ? new Date(k.last_used).toLocaleTimeString() : 'Never'}</td>
-      </tr>`).join('');
+      kTable.innerHTML = entries.map(([prefix, k]) => {
+        const s = stat(k);
+        const label = (k && k.name) || nameByPrefix[prefix] || (prefix.length > 12 ? prefix.substring(0, 8) + '…' : prefix);
+        return `<tr>
+        <td><strong class="mono">${esc(label)}</strong></td>
+        <td>${fmt(s.requests)}</td>
+        <td>${fmt(s.tokens)}</td>
+        <td>${s.hits ? fmt(s.hits) : '<span style="color:var(--text3)">0</span>'}</td>
+        <td>${s.errors ? `<span class="tag tag-red">${s.errors}</span>` : '<span style="color:var(--green)">0</span>'}</td>
+      </tr>`;
+      }).join('');
     } else {
       kTable.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text3);padding:1.5rem 0;">No key usage recorded yet</td></tr>';
     }
@@ -5000,6 +5189,17 @@ async function toggleProviderStatus(name, disable){
   try{
     await api('/admin/providers/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({disabled:disable})});
     toast(`Provider ${name} ${disable?'disabled':'enabled'}`,'info');
+    fetchAll();
+  }catch(e){toast('Error: '+e.message,'error');}
+}
+
+async function toggleHubKeyRotation(provName){
+  const p = (_currentProviders || []).find(x => x.name === provName);
+  const cur = (p && p.key_rotation) ? p.key_rotation : 'round-robin';
+  const next = cur === 'sticky' ? 'round-robin' : 'sticky';
+  try{
+    await api('/admin/providers/'+encodeURIComponent(provName),{method:'PUT',body:JSON.stringify({key_rotation: next})});
+    toast(next === 'sticky' ? `Rotasi key OFF — ${provName} selalu pakai Key #1 (cadangan saat error)` : `Round-robin ON — ${provName} pakai key bergiliran tiap request`, 'success');
     fetchAll();
   }catch(e){toast('Error: '+e.message,'error');}
 }
@@ -5206,8 +5406,12 @@ function renderProviderHubPage(provName){
         <div class="hub-title" id="hubKeysCountTitle">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><path d="M21 2l-2 2m-1.5 1.5L14 9M3 21l8-8m0 0l4 4-2 2-2-2-4 4"/></svg>
           <span>Upstream API Keys (${getProviderKeyEntries(p).length})</span>
+          ${(p.key_rotation||'round-robin') === 'sticky'
+            ? '<span class="tag tag-blue" title="Selalu pakai Key #1 (primary); pindah ke key cadangan hanya saat error">🎯 Sticky Primary</span>'
+            : '<span class="tag tag-green" title="Setiap request memakai key berikutnya secara bergiliran">🔀 Round-Robin</span>'}
         </div>
         <div style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+          <button class="btn btn-sm ${(p.key_rotation||'round-robin') === 'sticky' ? '' : 'btn-primary'}" onclick="toggleHubKeyRotation('${esc(p.name)}')" title="Round-Robin ON: key dipakai bergiliran tiap request. OFF (Sticky): selalu Key #1, cadangan hanya saat error.">🔀 Round-Robin: ${((p.key_rotation||'round-robin') === 'sticky' ? 'OFF' : 'ON')}</button>
           <button class="btn btn-sm btn-primary" onclick="showAddKeyPrompt('${esc(p.name)}')">+ Add Key</button>
           <button class="btn btn-sm" onclick="testAllProviderKeys('${esc(p.name)}')">Test All Keys</button>
         </div>
@@ -5350,6 +5554,7 @@ function renderHubKeysList(p, filtered){
               <div style="margin-top:0.45rem;padding:0.45rem 0.65rem;background:rgba(239,68,68,0.12);border-radius:6px;font-size:0.75rem;color:var(--red);">
                 <div><strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong></div>
                 <div style="margin-top:0.25rem;font-family:var(--font-mono);font-size:0.72rem;word-break:break-all;color:#fca5a5;">${esc(parsed.raw)}</div>
+                ${renderFailureDetailsHTML(parsed)}
                 <div style="margin-top:0.3rem;color:var(--text2);font-size:0.72rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
               </div>
             `;
@@ -5398,7 +5603,7 @@ function renderHubKeys(p){
     <!-- Search & Filter Controls for Keys -->
     <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
       <div style="position:relative; flex:1; min-width:200px;">
-        <input type="text" id="hubKeySearchInput" class="form-control" style="width:100%; padding:0.42rem 2rem 0.42rem 0.65rem; font-size:0.8rem;" placeholder="Cari API key..." value="${esc(_hubKeySearchQuery)}" oninput="onHubKeySearch(this.value)">
+        <input type="text" id="hubKeySearchInput" class="form-control" style="width:100%; padding:0.6rem 2rem 0.6rem 0.8rem; font-size:0.85rem; min-height:2.5rem;" placeholder="Cari API key..." value="${esc(_hubKeySearchQuery)}" oninput="onHubKeySearch(this.value)">
         ${_hubKeySearchQuery ? `<button type="button" onclick="clearHubKeySearch('${esc(p.name)}')" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--text3); font-size:0.9rem; padding:0 4px;" title="Hapus pencarian">✕</button>` : ''}
       </div>
       <div style="min-width:150px;">
@@ -5671,6 +5876,7 @@ function renderHubModelsTable(p, filtered){
                         <strong>📍 Lokasi Error:</strong> <span style="color:var(--text1);font-weight:600;">${esc(parsed.location)}</span> &bull; <strong>⚠️ ${esc(parsed.statusBadge)}</strong>
                       </div>
                       <div style="font-family:var(--font-mono);font-size:0.72rem;color:#fca5a5;margin-top:0.25rem;word-break:break-all;">${esc(parsed.raw)}</div>
+                      ${renderFailureDetailsHTML(parsed)}
                       <div style="color:var(--text2);font-size:0.72rem;margin-top:0.25rem;">💡 <strong>Saran:</strong> ${esc(parsed.suggestion)}</div>
                     </td>
                   </tr>
@@ -5723,7 +5929,7 @@ function renderHubModels(p){
     <!-- Search & Filter Controls -->
     <div style="display:flex; gap:0.5rem; margin-bottom:0.75rem; flex-wrap:wrap; align-items:center;">
       <div style="position:relative; flex:1; min-width:200px;">
-        <input type="text" id="hubModelSearchInput" class="form-control" style="width:100%; padding:0.42rem 2rem 0.42rem 0.65rem; font-size:0.8rem;" placeholder="Cari route name atau upstream ID..." value="${esc(_hubModelSearchQuery)}" oninput="onHubModelSearch(this.value)">
+        <input type="text" id="hubModelSearchInput" class="form-control" style="width:100%; padding:0.6rem 2rem 0.6rem 0.8rem; font-size:0.85rem; min-height:2.5rem;" placeholder="Cari route name atau upstream ID..." value="${esc(_hubModelSearchQuery)}" oninput="onHubModelSearch(this.value)">
         ${_hubModelSearchQuery ? `<button type="button" onclick="clearHubModelSearch('${esc(p.name)}')" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--text3); font-size:0.9rem; padding:0 4px;" title="Hapus pencarian">✕</button>` : ''}
       </div>
       <div style="min-width:160px;">
@@ -6493,11 +6699,6 @@ async function testHubSingleModel(provName, upstreamTarget, routeName){
     }
   }catch(e){
     const parsed = parseTestErrorDetails(e, { provider: provName, model: upstreamTarget, targetURL: e.data?.target });
-    // If backend tried multiple keys and all failed, surface that info.
-    if(e.data && e.data.attempts > 1){
-      parsed.title += ` (sudah coba ${e.data.attempts} key)`;
-      parsed.suggestion += ` Semua ${e.data.attempts} key dicoba dan gagal — kemungkinan limit kuota di semua key atau gangguan upstream.`;
-    }
     _hubModelTestResults[testKey] = {
       status: 'failed',
       error: e.message,
