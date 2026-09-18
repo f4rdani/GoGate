@@ -4949,7 +4949,7 @@ function renderProviders(list){
       <td>${tierBadge}</td>
       <td class="mono" style="font-size:0.75rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.base_url||'--')}</td>
       <td><span class="tag tag-gray">${(p.api_keys||[]).length} keys</span></td>
-      <td><span class="tag tag-gray">${(p.models||[]).length} models</span></td>
+      <td><span class="tag tag-gray">${Math.max((p.models||[]).length, mmProviderModels(p.name).length)} models</span></td>
       <td>${proxyBadge}</td>
       <td>${statusBadge}</td>
       <td style="text-align:right;white-space:nowrap;">
@@ -7168,7 +7168,21 @@ let _mmEditing = null;
 
 function mmProviderModels(provName){
   const p = (_currentProviders || []).find(x => x.name === provName);
-  return (p && p.models) ? p.models : [];
+  const set = new Set((p && p.models) ? p.models : []);
+  for(const m of (_currentModels || [])){
+    if(!m.strategy && m.provider === provName){
+      const target = m.model || m.name;
+      if(target) set.add(target);
+    }
+    if(m.backends && Array.isArray(m.backends)){
+      for(const b of m.backends){
+        if(b.provider === provName && b.model){
+          set.add(b.model);
+        }
+      }
+    }
+  }
+  return Array.from(set).sort();
 }
 
 function mmStrategyDescHTML(strat){
@@ -7225,7 +7239,7 @@ function mmRefreshDirectModels(){
 function mmBackendProvOpts(selProv){
   return (_currentProviders || []).map(p => {
     const dis = p.disabled ? ' — DISABLED' : '';
-    const mCount = (p.models || []).length;
+    const mCount = mmProviderModels(p.name).length;
     return `<option value="${esc(p.name)}" ${p.name === selProv ? 'selected' : ''}>${esc(p.name)} (${esc(p.type)}${dis} • ${mCount} model)</option>`;
   }).join('');
 }
@@ -7373,7 +7387,7 @@ function mmRenderCatalog(){
 
   for(const p of provs){
     if(filterProv && p.name !== filterProv) continue;
-    const pModels = p.models || [];
+    const pModels = mmProviderModels(p.name);
     for(const m of pModels){
       totalCount++;
       const pNameLow = (p.name || '').toLowerCase();
@@ -7449,8 +7463,8 @@ function showAddModel(){
   _mmComboBackends = [];
   const provs = _currentProviders || [];
   const provOpts = mmBackendProvOpts(provs.length ? provs[0].name : '');
-  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + (p.models||[]).length, 0) + ' model)</option>' +
-    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${(p.models||[]).length} model)</option>`).join('');
+  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + mmProviderModels(p.name).length, 0) + ' model)</option>' +
+    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${mmProviderModels(p.name).length} model)</option>`).join('');
   const directDl = provs.length ? mmProviderModels(provs[0].name).map(m => `<option value="${esc(m)}">`).join('') : '';
 
   openModal('Add Model Route', `
@@ -7595,8 +7609,8 @@ function showEditModel(encName){
   _mmComboBackends = (m.backends && m.backends.length) ? JSON.parse(JSON.stringify(m.backends)) : [];
   const provs = _currentProviders || [];
   const provOpts = mmBackendProvOpts(m.provider || (provs[0] && provs[0].name));
-  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + (p.models||[]).length, 0) + ' model)</option>' +
-    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${(p.models||[]).length} model)</option>`).join('');
+  const catProvOpts = '<option value="">Semua Provider (' + provs.reduce((acc, p) => acc + mmProviderModels(p.name).length, 0) + ' model)</option>' +
+    provs.map(p => `<option value="${esc(p.name)}">${esc(p.name)} (${mmProviderModels(p.name).length} model)</option>`).join('');
   const directDl = mmProviderModels(m.provider || (provs[0] && provs[0].name)).map(x => `<option value="${esc(x)}">`).join('');
   const strat = (m.strategy || 'fallback').toLowerCase();
 

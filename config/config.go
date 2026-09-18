@@ -338,6 +338,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	cfg.SyncProviderModels()
+
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config validation: %w", err)
 	}

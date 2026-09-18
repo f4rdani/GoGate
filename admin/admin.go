@@ -461,10 +461,40 @@ func (a *AdminHandler) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		modelsList := p.Models
-		if modelsList == nil {
-			modelsList = []string{}
+		modelsSet := make(map[string]bool)
+		for _, m := range p.Models {
+			m = strings.TrimSpace(m)
+			if m != "" {
+				modelsSet[m] = true
+			}
 		}
+		for _, mr := range cfg.Models {
+			if mr.Strategy == "" && mr.Provider == p.Name {
+				target := mr.Model
+				if target == "" {
+					target = mr.Name
+				}
+				if target != "" {
+					modelsSet[target] = true
+				}
+			}
+			for _, b := range mr.Backends {
+				if b.Provider == p.Name && b.Model != "" {
+					modelsSet[b.Model] = true
+				}
+			}
+		}
+		for _, dm := range provider.GetCachedDynamicModels(p.Name) {
+			dm = strings.TrimSpace(dm)
+			if dm != "" {
+				modelsSet[dm] = true
+			}
+		}
+		modelsList := make([]string, 0, len(modelsSet))
+		for m := range modelsSet {
+			modelsList = append(modelsList, m)
+		}
+		sort.Strings(modelsList)
 
 		rawKeys := p.APIKeys
 		if rawKeys == nil {
@@ -2528,6 +2558,9 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) · proxy %s · %dms", req.Provider, len(models), proxyLabel, latency))
+		if req.Provider != "" && len(models) > 0 {
+			provider.SetCachedDynamicModels(req.Provider, models)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"ok": true, "models": models, "count": len(models),
@@ -2583,6 +2616,9 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 				resp["key_masked"] = maskDiagKey(cand.Key)
 			}
 			slog.Info(fmt.Sprintf("✅ [DIAG] fetch-models %s ok (%d models) via %s · %s", req.Provider, len(models), keyTag, proxySuffix))
+			if req.Provider != "" && len(models) > 0 {
+				provider.SetCachedDynamicModels(req.Provider, models)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(resp)
 			return

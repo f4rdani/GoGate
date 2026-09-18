@@ -3,12 +3,53 @@ package config
 import (
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
+// SyncProviderModels ensures that every provider's Models list reflects all
+// models mapped to that provider in c.Models (direct routes and combo backends)
+// as well as any existing configured models, with duplicates removed and sorted.
+func (c *Config) SyncProviderModels() {
+	for i := range c.Providers {
+		provName := c.Providers[i].Name
+		modelsSet := make(map[string]bool)
+		for _, m := range c.Providers[i].Models {
+			m = strings.TrimSpace(m)
+			if m != "" {
+				modelsSet[m] = true
+			}
+		}
+		for _, mr := range c.Models {
+			if mr.Strategy == "" && mr.Provider == provName {
+				target := mr.Model
+				if target == "" {
+					target = mr.Name
+				}
+				if target != "" {
+					modelsSet[target] = true
+				}
+			}
+			for _, b := range mr.Backends {
+				if b.Provider == provName && b.Model != "" {
+					modelsSet[b.Model] = true
+				}
+			}
+		}
+		var list []string
+		for m := range modelsSet {
+			list = append(list, m)
+		}
+		sort.Strings(list)
+		c.Providers[i].Models = list
+	}
+}
+
 // SaveConfig writes the config back to the YAML file.
 func (c *Config) SaveConfig(path string) error {
+	c.SyncProviderModels()
 	// Remove env var expansion artifacts — write clean YAML
 	data, err := yaml.Marshal(c)
 	if err != nil {
@@ -145,6 +186,7 @@ func (c *Config) AddModel(m ModelConfig) error {
 		return fmt.Errorf("model %q already exists", m.Name)
 	}
 	c.Models = append(c.Models, m)
+	c.SyncProviderModels()
 	return nil
 }
 
