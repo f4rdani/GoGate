@@ -116,6 +116,10 @@ providers:
       base_url: https://opencode.ai/zen/v1
       api_keys:
         - your_opencode_api_key_here
+      # Optional reverse proxy relays (e.g. Vercel / Cloudflare edge workers) for datacenter IP bypass
+      # relay_urls:
+      #   - https://my-relay-1.vercel.app
+      #   - https://my-relay-2.vercel.app
       models:
         - oc/auto
         - mimo-v2.5-free

@@ -138,6 +138,7 @@ type ProviderConfig struct {
 	ProxyURL            string        `yaml:"proxy_url,omitempty" json:"proxy_url,omitempty"`               // proxy for outbound HTTP requests (e.g. socks5://127.0.0.1:4000)
 	KeyRotation         string        `yaml:"key_rotation,omitempty" json:"key_rotation,omitempty"`       // "round-robin" (default: rotate keys per request) or "sticky" (primary key first, failover on error)
 	RelayURL            string        `yaml:"relay_url,omitempty" json:"relay_url,omitempty"`               // Cloudflare Worker or reverse proxy relay URL (e.g. https://my-worker.workers.dev)
+	RelayURLs           []string      `yaml:"relay_urls,omitempty" json:"relay_urls,omitempty"`             // List of reverse proxy relay URLs rotated round-robin
 	RelaySecret         string        `yaml:"relay_secret,omitempty" json:"relay_secret,omitempty"`         // optional secret passed in X-Relay-Secret header
 	TokenURL            string        `yaml:"token_url,omitempty" json:"token_url,omitempty"`               // OAuth2 token endpoint (type oauth)
 	ClientID            string        `yaml:"client_id,omitempty" json:"client_id,omitempty"`               // OAuth2 client id (type oauth)

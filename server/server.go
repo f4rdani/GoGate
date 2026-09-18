@@ -63,6 +63,9 @@ func wireEgressPool(p provider.Provider, pCfg config.ProviderConfig, proxyPool *
 	if pCfg.ProxyURL == "direct" || pCfg.ProxyURL == "none" {
 		return
 	}
+	if pCfg.RelayURL != "" || len(pCfg.RelayURLs) > 0 || pCfg.Type == "opencode" {
+		return
+	}
 	if pCfg.ProxyURL != "" && pCfg.ProxyURL != "auto" && pCfg.ProxyURL != "pool" {
 		return
 	}

@@ -37,14 +37,25 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 		}
 	}
 
-	sendReq := req
-	if o.providerType == "opencode" {
-		sendReq = PrepareOpenCodeRequest(req)
-		// OpenCode Zen free tier strictly requires streaming upstream.
-		sendReq.Stream = true
+	isResponses := o.providerType == "opencode" && IsOpenCodeResponsesModel(req.Model)
+	endpointPath := "/chat/completions"
+	if isResponses {
+		endpointPath = "/responses"
 	}
 
-	body, err := json.Marshal(sendReq)
+	var body []byte
+	var err error
+	if isResponses {
+		body, err = BuildOpenCodeResponsesRequest(req)
+	} else {
+		sendReq := req
+		if o.providerType == "opencode" {
+			sendReq = PrepareOpenCodeRequest(req)
+			// OpenCode Zen free tier strictly requires streaming upstream.
+			sendReq.Stream = true
+		}
+		body, err = json.Marshal(sendReq)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -62,7 +73,7 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			return nil, &ProviderError{StatusCode: 503, Body: err.Error(), Provider: o.name}
 		}
 
-		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, endpointPath)
 
 		egressProxy := o.checkoutEgress()
 		attemptCtx := ctx
@@ -82,7 +93,11 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
 			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
-		if o.RelayURL() != "" && o.baseURL != "" {
+		if target, path, isRelay := o.ResolveRelayHeaders(endpointPath); isRelay {
+			httpReq.Header.Set("x-relay-target", target)
+			httpReq.Header.Set("x-relay-path", path)
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		} else if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
@@ -139,9 +154,14 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 				}
 				return nil, provErr
 			}
-			chatResp, err := ParseOpenCodeSSEStream(resp.Body, req.Model)
+			var chatResp *models.ChatCompletionResponse
+			if isResponses {
+				chatResp, err = ParseOpenCodeResponsesStream(resp.Body, req.Model)
+			} else {
+				chatResp, err = ParseOpenCodeSSEStream(resp.Body, req.Model)
+			}
 			if err != nil {
-				return nil, fmt.Errorf("parse opencode sse stream: %w", err)
+				return nil, fmt.Errorf("parse opencode stream: %w", err)
 			}
 			if chatResp.Usage != nil {
 				slog.Info(fmt.Sprintf("✓ DONE %s/%s · IN=%d OUT=%d · %dms", o.name, req.Model,
@@ -206,12 +226,23 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		}
 	}
 
-	sendReq := req
-	if o.providerType == "opencode" {
-		sendReq = PrepareOpenCodeRequest(req)
+	isResponses := o.providerType == "opencode" && IsOpenCodeResponsesModel(req.Model)
+	endpointPath := "/chat/completions"
+	if isResponses {
+		endpointPath = "/responses"
 	}
 
-	body, err := json.Marshal(sendReq)
+	var body []byte
+	var err error
+	if isResponses {
+		body, err = BuildOpenCodeResponsesRequest(req)
+	} else {
+		sendReq := req
+		if o.providerType == "opencode" {
+			sendReq = PrepareOpenCodeRequest(req)
+		}
+		body, err = json.Marshal(sendReq)
+	}
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
@@ -229,7 +260,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			return &ProviderError{StatusCode: 503, Body: keyErr.Error(), Provider: o.name}
 		}
 
-		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, "/chat/completions")
+		apiKey, targetURL := o.ResolveKeyAndURL(keyObj.Key, endpointPath)
 
 		egressProxy := o.checkoutEgress()
 		attemptCtx := ctx
@@ -249,7 +280,11 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
 			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
-		if o.RelayURL() != "" && o.baseURL != "" {
+		if target, path, isRelay := o.ResolveRelayHeaders(endpointPath); isRelay {
+			httpReq.Header.Set("x-relay-target", target)
+			httpReq.Header.Set("x-relay-path", path)
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		} else if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
@@ -323,6 +358,10 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 	w.WriteHeader(http.StatusOK)
 	defer resp.Body.Close()
 
+	if isResponses {
+		return PipeOpenCodeResponsesSSE(resp.Body, w, flusher, req.Model)
+	}
+
 	// Pipe upstream SSE directly to client (zero translation needed)
 	bufPtr := streamBufPool.Get().(*[]byte)
 	buf := *bufPtr
@@ -391,7 +430,11 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
 			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
-		if o.RelayURL() != "" && o.baseURL != "" {
+		if target, path, isRelay := o.ResolveRelayHeaders("/embeddings"); isRelay {
+			httpReq.Header.Set("x-relay-target", target)
+			httpReq.Header.Set("x-relay-path", path)
+			httpReq.Header.Set("X-Target-URL", o.baseURL)
+		} else if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "mimo" {

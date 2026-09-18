@@ -103,6 +103,8 @@ type BaseProvider struct {
 	providerType string
 	baseURL      string
 	relayURL     string
+	relayURLs    []string
+	relayIdx     atomic.Uint64
 	relaySecret  string
 	apiKeys      []*UpstreamKey
 	counter      atomic.Uint64
@@ -187,9 +189,44 @@ func (b *BaseProvider) BaseURL() string {
 	return b.baseURL
 }
 
+// DefaultOpenCodeRelays are verified Vercel reverse proxy relays that bypass
+// datacenter IP rate limits and allow seamless access to OpenCode Zen upstream.
+var DefaultOpenCodeRelays = []string{
+	"https://vercel-relay-24n9fxzcp-aidaaltria-gmailcoms-projects.vercel.app",
+	"https://vercel-relayfar-qbt25h6e8-fardaniazhar123-3820.vercel.app",
+	"https://vercel-relay-1722-eihk6amxa-17220245-4791.vercel.app",
+	"https://vercel-altria-pgbjtbtx8-altriagame-5682s-projects.vercel.app",
+	"https://vercel-shaaida-lhfrk5mhm-shaaida.vercel.app",
+}
+
 // RelayURL returns the provider's relay URL (if set).
 func (b *BaseProvider) RelayURL() string {
 	return b.relayURL
+}
+
+// RelayURLs returns the provider's configured relay URLs.
+func (b *BaseProvider) RelayURLs() []string {
+	return b.relayURLs
+}
+
+// NextRelayURL selects the next relay URL to use via round-robin.
+// If relay_urls is configured, it rotates through them.
+// If relay_url is configured, it returns that.
+// If providerType is "opencode" and baseURL is opencode.ai and no relays are explicitly configured,
+// it rotates through DefaultOpenCodeRelays.
+func (b *BaseProvider) NextRelayURL() string {
+	if len(b.relayURLs) > 0 {
+		idx := b.relayIdx.Add(1) - 1
+		return b.relayURLs[idx%uint64(len(b.relayURLs))]
+	}
+	if b.relayURL != "" {
+		return b.relayURL
+	}
+	if b.providerType == "opencode" && (b.baseURL == "" || strings.Contains(b.baseURL, "opencode.ai")) {
+		idx := b.relayIdx.Add(1) - 1
+		return DefaultOpenCodeRelays[idx%uint64(len(DefaultOpenCodeRelays))]
+	}
+	return ""
 }
 
 // RelaySecret returns the provider's relay secret header value (if set).
@@ -220,11 +257,16 @@ func (b *BaseProvider) NextAPIKey() (*UpstreamKey, error) {
 
 	now := time.Now().UnixNano()
 
+	isRealOpenCode := b.providerType == "opencode" && (b.baseURL == "" || strings.Contains(b.baseURL, "opencode.ai"))
+
 	if b.keyRotation == "sticky" {
 		for _, key := range b.apiKeys {
 			if now >= key.DisabledUntil.Load() {
 				return key, nil
 			}
+		}
+		if isRealOpenCode && len(b.apiKeys) > 0 {
+			return b.apiKeys[0], nil
 		}
 		return nil, fmt.Errorf("all %d API keys for provider %s are currently circuit-broken", total, b.name)
 	}
@@ -239,6 +281,10 @@ func (b *BaseProvider) NextAPIKey() (*UpstreamKey, error) {
 		}
 	}
 
+	if isRealOpenCode && len(b.apiKeys) > 0 {
+		return b.apiKeys[startIdx%total], nil
+	}
+
 	return nil, fmt.Errorf("all %d API keys for provider %s are currently circuit-broken", total, b.name)
 }
 
@@ -248,10 +294,26 @@ func (b *BaseProvider) SupportsModel(model string) bool {
 }
 
 // keyAttempts returns how many upstream keys a single call may try.
-// Keyless providers (e.g. opencode free tier) get exactly one attempt.
+// Keyless providers with relays (e.g. opencode) get attempts equal to the relay count.
 func (b *BaseProvider) keyAttempts() int {
+	isRealOpenCode := b.providerType == "opencode" && (b.baseURL == "" || strings.Contains(b.baseURL, "opencode.ai"))
 	if len(b.apiKeys) == 0 {
+		if len(b.relayURLs) > 0 {
+			return len(b.relayURLs)
+		}
+		if isRealOpenCode {
+			return len(DefaultOpenCodeRelays)
+		}
 		return 1
+	}
+	if isRealOpenCode {
+		attempts := len(b.apiKeys)
+		if len(b.relayURLs) > attempts {
+			attempts = len(b.relayURLs)
+		} else if len(DefaultOpenCodeRelays) > attempts {
+			attempts = len(DefaultOpenCodeRelays)
+		}
+		return attempts
 	}
 	return len(b.apiKeys)
 }
@@ -398,8 +460,9 @@ func (b *BaseProvider) ResolveKeyAndURL(rawKey, endpointPath string) (string, st
 	apiKey := rawKey
 	baseURL := b.baseURL
 
-	if b.relayURL != "" {
-		baseURL = b.relayURL
+	relay := b.NextRelayURL()
+	if relay != "" {
+		baseURL = relay
 	} else if b.providerType == "cloudflare" && strings.Contains(rawKey, ":") {
 		parts := strings.SplitN(rawKey, ":", 2)
 		accountID := parts[0]
@@ -412,6 +475,29 @@ func (b *BaseProvider) ResolveKeyAndURL(rawKey, endpointPath string) (string, st
 		return apiKey, baseURL
 	}
 	return apiKey, baseURL + endpointPath
+}
+
+// ResolveRelayHeaders returns x-relay-target and x-relay-path headers when routing through a reverse proxy relay.
+func (b *BaseProvider) ResolveRelayHeaders(endpointPath string) (relayTarget string, relayPath string, isRelay bool) {
+	isRealOpenCode := b.providerType == "opencode" && (b.baseURL == "" || strings.Contains(b.baseURL, "opencode.ai"))
+	if b.relayURL == "" && len(b.relayURLs) == 0 && !isRealOpenCode {
+		return "", "", false
+	}
+	if b.baseURL == "" {
+		return "", "", false
+	}
+	parsed, err := url.Parse(b.baseURL)
+	if err != nil {
+		return "", "", false
+	}
+	relayTarget = parsed.Scheme + "://" + parsed.Host
+	basePath := strings.TrimRight(parsed.Path, "/")
+	if strings.HasSuffix(basePath, endpointPath) {
+		relayPath = basePath
+	} else {
+		relayPath = basePath + endpointPath
+	}
+	return relayTarget, relayPath, true
 }
 
 // ForwardUpstream sends a raw upstream request (binary/multipart friendly,
@@ -614,6 +700,7 @@ func NewProviderFromConfig(cfg config.ProviderConfig) (Provider, error) {
 		providerType: cfg.Type,
 		baseURL:      cfg.BaseURL,
 		relayURL:     cfg.RelayURL,
+		relayURLs:    cfg.RelayURLs,
 		relaySecret:  cfg.RelaySecret,
 		keyRotation:  cfg.KeyRotationMode(),
 		apiKeys:      keys,
