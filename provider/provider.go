@@ -667,7 +667,10 @@ func FetchUpstreamModels(ctx context.Context, client *http.Client, baseURL, apiK
 	}
 	if providerType == "opencode" {
 		sess := GenerateOpenCodeSessionID()
+		httpReq.Header.Set("x-opencode-client", "cli")
+		httpReq.Header.Set("x-opencode-project", OpenCodeProjectID())
 		httpReq.Header.Set("x-opencode-session", sess)
+		httpReq.Header.Set("x-opencode-request", GenerateOpenCodeRequestID())
 		httpReq.Header.Set("X-Session-ID", sess)
 		httpReq.Header.Set("User-Agent", OpenCodeDefaultUA)
 	} else if providerType == "mimo" {

@@ -37,7 +37,14 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 		}
 	}
 
-	body, err := json.Marshal(req)
+	sendReq := req
+	if o.providerType == "opencode" {
+		sendReq = PrepareOpenCodeRequest(req)
+		// OpenCode Zen free tier strictly requires streaming upstream.
+		sendReq.Stream = true
+	}
+
+	body, err := json.Marshal(sendReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -78,14 +85,7 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
-			sess, tool, ua := GetOpenCodeMeta(attemptCtx)
-			sessionID := TranslateOpenCodeSessionID(sess, tool)
-			httpReq.Header.Set("x-opencode-session", sessionID)
-			httpReq.Header.Set("X-Session-ID", sessionID)
-			httpReq.Header.Set("User-Agent", FormatOpenCodeUserAgent(ua))
-			if apiKey == "" {
-				httpReq.Header.Set("Authorization", "Bearer public")
-			}
+			ApplyOpenCodeHeaders(httpReq, apiKey, attemptCtx)
 		}
 		if o.providerType == "mimo" {
 			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
@@ -111,6 +111,35 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			return nil, fmt.Errorf("do request: %w", err)
 		}
 		o.reportEgress(egressProxy, false)
+
+		if o.providerType == "opencode" {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				respBody, _ := io.ReadAll(resp.Body)
+				provErr := &ProviderError{
+					StatusCode: resp.StatusCode,
+					Body:       string(respBody),
+					Provider:   o.name,
+				}
+				if provErr.IsRetryable() {
+					keyObj.DisabledUntil.Store(time.Now().Add(30 * time.Second).UnixNano())
+					lastErr = provErr
+					continue
+				}
+				return nil, provErr
+			}
+			chatResp, err := ParseOpenCodeSSEStream(resp.Body, req.Model)
+			if err != nil {
+				return nil, fmt.Errorf("parse opencode sse stream: %w", err)
+			}
+			if chatResp.Usage != nil {
+				slog.Info(fmt.Sprintf("✓ DONE %s/%s · IN=%d OUT=%d · %dms", o.name, req.Model,
+					chatResp.Usage.PromptTokens, chatResp.Usage.CompletionTokens, time.Since(start).Milliseconds()))
+			} else {
+				slog.Info(fmt.Sprintf("✓ DONE %s/%s · %dms", o.name, req.Model, time.Since(start).Milliseconds()))
+			}
+			return chatResp, nil
+		}
 
 		respBody, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -166,7 +195,12 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		}
 	}
 
-	body, err := json.Marshal(req)
+	sendReq := req
+	if o.providerType == "opencode" {
+		sendReq = PrepareOpenCodeRequest(req)
+	}
+
+	body, err := json.Marshal(sendReq)
 	if err != nil {
 		return fmt.Errorf("marshal request: %w", err)
 	}
@@ -207,14 +241,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
-			sess, tool, ua := GetOpenCodeMeta(attemptCtx)
-			sessionID := TranslateOpenCodeSessionID(sess, tool)
-			httpReq.Header.Set("x-opencode-session", sessionID)
-			httpReq.Header.Set("X-Session-ID", sessionID)
-			httpReq.Header.Set("User-Agent", FormatOpenCodeUserAgent(ua))
-			if apiKey == "" {
-				httpReq.Header.Set("Authorization", "Bearer public")
-			}
+			ApplyOpenCodeHeaders(httpReq, apiKey, attemptCtx)
 		}
 		if o.providerType == "mimo" {
 			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")

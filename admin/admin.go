@@ -1302,7 +1302,10 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) 
 	}
 	if providerType == "opencode" {
 		sess := provider.GenerateOpenCodeSessionID()
+		req.Header.Set("x-opencode-client", "cli")
+		req.Header.Set("x-opencode-project", provider.OpenCodeProjectID())
 		req.Header.Set("x-opencode-session", sess)
+		req.Header.Set("x-opencode-request", provider.GenerateOpenCodeRequestID())
 		req.Header.Set("X-Session-ID", sess)
 		req.Header.Set("User-Agent", provider.OpenCodeDefaultUA)
 	} else if providerType == "mimo" {
@@ -1401,7 +1404,10 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 		}
 		if providerType == "opencode" {
 			sess := provider.GenerateOpenCodeSessionID()
+			headers["x-opencode-client"] = "cli"
+			headers["x-opencode-project"] = provider.OpenCodeProjectID()
 			headers["x-opencode-session"] = sess
+			headers["x-opencode-request"] = provider.GenerateOpenCodeRequestID()
 			headers["X-Session-ID"] = sess
 			headers["User-Agent"] = provider.OpenCodeDefaultUA
 		} else if providerType == "mimo" {
