@@ -288,6 +288,66 @@ func (r *Router) dynamicModels(ctx context.Context, p provider.Provider) ([]stri
 	return nil, fmt.Errorf("fetch %s catalog: %w", p.Name(), lastErr)
 }
 
+// isBackendFree reports whether a provider or model is considered free tier / public.
+func (r *Router) isBackendFree(p provider.Provider, model string) bool {
+	if up, ok := p.(provider.UpstreamConfigProvider); ok {
+		pType := up.ProviderType()
+		if pType == "opencode" || pType == "mimo" {
+			return true
+		}
+	}
+	mLower := strings.ToLower(model)
+	if strings.Contains(mLower, "free") || model == "oc/auto" || model == "mimo/auto" {
+		return true
+	}
+	if r != nil && r.cfg != nil {
+		for _, pc := range r.cfg.Providers {
+			if pc.Name == p.Name() && pc.Tier >= 3 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// sanitizeForBackend applies privacy redaction/blocking if privacy config is present in ctx.
+func (r *Router) sanitizeForBackend(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest) (*models.ChatCompletionRequest, error) {
+	privCfg, ok := middleware.GetPrivacyConfig(ctx)
+	if !ok || !privCfg.Enabled {
+		return req, nil
+	}
+	// If scope is "all", the request was already sanitized at the proxy handler entry point.
+	if privCfg.Scope != "free-only" {
+		return req, nil
+	}
+	if !r.isBackendFree(p, model) {
+		return req, nil
+	}
+
+	if privCfg.Mode == "block" {
+		if err := middleware.ValidateMessages(req.Messages, privCfg); err != nil {
+			return nil, err
+		}
+		return req, nil
+	}
+
+	vault := middleware.GetPrivacyVault(ctx)
+	sanitizedMsgs, stats := middleware.SanitizeMessagesWithVault(req.Messages, privCfg, vault)
+	if stats != nil && stats.RedactionsCount > 0 {
+		reqCopy := *req
+		reqCopy.Messages = sanitizedMsgs
+		slog.Info("🛡️ [PRIVACY] Sanitized prompt for backend",
+			"provider", p.Name(),
+			"model", model,
+			"redactions", stats.RedactionsCount,
+			"types", stats.DetectedTypes,
+			"mode", privCfg.Mode,
+		)
+		return &reqCopy, nil
+	}
+	return req, nil
+}
+
 func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model string, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, string, error) {
 	if r.overBudget(p.Name()) {
 		return nil, p.Name(), provider.BudgetExceeded(p.Name())
@@ -297,6 +357,12 @@ func (r *Router) executeBackend(ctx context.Context, p provider.Provider, model 
 		return nil, p.Name(), providerSaturated(p.Name())
 	}
 	defer release()
+
+	var sErr error
+	req, sErr = r.sanitizeForBackend(ctx, p, model, req)
+	if sErr != nil {
+		return nil, p.Name(), sErr
+	}
 
 	if model == "oc/auto" {
 		modelsList, err := r.dynamicModels(ctx, p)
@@ -350,6 +416,12 @@ func (r *Router) executeBackendStream(ctx context.Context, p provider.Provider, 
 		return providerSaturated(p.Name())
 	}
 	defer release()
+
+	var sErr error
+	req, sErr = r.sanitizeForBackend(ctx, p, model, req)
+	if sErr != nil {
+		return sErr
+	}
 
 	if model == "oc/auto" {
 		modelsList, err := r.dynamicModels(ctx, p)

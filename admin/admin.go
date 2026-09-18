@@ -294,10 +294,17 @@ func (a *AdminHandler) HandleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uptimeStr := ""
+	if a.stats != nil && !a.stats.StartTime.IsZero() {
+		d := time.Since(a.stats.StartTime).Truncate(time.Second)
+		uptimeStr = d.String()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"total_requests":  a.stats.TotalRequests.Load(),
 		"active_requests": a.stats.ActiveRequests.Load(),
+		"uptime":          uptimeStr,
 	})
 }
 
@@ -1211,7 +1218,9 @@ var providerTemplates = []providerTemplate{
 	{Name: "openrouter", Type: "openai", BaseURL: "https://openrouter.ai/api/v1", Desc: "OpenRouter \u2014 akses 300+ model", HelpURL: "https://openrouter.ai/keys"},
 	{Name: "oauth", Type: "oauth", BaseURL: "", Desc: "OAuth2 generic - token refresh otomatis (isi base_url + token_url + refresh_token)", HelpURL: ""},
 	{Name: "kiro", Type: "kiro", BaseURL: "https://q.us-east-1.amazonaws.com/generateAssistantResponse", Desc: "Kiro AI - free tier via API key atau refresh token", HelpURL: "https://kiro.dev"},
-	{Name: "gemini", Type: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Desc: "Google Gemini \u2014 Gemini 1.5, 2.0, 2.5 Pro/Flash", HelpURL: "https://aistudio.google.com/app/apikey"},
+	{Name: "gemini", Type: "openai", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", Desc: "Google Gemini — Gemini 1.5, 2.0, 2.5 Pro/Flash", HelpURL: "https://aistudio.google.com/app/apikey"},
+	{Name: "opencode", Type: "opencode", BaseURL: "https://opencode.ai/zen/v1", Desc: "OpenCode Zen — Keyless Free Models (MiMo, DeepSeek, Nemotron)", HelpURL: "https://opencode.ai"},
+	{Name: "mimo", Type: "mimo", BaseURL: "https://opencode.ai/zen/v1", Desc: "Xiaomi MiMo Free — Keyless AI via MiMo Code CLI", HelpURL: "https://xiaomimimo.com"},
 }
 
 // HandleTemplates handles GET /admin/templates \u2014 returns provider templates.
@@ -1288,10 +1297,16 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType string) 
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+	} else if providerType == "opencode" {
+		req.Header.Set("Authorization", "Bearer public")
 	}
 	if providerType == "opencode" {
-		req.Header.Set("x-opencode-session", fmt.Sprintf("ses_%d", time.Now().UnixNano()))
-		req.Header.Set("X-Session-ID", fmt.Sprintf("ses_%d", time.Now().UnixNano()))
+		sess := provider.GenerateOpenCodeSessionID()
+		req.Header.Set("x-opencode-session", sess)
+		req.Header.Set("X-Session-ID", sess)
+		req.Header.Set("User-Agent", provider.OpenCodeDefaultUA)
+	} else if providerType == "mimo" {
+		req.Header.Set("X-Mimo-Source", "mimocode-cli")
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
@@ -1381,10 +1396,16 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType s
 		headers["Content-Type"] = "application/json"
 		if apiKey != "" {
 			headers["Authorization"] = "Bearer " + apiKey
+		} else if providerType == "opencode" {
+			headers["Authorization"] = "Bearer public"
 		}
 		if providerType == "opencode" {
-			headers["x-opencode-session"] = fmt.Sprintf("ses_%d", time.Now().UnixNano())
-			headers["X-Session-ID"] = fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			sess := provider.GenerateOpenCodeSessionID()
+			headers["x-opencode-session"] = sess
+			headers["X-Session-ID"] = sess
+			headers["User-Agent"] = provider.OpenCodeDefaultUA
+		} else if providerType == "mimo" {
+			headers["X-Mimo-Source"] = "mimocode-cli"
 		}
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewReader(reqBody))
@@ -2009,10 +2030,6 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
 	}
-	if req.APIKey == "" {
-		a.sendError(w, http.StatusBadRequest, "api_key required")
-		return
-	}
 	// Find template
 	var tmpl *providerTemplate
 	for _, t := range providerTemplates {
@@ -2023,6 +2040,11 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 	}
 	if tmpl == nil {
 		a.sendError(w, http.StatusBadRequest, "Unknown template: "+req.TemplateName)
+		return
+	}
+	isKeyless := tmpl.Type == "opencode" || tmpl.Type == "mimo"
+	if req.APIKey == "" && !isKeyless {
+		a.sendError(w, http.StatusBadRequest, "api_key required")
 		return
 	}
 	if a.cfg.GetProvider(tmpl.Name) != nil {
@@ -2036,20 +2058,38 @@ func (a *AdminHandler) HandleQuickSetup(w http.ResponseWriter, r *http.Request) 
 	if len(models) == 0 {
 		fetched, err := diagFetchModels(nil, tmpl.BaseURL, req.APIKey, tmpl.Type)
 		if err != nil {
-			a.sendError(w, http.StatusBadGateway, "Failed to fetch models from provider catalog ("+err.Error()+"). Supply \"models\" explicitly.")
-			return
+			if isKeyless {
+				if tmpl.Type == "mimo" {
+					models = []string{"mimo/auto", "mimo-v2.5-free"}
+				} else {
+					models = []string{"oc/auto", "mimo-v2.5-free", "deepseek-v4-flash-free", "nemotron-3-ultra-free"}
+				}
+			} else {
+				a.sendError(w, http.StatusBadGateway, "Failed to fetch models from provider catalog ("+err.Error()+"). Supply \"models\" explicitly.")
+				return
+			}
+		} else {
+			models = fetched
 		}
-		models = fetched
 	}
 	// Create provider
+	tier := 1
+	var keys []string
+	if req.APIKey != "" {
+		keys = []string{req.APIKey}
+	} else if isKeyless {
+		tier = 3
+		keys = []string{}
+	}
 	p := config.ProviderConfig{
 		Name:    tmpl.Name,
 		Type:    tmpl.Type,
 		BaseURL: tmpl.BaseURL,
-		APIKeys: []string{req.APIKey},
+		APIKeys: keys,
 		Models:  models,
-		Tier:    1,
+		Tier:    tier,
 	}
+
 	if err := a.cfg.AddProvider(p); err != nil {
 		a.sendError(w, http.StatusConflict, err.Error())
 		return
@@ -2118,6 +2158,65 @@ func (a *AdminHandler) HandleUpdateTokenSaverConfig(w http.ResponseWriter, r *ht
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "updated", "token_saver": update})
 }
+
+// HandleGetPrivacyConfig handles GET /admin/config/privacy.
+func (a *AdminHandler) HandleGetPrivacyConfig(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	a.mu.RLock()
+	priv := a.cfg.Privacy
+	a.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(priv)
+}
+
+// HandleUpdatePrivacyConfig handles PUT /admin/config/privacy.
+func (a *AdminHandler) HandleUpdatePrivacyConfig(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	var update config.PrivacyConfig
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
+		return
+	}
+
+	if update.Mode == "" {
+		update.Mode = "vault"
+	}
+	if update.Scope == "" {
+		update.Scope = "free-only"
+	}
+
+	a.mu.Lock()
+	a.cfg.Privacy = update
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		a.sendError(w, http.StatusInternalServerError, "Save failed: "+err.Error())
+		return
+	}
+
+	slog.Info("privacy config updated",
+		"enabled", update.Enabled,
+		"mode", update.Mode,
+		"scope", update.Scope,
+		"mask_secrets", update.MaskSecrets,
+		"mask_pii", update.MaskPII,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "updated",
+		"privacy": update,
+	})
+}
+
 
 // HandleGetTunnelStatus serves GET /admin/tunnel.
 func (a *AdminHandler) HandleGetTunnelStatus(w http.ResponseWriter, r *http.Request) {
@@ -2270,4 +2369,369 @@ func (a *AdminHandler) HandleToggleProxyPool(w http.ResponseWriter, r *http.Requ
 		json.NewEncoder(w).Encode(map[string]interface{}{"enabled": req.Enabled})
 	}
 }
+
+// ==================== Proxy Pool Manual & Testing Endpoints ====================
+
+// HandleAddManualProxy adds a manual proxy to the pool (POST /admin/proxy-pool/manual).
+func (a *AdminHandler) HandleAddManualProxy(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	var req struct {
+		Proxy string `json:"proxy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	req.Proxy = strings.TrimSpace(req.Proxy)
+	if req.Proxy == "" {
+		a.sendError(w, http.StatusBadRequest, "Proxy address cannot be empty")
+		return
+	}
+
+	entry, err := a.proxyPool.AddManualProxy(r.Context(), req.Proxy)
+	if err != nil {
+		a.sendError(w, http.StatusBadRequest, "Failed to connect to proxy: "+err.Error())
+		return
+	}
+
+	a.mu.Lock()
+	if a.cfg != nil {
+		exists := false
+		for _, mp := range a.cfg.ProxyPool.ManualProxies {
+			if mp == entry.URL {
+				exists = true
+				break
+			}
+		}
+		if !exists {
+			a.cfg.ProxyPool.ManualProxies = append(a.cfg.ProxyPool.ManualProxies, entry.URL)
+		}
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		slog.Warn("failed to persist manual proxy to config file", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Manual proxy verified and added successfully",
+		"proxy":   entry,
+		"stats":   a.proxyPool.Stats(),
+	})
+}
+
+// HandleRemoveManualProxy removes a manual proxy (DELETE /admin/proxy-pool/manual).
+func (a *AdminHandler) HandleRemoveManualProxy(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	proxyURL := r.URL.Query().Get("proxy")
+	if proxyURL == "" {
+		var req struct {
+			Proxy string `json:"proxy"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		proxyURL = req.Proxy
+	}
+	proxyURL = strings.TrimSpace(proxyURL)
+	if proxyURL == "" {
+		a.sendError(w, http.StatusBadRequest, "Proxy address cannot be empty")
+		return
+	}
+
+	a.proxyPool.RemoveManualProxy(proxyURL)
+
+	a.mu.Lock()
+	if a.cfg != nil {
+		var newManuals []string
+		for _, mp := range a.cfg.ProxyPool.ManualProxies {
+			if mp != proxyURL && mp != "http://"+proxyURL {
+				newManuals = append(newManuals, mp)
+			}
+		}
+		a.cfg.ProxyPool.ManualProxies = newManuals
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		slog.Warn("failed to persist proxy removal to config file", "error", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Manual proxy removed",
+		"stats":   a.proxyPool.Stats(),
+	})
+}
+
+// HandleTestProxy tests connectivity to a proxy URL without adding it (POST /admin/proxy-pool/test).
+func (a *AdminHandler) HandleTestProxy(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+	if a.proxyPool == nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy pool is not initialized")
+		return
+	}
+
+	var req struct {
+		Proxy string `json:"proxy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	entry, err := a.proxyPool.TestProxyDirect(r.Context(), req.Proxy)
+	if err != nil {
+		a.sendError(w, http.StatusBadRequest, "Proxy test failed: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": "Proxy is healthy",
+		"proxy":   entry,
+	})
+}
+
+// ==================== Cloudflare Relay (CF Relay) Endpoints ====================
+
+// HandleGetCFRelays lists all configured Cloudflare Relays (GET /admin/cf-relays).
+func (a *AdminHandler) HandleGetCFRelays(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	a.mu.RLock()
+	relays := make([]map[string]interface{}, 0)
+	if a.cfg != nil {
+		for _, cr := range a.cfg.CFRelays {
+			maskedToken := "••••••••"
+			if len(cr.Token) > 6 {
+				maskedToken = cr.Token[:3] + "..." + cr.Token[len(cr.Token)-3:]
+			}
+			relays = append(relays, map[string]interface{}{
+				"name":       cr.Name,
+				"account_id": cr.AccountID,
+				"token":      maskedToken,
+				"has_token":  cr.Token != "",
+				"type":       cr.Type,
+				"base_url":   cr.GetEffectiveBaseURL(),
+			})
+		}
+	}
+	a.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(relays)
+}
+
+// HandleAddCFRelay creates or updates a Cloudflare Relay (POST /admin/cf-relays).
+func (a *AdminHandler) HandleAddCFRelay(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	var req struct {
+		Name      string `json:"name"`
+		AccountID string `json:"account_id"`
+		Token     string `json:"token"`
+		Type      string `json:"type"`
+		BaseURL   string `json:"base_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		a.sendError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	name := strings.TrimSpace(req.Name)
+	accountID := strings.TrimSpace(req.AccountID)
+	token := strings.TrimSpace(req.Token)
+	rType := strings.TrimSpace(req.Type)
+	if rType == "" {
+		rType = "ai-gateway"
+	}
+
+	if name == "" {
+		a.sendError(w, http.StatusBadRequest, "Nama relay wajib diisi")
+		return
+	}
+	if accountID == "" {
+		a.sendError(w, http.StatusBadRequest, "Account ID (id) Cloudflare wajib diisi")
+		return
+	}
+	if token == "" {
+		a.sendError(w, http.StatusBadRequest, "Token Cloudflare wajib diisi")
+		return
+	}
+
+	relay := config.CFRelay{
+		Name:      name,
+		AccountID: accountID,
+		Token:     token,
+		Type:      rType,
+		BaseURL:   strings.TrimSpace(req.BaseURL),
+	}
+
+	a.mu.Lock()
+	if a.cfg != nil {
+		found := false
+		for i, existing := range a.cfg.CFRelays {
+			if strings.EqualFold(existing.Name, name) {
+				a.cfg.CFRelays[i] = relay
+				found = true
+				break
+			}
+		}
+		if !found {
+			a.cfg.CFRelays = append(a.cfg.CFRelays, relay)
+		}
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		a.sendError(w, http.StatusInternalServerError, "Failed to save configuration: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("Cloudflare Relay '%s' saved successfully", name),
+		"relay": map[string]interface{}{
+			"name":       relay.Name,
+			"account_id": relay.AccountID,
+			"type":       relay.Type,
+			"base_url":   relay.GetEffectiveBaseURL(),
+		},
+	})
+}
+
+// HandleDeleteCFRelay deletes a Cloudflare Relay (DELETE /admin/cf-relays/{name}).
+func (a *AdminHandler) HandleDeleteCFRelay(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	name := extractName(r.URL.Path, "/admin/cf-relays/")
+	if name == "" {
+		a.sendError(w, http.StatusBadRequest, "Relay name is required")
+		return
+	}
+
+	a.mu.Lock()
+	if a.cfg != nil {
+		var filtered []config.CFRelay
+		for _, cr := range a.cfg.CFRelays {
+			if !strings.EqualFold(cr.Name, name) {
+				filtered = append(filtered, cr)
+			}
+		}
+		a.cfg.CFRelays = filtered
+	}
+	a.mu.Unlock()
+
+	if err := a.saveAndReload(); err != nil {
+		a.sendError(w, http.StatusInternalServerError, "Failed to save configuration: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"message": fmt.Sprintf("Cloudflare Relay '%s' deleted", name),
+	})
+}
+
+// HandleTestCFRelay tests connectivity to a Cloudflare Relay (POST /admin/cf-relays/test).
+func (a *AdminHandler) HandleTestCFRelay(w http.ResponseWriter, r *http.Request) {
+	if !a.checkAuth(r) {
+		a.sendError(w, http.StatusUnauthorized, "Invalid admin secret")
+		return
+	}
+
+	var req struct {
+		Name      string `json:"name"`
+		AccountID string `json:"account_id"`
+		Token     string `json:"token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	accountID := strings.TrimSpace(req.AccountID)
+	token := strings.TrimSpace(req.Token)
+	name := strings.TrimSpace(req.Name)
+
+	if accountID == "" || token == "" {
+		if name != "" && a.cfg != nil {
+			a.mu.RLock()
+			cr := a.cfg.FindCFRelay(name)
+			if cr != nil {
+				accountID = cr.AccountID
+				token = cr.Token
+			}
+			a.mu.RUnlock()
+		}
+	}
+
+	if accountID == "" || token == "" {
+		a.sendError(w, http.StatusBadRequest, "Account ID and Token are required to test Cloudflare Relay")
+		return
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	testURL := fmt.Sprintf("https://api.cloudflare.com/client/v4/accounts/%s/ai/models/search", accountID)
+	httpReq, err := http.NewRequestWithContext(r.Context(), "GET", testURL, nil)
+	if err != nil {
+		a.sendError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+
+	start := time.Now()
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		a.sendError(w, http.StatusBadRequest, "Cloudflare connection error: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	latency := time.Since(start)
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		a.sendError(w, http.StatusBadRequest, fmt.Sprintf("Cloudflare authentication failed (status %d): Check Account ID and Token", resp.StatusCode))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "ok",
+		"message":     fmt.Sprintf("Cloudflare Relay connection verified (latency: %dms, status: %d)", latency.Milliseconds(), resp.StatusCode),
+		"latency_ms":  latency.Milliseconds(),
+		"status_code": resp.StatusCode,
+	})
+}
+
 

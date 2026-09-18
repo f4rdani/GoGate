@@ -23,6 +23,7 @@ import (
 
 // Stats tracks request statistics.
 type Stats struct {
+	StartTime      time.Time
 	TotalRequests  atomic.Int64
 	ActiveRequests atomic.Int64
 }
@@ -36,6 +37,7 @@ type Handler struct {
 	cache           *cache.LRUCache
 	tracker         *usage.Tracker
 	tokenSaverCfg   config.TokenSaverConfig
+	privacyCfg      config.PrivacyConfig
 	Stats           *Stats
 	dynamicModelsMu sync.Mutex
 	dynamicModels   map[string][]string // providerName -> list of model IDs with prefix
@@ -43,16 +45,28 @@ type Handler struct {
 }
 
 // NewHandler creates a new proxy handler.
-func NewHandler(r *router.Router, ks *auth.KeyStore, limiter *middleware.ConcurrencyLimiter, tsCfg config.TokenSaverConfig) *Handler {
+func NewHandler(r *router.Router, ks *auth.KeyStore, limiter *middleware.ConcurrencyLimiter, tsCfg config.TokenSaverConfig, privCfg ...config.PrivacyConfig) *Handler {
+	var pCfg config.PrivacyConfig
+	if len(privCfg) > 0 {
+		pCfg = privCfg[0]
+	}
 	return &Handler{
 		router:        r,
 		keyStore:      ks,
 		limiter:       limiter,
 		tokenSaverCfg: tsCfg,
-		Stats:         &Stats{},
+		privacyCfg:    pCfg,
+		Stats:         &Stats{StartTime: time.Now()},
 		dynamicModels: make(map[string][]string),
 		lastFetch:     make(map[string]time.Time),
 	}
+}
+
+// SetPrivacyConfig sets the privacy filter configuration.
+func (h *Handler) SetPrivacyConfig(p config.PrivacyConfig) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.privacyCfg = p
 }
 
 // SetCache sets the response cache for the handler.
@@ -100,8 +114,8 @@ func (h *Handler) GetLimiter() *middleware.ConcurrencyLimiter {
 	return h.limiter
 }
 
-// UpdateConfig updates the router, keyStore, limiter, and tokenSaverCfg pointer thread-safely.
-func (h *Handler) UpdateConfig(r *router.Router, ks *auth.KeyStore, limiter *middleware.ConcurrencyLimiter, tsCfg *config.TokenSaverConfig) {
+// UpdateConfig updates the router, keyStore, limiter, tokenSaverCfg, and privacyCfg pointer thread-safely.
+func (h *Handler) UpdateConfig(r *router.Router, ks *auth.KeyStore, limiter *middleware.ConcurrencyLimiter, tsCfg *config.TokenSaverConfig, privCfg ...*config.PrivacyConfig) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.router = r
@@ -112,7 +126,19 @@ func (h *Handler) UpdateConfig(r *router.Router, ks *auth.KeyStore, limiter *mid
 	if tsCfg != nil {
 		h.tokenSaverCfg = *tsCfg
 	}
+	if len(privCfg) > 0 && privCfg[0] != nil {
+		h.privacyCfg = *privCfg[0]
+	}
 	h.wireBudgetCheckerLocked()
+}
+
+// isPrivacyFilterBypassed reports whether client opted out via `X-Privacy-Filter: off`.
+func isPrivacyFilterBypassed(r *http.Request) bool {
+	switch strings.ToLower(strings.TrimSpace(r.Header.Get("X-Privacy-Filter"))) {
+	case "off", "0", "false", "no", "disabled":
+		return true
+	}
+	return false
 }
 
 // isTokenSaverBypassed reports whether the client opted out of all token
@@ -190,6 +216,7 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 	responseCache := h.cache
 	tracker := h.tracker
 	tsCfg := h.tokenSaverCfg
+	privacyCfg := h.privacyCfg
 	h.mu.RUnlock()
 
 	// === Auth ===
@@ -274,6 +301,43 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// === OpenCode Meta & Context Setup ===
+	reqCtx := r.Context()
+	sessID := r.Header.Get("x-opencode-session")
+	if sessID == "" {
+		sessID = r.Header.Get("X-Session-ID")
+	}
+	clientTool := r.Header.Get("x-client-tool")
+	if clientTool == "" {
+		clientTool = "gogate"
+	}
+	reqCtx = provider.WithOpenCodeMeta(reqCtx, sessID, clientTool, r.Header.Get("User-Agent"))
+
+	// === Privacy Filter (DLP) ===
+	if keyInfo.IsPrivacyFilterEnabled(privacyCfg.Enabled) && !isPrivacyFilterBypassed(r) {
+		vault := middleware.NewPrivacyVault()
+		reqCtx = middleware.WithPrivacyVault(reqCtx, vault)
+		reqCtx = middleware.WithPrivacyConfig(reqCtx, privacyCfg)
+		if privacyCfg.Scope == "all" {
+			if privacyCfg.Mode == "block" {
+				if err := middleware.ValidateMessages(req.Messages, privacyCfg); err != nil {
+					h.sendError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+					return
+				}
+			} else {
+				sanitizedMsgs, stats := middleware.SanitizeMessagesWithVault(req.Messages, privacyCfg, vault)
+				if stats != nil && stats.RedactionsCount > 0 {
+					req.Messages = sanitizedMsgs
+					slog.Info("🛡️ [PRIVACY] Sanitized prompt for request (scope: all)",
+						"redactions", stats.RedactionsCount,
+						"types", stats.DetectedTypes,
+						"mode", privacyCfg.Mode,
+					)
+				}
+			}
+		}
+	}
+
 	// === Check Cache (non-streaming only) ===
 	cacheKey := ""
 	if !req.Stream && responseCache != nil {
@@ -315,7 +379,22 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		err := routerInst.ChatCompletionStream(r.Context(), req.Model, &req, respTracker, flusher)
+		var streamW http.ResponseWriter = respTracker
+		var streamFlusher http.Flusher = flusher
+		var cleanupStream func()
+
+		vault := middleware.GetPrivacyVault(reqCtx)
+		if vault != nil {
+			deanonymizer := middleware.NewDeAnonymizingResponseWriter(respTracker, flusher, vault)
+			streamW = deanonymizer
+			streamFlusher = deanonymizer
+			cleanupStream = deanonymizer.FlushFinal
+		}
+
+		err := routerInst.ChatCompletionStream(reqCtx, req.Model, &req, streamW, streamFlusher)
+		if cleanupStream != nil {
+			cleanupStream()
+		}
 		durationMs := time.Since(startTime).Milliseconds()
 		if err != nil {
 			slog.Error(fmt.Sprintf("🌊 [STREAM] %s | %dms | error: %v", req.Model, durationMs, err))
@@ -334,7 +413,7 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Non-streaming response
-		resp, provName, err := routerInst.ChatCompletion(r.Context(), req.Model, &req)
+		resp, provName, err := routerInst.ChatCompletion(reqCtx, req.Model, &req)
 		durationMs := time.Since(startTime).Milliseconds()
 		if err != nil {
 			slog.Error(fmt.Sprintf("❌ [ERROR] completion error: %v | model=%s | duration=%dms", err, req.Model, durationMs))
@@ -353,6 +432,12 @@ func (h *Handler) HandleChatCompletion(w http.ResponseWriter, r *http.Request) {
 		}
 		if provName == "" && resp != nil {
 			provName = resp.Model
+		}
+
+		// Restore original secrets if vault was active
+		vault := middleware.GetPrivacyVault(reqCtx)
+		if vault != nil && resp != nil {
+			middleware.DeAnonymizeResponse(resp, vault)
 		}
 
 		// Record usage under the real serving provider (not the virtual route)

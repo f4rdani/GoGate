@@ -1883,6 +1883,12 @@ input:focus, select:focus, textarea:focus {
         <span>Token Saver (RTK)</span>
         <span class="nav-badge-pill" id="navRtkBadge">RTK</span>
       </a>
+      <a class="nav-item" data-view="privacy" onclick="switchView('privacy')">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Privacy Vault (DLP)</span>
+        <span class="nav-badge-pill" id="navPrivacyBadge" style="background:var(--green);color:#fff;">Vault</span>
+      </a>
+
 
       <div class="nav-group-title">EGRESS &amp; NETWORK</div>
       <a class="nav-item" data-view="proxypool" onclick="switchView('proxypool')">
@@ -2030,18 +2036,20 @@ input:focus, select:focus, textarea:focus {
                 <span>Free Rotating Proxy Pool</span>
                 <span id="proxyPoolBadge" class="tag tag-gray">Checking...</span>
               </div>
-              <div style="display:flex; align-items:center; gap:0.4rem;">
+              <div style="display:flex; align-items:center; gap:0.4rem; flex-wrap:wrap;">
                 <button id="btnToggleProxyPool" class="toggle-btn off" onclick="toggleProxyPool()">Turn ON</button>
                 <button id="btnRefreshProxyPool" class="btn btn-sm" onclick="refreshProxyPool()" title="Scrape and test latest public proxies">Refresh</button>
-                <button class="btn btn-sm" onclick="showWorkerScriptModal()" title="View Cloudflare Worker Reverse Proxy Relay Script">CF Relay</button>
+                <button class="btn btn-sm" onclick="showAddManualProxyModal()" title="Tambah Proxy Manual">+ Proxy</button>
+                <button class="btn btn-sm btn-purple" onclick="showAddCFRelayModal()" title="Tambah Cloudflare Relay (AI Gateway / Reverse Proxy)">+ CF Relay</button>
               </div>
             </div>
             <p id="proxyPoolStatusText" class="ingress-desc">
-              Automatic free rotating public proxy pool per-request for providers.
+              Automatic free rotating public proxy pool per-request for providers with custom manual proxies and Cloudflare Relays.
             </p>
             <div id="proxyPoolDetails" style="display:none; border-top:1px solid var(--border-subtle); padding-top:0.5rem;">
-              <div style="display:flex; gap:1.15rem; flex-wrap:wrap; font-size:0.75rem; color:var(--text2);">
+              <div style="display:flex; gap:1rem; flex-wrap:wrap; font-size:0.75rem; color:var(--text2);">
                 <div>Scraped: <strong id="ppTotal" class="mono" style="color:var(--text1)">0</strong></div>
+                <div>Manual: <strong id="ppManual" class="mono" style="color:var(--purple)">0</strong></div>
                 <div>Active &amp; Ready: <strong id="ppHealthy" class="mono" style="color:var(--green)">0</strong></div>
                 <div>Avg Latency: <strong id="ppLatency" class="mono" style="color:var(--cyan)">0ms</strong></div>
                 <div>Last Checked: <span id="ppLastRef" class="mono" style="color:var(--text3)">Never</span></div>
@@ -2049,8 +2057,32 @@ input:focus, select:focus, textarea:focus {
               <div id="proxyListPreview" style="margin-top:0.45rem; display:flex; gap:0.35rem; flex-wrap:wrap; max-height:65px; overflow-y:auto;"></div>
             </div>
           </div>
+
+          <!-- Privacy Vault Column -->
+          <div class="ingress-col" id="privacyPanel">
+            <div class="ingress-header">
+              <div class="ingress-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>Privacy Vault (DLP)</span>
+                <span id="privacyStatusBadge" class="tag tag-green">Vault Active</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:0.4rem;">
+                <button id="btnTogglePrivacy" class="toggle-btn on" onclick="togglePrivacyGlobal()">Turn OFF</button>
+                <button class="btn btn-sm" onclick="switchView('privacy')">Manage</button>
+              </div>
+            </div>
+            <p id="privacyOverviewText" class="ingress-desc">
+              Format-preserving synthetic token vault for secrets &amp; PII. Masked to upstream, de-tokenized back to client.
+            </p>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; font-size:0.75rem; margin-top:0.4rem;">
+              <span class="tag tag-blue" id="ovPrivacyScope">Scope: free-only</span>
+              <span class="tag tag-purple" id="ovPrivacySecrets">Secrets: Masked</span>
+              <span class="tag tag-gray" id="ovPrivacyPii">PII: Off</span>
+            </div>
+          </div>
         </div>
         <!-- Quick cURL & Gateway Endpoint Helper Card -->
+
         <div class="card">
           <div class="card-header">
             <div class="card-title">
@@ -2435,31 +2467,138 @@ input:focus, select:focus, textarea:focus {
           </div>
         </div>
       </section>
-      <!-- ================= 6. PROXY POOL VIEW ================= -->
-      <section class="view-panel" id="view-proxypool">
+
+      <!-- ================= 5B. PRIVACY VAULT VIEW ================= -->
+      <section class="view-panel" id="view-privacy">
         <div class="view-header">
           <div class="view-header-left">
             <div>
-              <div class="view-header-title">Free Rotating Proxy Pool</div>
-              <div class="view-header-desc">Automatic public proxy scraper &amp; health-checker for zero-cost IP rotation.</div>
+              <div class="view-header-title">Privacy Vault &amp; DLP Sanitizer</div>
+              <div class="view-header-desc">Bidirectional synthetic tokenization: protects API keys &amp; personal data from AI training without breaking code context.</div>
+            </div>
+            <span class="tag tag-green" id="pvViewBadge">Active</span>
+          </div>
+          <button class="btn btn-primary" onclick="savePrivacyConfig()">
+            Save Configuration
+          </button>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:1.25rem; margin-bottom:1.25rem;">
+          <div class="card" style="margin-bottom:0;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <span>Privacy Vault Master Controls</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <div class="form-grid">
+                <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
+                  <div>
+                    <div style="font-weight:700; color:var(--text1);">Global Privacy Vault</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Filter secrets and sensitive data before sending prompts to AI models</div>
+                  </div>
+                  <input type="checkbox" id="pv_enabled" style="width:18px;height:18px;">
+                </label>
+
+                <label class="full">
+                  <span style="font-weight:700; color:var(--text1);">Protection Mode</span>
+                  <span style="font-size:0.75rem; color:var(--text2); font-weight:500;">Select how sensitive tokens are processed</span>
+                  <select id="pv_mode">
+                    <option value="vault">vault — Synthetic Format-Preserving Bidirectional Tokenization (Recommended)</option>
+                    <option value="redact">redact — Static replacement tags [REDACTED_API_KEY]</option>
+                    <option value="block">block — Immediately reject requests containing secrets (HTTP 400)</option>
+                  </select>
+                </label>
+
+                <label class="full">
+                  <span style="font-weight:700; color:var(--text1);">Enforcement Scope</span>
+                  <span style="font-size:0.75rem; color:var(--text2); font-weight:500;">Determine which backends have privacy filtering applied</span>
+                  <select id="pv_scope">
+                    <option value="free-only">free-only — Filter only Free &amp; Public Tiers (OpenCode, MiMo, Tier 3). Paid models untouched.</option>
+                    <option value="all">all — Filter all requests across all providers unconditionally</option>
+                  </select>
+                </label>
+
+                <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
+                  <div>
+                    <div style="font-weight:700; color:var(--text1);">Mask API Keys &amp; Secrets</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">OpenAI, Anthropic, Gemini, GitHub, JWT, Passwords, RSA keys</div>
+                  </div>
+                  <input type="checkbox" id="pv_mask_secrets" style="width:18px;height:18px;">
+                </label>
+
+                <label class="full" style="flex-direction:row; align-items:center; justify-content:space-between;">
+                  <div>
+                    <div style="font-weight:700; color:var(--text1);">Mask PII (Personal Data)</div>
+                    <div style="font-size:0.75rem; color:var(--text2); font-weight:500;">Email addresses, phone numbers, valid credit cards (Luhn check), IPv4</div>
+                  </div>
+                  <input type="checkbox" id="pv_mask_pii" style="width:18px;height:18px;">
+                </label>
+              </div>
             </div>
           </div>
-          <div style="display:flex; align-items:center; gap:0.5rem;">
+
+          <!-- Interactive Live Test Sandbox -->
+          <div class="card" style="margin-bottom:0;">
+            <div class="card-header">
+              <div class="card-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                <span>Live Vault Simulation Sandbox</span>
+              </div>
+            </div>
+            <div class="card-body">
+              <p style="font-size:0.78rem; color:var(--text2); margin-bottom:0.75rem;">
+                Test how the Privacy Vault intercepts secrets and produces format-preserving synthetic tokens without confusing the AI.
+              </p>
+              <textarea id="pvTestInput" rows="4" style="width:100%; padding:0.6rem; border-radius:var(--radius); background:var(--surface-subtle); border:1px solid var(--border); font-family:monospace; font-size:0.8rem; color:var(--text1);" placeholder="Paste text with secrets here, e.g.&#10;const apiKey = 'sk-proj-abc1234567890abcdef12345';&#10;const email = 'user@example.com';"></textarea>
+              <div style="margin-top:0.65rem; display:flex; justify-content:flex-end;">
+                <button class="btn btn-sm btn-primary" onclick="simulatePrivacyVault()">Simulate Vault Masking</button>
+              </div>
+              <div id="pvTestResult" style="display:none; margin-top:0.75rem; padding:0.75rem; border-radius:var(--radius); background:var(--surface); border:1px solid var(--border);">
+                <div style="font-size:0.72rem; font-weight:700; color:var(--text3); text-transform:uppercase; margin-bottom:0.35rem;">Upstream Sent Payload (Tokenized):</div>
+                <pre id="pvTokenizedPreview" class="mono" style="font-size:0.78rem; color:var(--accent); white-space:pre-wrap; margin:0;"></pre>
+                <div style="font-size:0.72rem; font-weight:700; color:var(--text3); text-transform:uppercase; margin:0.75rem 0 0.35rem 0;">Client Restored Payload (De-Tokenized):</div>
+                <pre id="pvRestoredPreview" class="mono" style="font-size:0.78rem; color:var(--green); white-space:pre-wrap; margin:0;"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 6. PROXY POOL VIEW ================= -->
+      <section class="view-panel" id="view-proxypool">
+
+        <div class="view-header">
+          <div class="view-header-left">
+            <div>
+              <div class="view-header-title">Free Rotating Proxy Pool &amp; Cloudflare Relays</div>
+              <div class="view-header-desc">Automatic public proxy scraper, manual proxy routing, and zero-egress Cloudflare AI Gateway relays.</div>
+            </div>
+          </div>
+          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
             <button class="btn btn-primary" onclick="refreshProxyPool()">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
               Scrape &amp; Refresh
             </button>
+            <button class="btn" onclick="showAddManualProxyModal()">
+              + Add Manual Proxy
+            </button>
+            <button class="btn btn-purple" onclick="showAddCFRelayModal()">
+              + Add CF Relay
+            </button>
             <button class="btn" onclick="showWorkerScriptModal()">
-              Cloudflare Worker Relay
+              CF Worker Script
             </button>
           </div>
         </div>
 
-        <div class="card">
+        <!-- CARD 1: Live Status & Public Rotating Scraper -->
+        <div class="card" style="margin-bottom:1.5rem;">
           <div class="card-header">
             <div class="card-title">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-              <span>Proxy Pool Live Status</span>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--green)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              <span>Rotating Proxy Pool Live Status</span>
             </div>
             <div style="display:flex; align-items:center; gap:0.5rem;">
               <span id="ppViewBadge" class="tag tag-gray">Checking...</span>
@@ -2468,19 +2607,90 @@ input:focus, select:focus, textarea:focus {
           </div>
           <div class="card-body">
             <div class="kpi-strip" style="margin-bottom:1rem;">
-              <div class="kpi-tile"><div class="kpi-label">Scraped Proxies</div><div class="kpi-val" id="ppViewTotal">0</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Scraped Public</div><div class="kpi-val" id="ppViewTotal">0</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Manual Proxies</div><div class="kpi-val purple" id="ppViewManual">0</div></div>
               <div class="kpi-tile"><div class="kpi-label">Active &amp; Ready</div><div class="kpi-val green" id="ppViewHealthy">0</div></div>
               <div class="kpi-tile"><div class="kpi-label">Average Latency</div><div class="kpi-val cyan" id="ppViewLatency">0ms</div></div>
-              <div class="kpi-tile"><div class="kpi-label">Rotation Mode</div><div class="kpi-val purple" style="font-size:1.1rem;padding-top:0.2rem;">Round-Robin</div></div>
+              <div class="kpi-tile"><div class="kpi-label">Rotation Mode</div><div class="kpi-val purple" style="font-size:1.05rem;padding-top:0.2rem;">Round-Robin</div></div>
             </div>
             <p style="font-size:0.84rem; color:var(--text2); font-weight:500; margin-bottom:0.75rem;">
               Verified working proxies scraped from public sources. Any provider configured with <code>Free Proxy Pool</code> rotates through these proxies automatically:
             </p>
-            <div id="ppViewListPreview" style="display:flex; gap:0.4rem; flex-wrap:wrap; max-height:220px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border-radius:var(--radius); border:1px solid var(--border);">
+            <div id="ppViewListPreview" style="display:flex; gap:0.4rem; flex-wrap:wrap; max-height:180px; overflow-y:auto; padding:0.5rem; background:var(--surface-subtle); border-radius:var(--radius); border:1px solid var(--border);">
               <span style="color:var(--text2); font-size:0.78rem; font-weight:600;">No proxies loaded yet. Click Refresh to scrape.</span>
             </div>
           </div>
         </div>
+
+        <!-- CARD 2: Manual Proxies Management -->
+        <div class="card" style="margin-bottom:1.5rem;">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--cyan)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+              <span>Manual Proxies (HTTP / HTTPS / SOCKS5)</span>
+            </div>
+            <button class="btn btn-sm btn-primary" onclick="showAddManualProxyModal()">+ Add Manual Proxy</button>
+          </div>
+          <div class="card-body">
+            <div style="display:flex; gap:0.5rem; margin-bottom:1rem; flex-wrap:wrap;">
+              <input type="text" id="quickManualProxyInput" placeholder="http://ip:port or socks5://user:pass@ip:port" style="flex:1; min-width:250px; font-family:monospace; font-size:0.82rem;">
+              <button class="btn btn-primary" onclick="submitQuickManualProxy()" id="btnQuickAddProxy">Test &amp; Add Proxy</button>
+            </div>
+            <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.75rem;">
+              Manual proxies are permanently saved, health-checked, and given priority in rotation. They will not be removed on transient failure.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Proxy Address</th>
+                    <th>Type</th>
+                    <th>Status / Latency</th>
+                    <th>Failures</th>
+                    <th style="text-align:right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="manualProxyTableBody">
+                  <tr><td colspan="5" style="text-align:center; color:var(--text3); padding:1.2rem;">No manual proxies configured. Add one above.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- CARD 3: Cloudflare Relays (AI Gateway & Reverse Proxy) -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--purple)" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+              <span>Cloudflare Relays (AI Gateway &amp; Reverse Proxy)</span>
+            </div>
+            <button class="btn btn-sm btn-purple" onclick="showAddCFRelayModal()">+ Add Cloudflare Relay</button>
+          </div>
+          <div class="card-body">
+            <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">
+              Add Cloudflare AI Gateway relays with only 3 fields: <strong>Nama Relay</strong>, <strong>Account ID</strong>, and <strong>API Token</strong>. GoGate automatically handles endpoint construction (<code>https://gateway.ai.cloudflare.com/v1/{account_id}/{name}</code>) and authentication headers.
+            </p>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nama Relay</th>
+                    <th>Cloudflare ID</th>
+                    <th>Base URL</th>
+                    <th>Token</th>
+                    <th>Relay Type</th>
+                    <th style="text-align:right;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="cfRelayTableBody">
+                  <tr><td colspan="6" style="text-align:center; color:var(--text3); padding:1.2rem;">No Cloudflare Relays configured. Click '+ Add Cloudflare Relay' to connect.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </section>
 
       <!-- ================= 7. TUNNEL VIEW ================= -->
@@ -2748,6 +2958,8 @@ let _lastDedupEl = null;
 let _confirmCallback = null;
 let _revealedKeys = {};
 let _hubEgressMode = 'direct';
+let _currentCFRelays = [];
+let _currentProxyPool = null;
 
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
 function fmt(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return String(n||0)}
@@ -3107,6 +3319,7 @@ const viewTitles = {
   managehub: 'Provider Hub',
   models: 'Models & Combos',
   keys: 'API Keys & CLI',
+  privacy: 'Privacy Vault (DLP)',
   tokensaver: 'Token Saver (RTK)',
   proxypool: 'Proxy Pool',
   tunnel: 'Cloudflare Tunnel',
@@ -3354,7 +3567,9 @@ async function fetchAll(){
       api('/admin/keys'),
       api('/admin/tunnel'),
       api('/admin/proxy-pool'),
-      api('/admin/config/token-saver')
+      api('/admin/config/token-saver'),
+      api('/admin/config/privacy'),
+      api('/admin/cf-relays')
     ]);
 
     const stats = results[0].status==='fulfilled'?results[0].value:{};
@@ -3366,18 +3581,26 @@ async function fetchAll(){
     const tunnelRes = results[6].status==='fulfilled'?results[6].value:{};
     const proxyPoolRes = results[7].status==='fulfilled'?results[7].value:{};
     const tsRes = results[8].status==='fulfilled'?results[8].value:{};
+    const privRes = results[9].status==='fulfilled'?results[9].value:{};
+    const cfRelaysRes = results[10].status==='fulfilled'?results[10].value:[];
 
     _currentProviders = providers;
     _currentModels = models;
     _currentConfig = config;
     _currentKeys = keys;
     _currentTokenSaver = tsRes;
+    _currentPrivacy = privRes;
     _tunnelActive = tunnelRes.is_running || false;
     _tunnelURL = tunnelRes.url || '';
+    _currentCFRelays = cfRelaysRes || [];
+    _currentProxyPool = proxyPoolRes;
 
     updateTunnelUI();
     renderProxyPool(proxyPoolRes);
+    renderCFRelays(_currentCFRelays);
     renderTokenSaver(tsRes);
+    renderPrivacy(privRes);
+
     renderStats(stats, usage, providers, models, keys);
     renderProviders(providers);
     renderModels(models);
@@ -3455,6 +3678,7 @@ async function toggleTunnel(){
 /* ===== Proxy Pool & Token Saver Controls ===== */
 function renderProxyPool(data){
   if(!data) return;
+  _currentProxyPool = data;
   const isEnabled = data.enabled || false;
   const badge = document.getElementById('proxyPoolBadge');
   const btn = document.getElementById('btnToggleProxyPool');
@@ -3479,19 +3703,22 @@ function renderProxyPool(data){
     vBtn.textContent = isEnabled ? 'Turn OFF' : 'Turn ON';
     vBtn.className = 'toggle-btn ' + (isEnabled ? 'on' : 'off');
   }
+  const healthyCount = data.healthy_count || data.healthy || 0;
   if(navBadge){
-    navBadge.textContent = isEnabled ? String(data.healthy_count||0) : 'Off';
+    navBadge.textContent = isEnabled ? String(healthyCount) : 'Off';
     navBadge.style.color = isEnabled ? 'var(--green)' : 'var(--text3)';
   }
   if(details) details.style.display = isEnabled ? 'block' : 'none';
 
-  const t1 = document.getElementById('ppTotal'); if(t1) t1.textContent = data.total_scraped || 0;
-  const h1 = document.getElementById('ppHealthy'); if(h1) h1.textContent = data.healthy_count || 0;
+  const t1 = document.getElementById('ppTotal'); if(t1) t1.textContent = data.total_scraped || data.total || 0;
+  const m1 = document.getElementById('ppManual'); if(m1) m1.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
+  const h1 = document.getElementById('ppHealthy'); if(h1) h1.textContent = healthyCount;
   const l1 = document.getElementById('ppLatency'); if(l1) l1.textContent = (data.avg_latency_ms||0) + 'ms';
   const r1 = document.getElementById('ppLastRef'); if(r1) r1.textContent = data.last_refresh ? new Date(data.last_refresh).toLocaleTimeString() : 'Never';
 
-  const t2 = document.getElementById('ppViewTotal'); if(t2) t2.textContent = data.total_scraped || 0;
-  const h2 = document.getElementById('ppViewHealthy'); if(h2) h2.textContent = data.healthy_count || 0;
+  const t2 = document.getElementById('ppViewTotal'); if(t2) t2.textContent = data.total_scraped || data.total || 0;
+  const m2 = document.getElementById('ppViewManual'); if(m2) m2.textContent = data.manual_count || (data.manual_proxies ? data.manual_proxies.length : 0);
+  const h2 = document.getElementById('ppViewHealthy'); if(h2) h2.textContent = healthyCount;
   const l2 = document.getElementById('ppViewLatency'); if(l2) l2.textContent = (data.avg_latency_ms||0) + 'ms';
 
   const preview = document.getElementById('proxyListPreview');
@@ -3499,13 +3726,368 @@ function renderProxyPool(data){
   const list = data.proxies || [];
 
   if(list.length > 0){
-    const pills = list.map(p => `<span class="tag tag-green mono" title="Latency: ${p.latency_ms}ms | Failures: ${p.fail_count}">${esc(p.url)} <small style="opacity:0.7">${p.latency_ms}ms</small></span>`).join(' ');
+    const pills = list.map(p => {
+      const cls = p.is_manual ? 'tag-purple' : 'tag-green';
+      const label = p.is_manual ? 'Manual' : `${p.latency_ms}ms`;
+      return `<span class="tag ${cls} mono" style="font-size:0.75rem;" title="${p.is_manual?'Manual Proxy':'Scraped Proxy'} | Latency: ${p.latency_ms}ms | Failures: ${p.fail_count}">${esc(p.url)} <small style="opacity:0.85;font-weight:700;">${label}</small></span>`;
+    }).join(' ');
     if(preview) preview.innerHTML = pills;
     if(vPreview) vPreview.innerHTML = pills;
   } else {
     const empty = '<span style="color:var(--text3); font-size:0.75rem;">No active verified proxies in pool. Click Refresh to scrape.</span>';
     if(preview) preview.innerHTML = empty;
     if(vPreview) vPreview.innerHTML = empty;
+  }
+
+  // Render Manual Proxies Table
+  renderManualProxies(data.manual_proxies || [], list);
+}
+
+function renderManualProxies(manualList, allProxies){
+  const tbody = document.getElementById('manualProxyTableBody');
+  if(!tbody) return;
+  if(!manualList || manualList.length === 0){
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--text3); padding:1.2rem;">No manual proxies configured. Add one above.</td></tr>';
+    return;
+  }
+
+  const proxyMap = {};
+  (allProxies || []).forEach(p => {
+    proxyMap[p.url] = p;
+  });
+
+  let rows = '';
+  manualList.forEach(rawUrl => {
+    const p = proxyMap[rawUrl] || null;
+    let proto = 'HTTP';
+    if(rawUrl.startsWith('socks5://')) proto = 'SOCKS5';
+    else if(rawUrl.startsWith('https://')) proto = 'HTTPS';
+    else if(rawUrl.startsWith('http://')) proto = 'HTTP';
+
+    const isHealthy = p ? (p.latency_ms > 0 && p.fail_count === 0) : null;
+    const latencyStr = p ? (p.latency_ms > 0 ? `${p.latency_ms}ms` : 'Testing...') : 'Ready';
+    const statusBadge = isHealthy === true 
+      ? `<span class="tag tag-green">Online (${latencyStr})</span>` 
+      : isHealthy === false 
+        ? `<span class="tag tag-orange">Degraded</span>` 
+        : `<span class="tag tag-gray">Configured</span>`;
+    const failCount = p ? p.fail_count : 0;
+
+    rows += `
+      <tr>
+        <td class="mono" style="font-weight:600; color:var(--text1);">${esc(rawUrl)}</td>
+        <td><span class="tag tag-blue">${proto}</span></td>
+        <td>${statusBadge}</td>
+        <td><span class="mono" style="color:${failCount>0?'var(--orange)':'var(--text3)'}">${failCount}</span></td>
+        <td style="text-align:right;">
+          <div style="display:inline-flex; gap:0.35rem;">
+            <button class="btn btn-sm" onclick="testManualProxyDirect('${esc(rawUrl)}', this)" title="Test latency now">Test</button>
+            <button class="btn btn-sm btn-danger" onclick="removeManualProxy('${esc(rawUrl)}')" title="Remove proxy">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+async function submitQuickManualProxy(){
+  const inp = document.getElementById('quickManualProxyInput');
+  const btn = document.getElementById('btnQuickAddProxy');
+  if(!inp) return;
+  const proxy = inp.value.trim();
+  if(!proxy){
+    toast('Please enter a proxy address (e.g. http://1.2.3.4:8080 or socks5://...)','error');
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = 'Verifying...'; }
+  try{
+    toast('Testing and adding manual proxy...','info');
+    const r = await api('/admin/proxy-pool/manual', {
+      method: 'POST',
+      body: JSON.stringify({ proxy })
+    });
+    toast(r.message || 'Manual proxy added successfully!', 'success');
+    inp.value = '';
+    fetchAll();
+  }catch(e){
+    toast('Failed to add manual proxy: ' + e.message, 'error');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Test & Add Proxy'; }
+  }
+}
+
+function showAddManualProxyModal(){
+  openModal('Add Manual Proxy', `
+    <p style="font-size:0.82rem; color:var(--text2); margin-bottom:0.85rem;">
+      Enter your HTTP, HTTPS, or SOCKS5 proxy URL. GoGate will test its connectivity and add it to your persistent proxy pool.
+    </p>
+    <div class="form-grid">
+      <label class="full">
+        Proxy Address
+        <input id="modal_manual_proxy_url" placeholder="http://user:pass@1.2.3.4:8080 or socks5://1.2.3.4:1080" style="font-family:monospace;">
+      </label>
+    </div>
+    <div id="modalProxyTestResult" style="margin-top:0.75rem; display:none;"></div>
+    <div class="form-actions" style="margin-top:1.25rem;">
+      <button class="btn" type="button" onclick="closeModal()">Cancel</button>
+      <button class="btn" type="button" id="btnModalTestProxy" onclick="testModalProxyDirect()">Test Connectivity</button>
+      <button class="btn btn-primary" type="button" id="btnModalSaveProxy" onclick="submitModalManualProxy()">Save Proxy</button>
+    </div>
+  `);
+}
+
+async function testModalProxyDirect(){
+  const inp = document.getElementById('modal_manual_proxy_url');
+  const resEl = document.getElementById('modalProxyTestResult');
+  const btn = document.getElementById('btnModalTestProxy');
+  if(!inp || !inp.value.trim()){
+    toast('Please enter a proxy URL','error');
+    return;
+  }
+  const proxy = inp.value.trim();
+  if(btn){ btn.disabled = true; btn.textContent = 'Testing...'; }
+  if(resEl){ resEl.style.display = 'block'; resEl.innerHTML = '<span style="color:var(--cyan);font-size:0.8rem;">Testing connection to proxy...</span>'; }
+  try{
+    const r = await api('/admin/proxy-pool/test', {
+      method: 'POST',
+      body: JSON.stringify({ proxy })
+    });
+    if(resEl){
+      resEl.innerHTML = `<span class="tag tag-green">Success</span> <span style="font-size:0.8rem;color:var(--text1);margin-left:0.4rem;">Connected! Latency: <strong>${r.proxy ? r.proxy.latency_ms : 0}ms</strong></span>`;
+    }
+  }catch(e){
+    if(resEl){
+      resEl.innerHTML = `<span class="tag tag-red">Failed</span> <span style="font-size:0.8rem;color:var(--orange);margin-left:0.4rem;">${esc(e.message)}</span>`;
+    }
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Test Connectivity'; }
+  }
+}
+
+async function submitModalManualProxy(){
+  const inp = document.getElementById('modal_manual_proxy_url');
+  const btn = document.getElementById('btnModalSaveProxy');
+  if(!inp || !inp.value.trim()){
+    toast('Please enter a proxy URL','error');
+    return;
+  }
+  const proxy = inp.value.trim();
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try{
+    const r = await api('/admin/proxy-pool/manual', {
+      method: 'POST',
+      body: JSON.stringify({ proxy })
+    });
+    toast(r.message || 'Manual proxy added successfully!', 'success');
+    closeModal();
+    fetchAll();
+  }catch(e){
+    toast('Error: ' + e.message, 'error');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Proxy'; }
+  }
+}
+
+async function testManualProxyDirect(proxyUrl, btnEl){
+  const oldText = btnEl ? btnEl.textContent : '';
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = '...'; }
+  try{
+    const r = await api('/admin/proxy-pool/test', {
+      method: 'POST',
+      body: JSON.stringify({ proxy: proxyUrl })
+    });
+    toast(`Proxy online! Latency: ${r.proxy ? r.proxy.latency_ms : 0}ms`, 'success');
+    fetchAll();
+  }catch(e){
+    toast('Proxy test failed: ' + e.message, 'error');
+  }finally{
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = oldText; }
+  }
+}
+
+async function removeManualProxy(proxyUrl){
+  if(!confirm(`Remove manual proxy "${proxyUrl}"?`)) return;
+  try{
+    const r = await api('/admin/proxy-pool/manual', {
+      method: 'DELETE',
+      body: JSON.stringify({ proxy: proxyUrl })
+    });
+    toast(r.message || 'Manual proxy removed', 'info');
+    fetchAll();
+  }catch(e){
+    toast('Failed to remove proxy: ' + e.message, 'error');
+  }
+}
+
+function renderCFRelays(relays){
+  const tbody = document.getElementById('cfRelayTableBody');
+  if(!tbody) return;
+  if(!relays || relays.length === 0){
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text3); padding:1.2rem;">No Cloudflare Relays configured. Click \'+ Add Cloudflare Relay\' to connect.</td></tr>';
+    return;
+  }
+
+  let rows = '';
+  relays.forEach(r => {
+    rows += `
+      <tr>
+        <td style="font-weight:700; color:var(--purple);">${esc(r.name)}</td>
+        <td class="mono" style="font-size:0.8rem;">${esc(r.account_id)}</td>
+        <td class="mono" style="font-size:0.75rem; color:var(--text2); max-width:260px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(r.base_url)}">${esc(r.base_url || '&mdash;')}</td>
+        <td class="mono" style="font-size:0.75rem;">${esc(r.token)}</td>
+        <td><span class="tag tag-purple">${esc(r.type || 'ai-gateway')}</span></td>
+        <td style="text-align:right;">
+          <div style="display:inline-flex; gap:0.35rem;">
+            <button class="btn btn-sm" onclick="testCFRelay('${esc(r.name)}', this)" title="Test connectivity">Test</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteCFRelay('${esc(r.name)}')" title="Delete relay">Delete</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  });
+  tbody.innerHTML = rows;
+}
+
+function showAddCFRelayModal(){
+  openModal('Add Cloudflare Relay', `
+    <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">
+      Hanya perlu 3 input: <strong>Nama Relay</strong>, Cloudflare <strong>ID</strong> (Account ID), dan <strong>Token</strong> Cloudflare.
+    </p>
+    <div class="form-grid">
+      <label class="full">
+        Nama Relay <span style="color:var(--red);">*</span>
+        <input id="cf_relay_name" placeholder="misal: my-gateway atau cf-fast" required>
+        <span style="font-size:0.72rem; color:var(--text3);">Nama relay atau Gateway ID di Cloudflare AI Gateway.</span>
+      </label>
+      <label class="full">
+        Cloudflare Account ID (id) <span style="color:var(--red);">*</span>
+        <input id="cf_relay_id" placeholder="32-karakter hex Cloudflare Account ID" class="mono" required>
+        <span style="font-size:0.72rem; color:var(--text3);">Ditemukan di Cloudflare Dashboard sidebar kanan (Account ID).</span>
+      </label>
+      <label class="full">
+        Token Cloudflare (API Token / Secret) <span style="color:var(--red);">*</span>
+        <input id="cf_relay_token" type="password" placeholder="Cloudflare API Token dengan izin AI Gateway" class="mono" required>
+        <span style="font-size:0.72rem; color:var(--text3);">Cloudflare API Token atau Worker bearer secret.</span>
+      </label>
+      <label>
+        Relay Type
+        <select id="cf_relay_type">
+          <option value="ai-gateway" selected>Cloudflare AI Gateway (Universal/Zero-Egress)</option>
+          <option value="worker">Cloudflare Worker Reverse Proxy</option>
+        </select>
+      </label>
+      <label>
+        Base URL Override (Optional)
+        <input id="cf_relay_base_url" placeholder="Otomatis dihitung jika dikosongkan" class="mono">
+      </label>
+    </div>
+    <div id="modalCFTestResult" style="margin-top:0.75rem; display:none;"></div>
+    <div class="form-actions" style="margin-top:1.25rem;">
+      <button class="btn" type="button" onclick="closeModal()">Batal</button>
+      <button class="btn" type="button" id="btnModalTestCF" onclick="testModalCFRelay()">Test Koneksi</button>
+      <button class="btn btn-purple" type="button" id="btnModalSaveCF" onclick="saveCFRelay()">Simpan Relay</button>
+    </div>
+  `);
+}
+
+async function testModalCFRelay(){
+  const account_id = (document.getElementById('cf_relay_id')||{}).value||'';
+  const token = (document.getElementById('cf_relay_token')||{}).value||'';
+  const name = (document.getElementById('cf_relay_name')||{}).value||'';
+  const resEl = document.getElementById('modalCFTestResult');
+  const btn = document.getElementById('btnModalTestCF');
+
+  if(!account_id.trim() || !token.trim()){
+    toast('Mohon isi Account ID dan Token terlebih dahulu','error');
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = 'Menguji...'; }
+  if(resEl){ resEl.style.display = 'block'; resEl.innerHTML = '<span style="color:var(--purple);font-size:0.8rem;">Menguji koneksi ke Cloudflare API...</span>'; }
+
+  try{
+    const r = await api('/admin/cf-relays/test', {
+      method: 'POST',
+      body: JSON.stringify({ account_id: account_id.trim(), token: token.trim(), name: name.trim() })
+    });
+    if(resEl){
+      resEl.innerHTML = `<span class="tag tag-green">Sukses</span> <span style="font-size:0.8rem;color:var(--text1);margin-left:0.4rem;">${esc(r.message || 'Koneksi Cloudflare terverifikasi!')}</span>`;
+    }
+  }catch(e){
+    if(resEl){
+      resEl.innerHTML = `<span class="tag tag-red">Gagal</span> <span style="font-size:0.8rem;color:var(--orange);margin-left:0.4rem;">${esc(e.message)}</span>`;
+    }
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Test Koneksi'; }
+  }
+}
+
+async function saveCFRelay(){
+  const name = (document.getElementById('cf_relay_name')||{}).value||'';
+  const account_id = (document.getElementById('cf_relay_id')||{}).value||'';
+  const token = (document.getElementById('cf_relay_token')||{}).value||'';
+  const type = (document.getElementById('cf_relay_type')||{}).value||'ai-gateway';
+  const base_url = (document.getElementById('cf_relay_base_url')||{}).value||'';
+  const btn = document.getElementById('btnModalSaveCF');
+
+  if(!name.trim()){ toast('Nama relay wajib diisi','error'); return; }
+  if(!account_id.trim()){ toast('Cloudflare Account ID wajib diisi','error'); return; }
+  if(!token.trim()){ toast('Token Cloudflare wajib diisi','error'); return; }
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Menyimpan...'; }
+  try{
+    const r = await api('/admin/cf-relays', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: name.trim(),
+        account_id: account_id.trim(),
+        token: token.trim(),
+        type: type.trim(),
+        base_url: base_url.trim()
+      })
+    });
+    toast(r.message || 'Cloudflare Relay berhasil disimpan!', 'success');
+    closeModal();
+    fetchAll();
+  }catch(e){
+    toast('Gagal menyimpan CF Relay: ' + e.message, 'error');
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Simpan Relay'; }
+  }
+}
+
+async function deleteCFRelay(name){
+  if(!confirm(`Hapus Cloudflare Relay "${name}"?`)) return;
+  try{
+    const r = await api('/admin/cf-relays/' + encodeURIComponent(name), { method: 'DELETE' });
+    toast(r.message || 'Cloudflare Relay dihapus', 'info');
+    fetchAll();
+  }catch(e){
+    toast('Gagal menghapus relay: ' + e.message, 'error');
+  }
+}
+
+async function testCFRelay(name, btnEl){
+  const oldText = btnEl ? btnEl.textContent : '';
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = '...'; }
+  try{
+    const r = await api('/admin/cf-relays/test', {
+      method: 'POST',
+      body: JSON.stringify({ name })
+    });
+    toast(r.message || 'Cloudflare Relay terverifikasi!', 'success');
+  }catch(e){
+    toast('Test CF Relay gagal: ' + e.message, 'error');
+  }finally{
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = oldText; }
+  }
+}
+
+function onHubCFRelaySelected(val){
+  const inp = document.getElementById('hub_relay_url');
+  if(!inp) return;
+  if(val){
+    inp.value = val;
   }
 }
 
@@ -3615,15 +4197,133 @@ async function saveTokenSaverConfig(){
   }
 }
 
+let _currentPrivacy = {enabled:true, mode:'vault', scope:'free-only', mask_secrets:true, mask_pii:false};
+
+function renderPrivacy(cfg){
+  if(!cfg) return;
+  _currentPrivacy = cfg;
+  const en = document.getElementById('pv_enabled'); if(en) en.checked = !!cfg.enabled;
+  const mo = document.getElementById('pv_mode'); if(mo) mo.value = cfg.mode || 'vault';
+  const sc = document.getElementById('pv_scope'); if(sc) sc.value = cfg.scope || 'free-only';
+  const ms = document.getElementById('pv_mask_secrets'); if(ms) ms.checked = !!cfg.mask_secrets;
+  const mp = document.getElementById('pv_mask_pii'); if(mp) mp.checked = !!cfg.mask_pii;
+
+  const badge = document.getElementById('navPrivacyBadge');
+  if(badge){
+    badge.textContent = cfg.enabled ? 'Vault ON' : 'Off';
+    badge.style.background = cfg.enabled ? 'var(--green)' : 'var(--text3)';
+  }
+
+  const ovBadge = document.getElementById('privacyStatusBadge');
+  if(ovBadge){
+    if(!cfg.enabled){
+      ovBadge.textContent = 'Disabled';
+      ovBadge.className = 'tag tag-gray';
+    } else {
+      ovBadge.textContent = (cfg.mode === 'vault' ? 'Vault' : cfg.mode === 'redact' ? 'Redact' : 'Block') + ' Active';
+      ovBadge.className = 'tag tag-green';
+    }
+  }
+  const btnToggle = document.getElementById('btnTogglePrivacy');
+  if(btnToggle){
+    btnToggle.className = 'toggle-btn ' + (cfg.enabled ? 'on' : 'off');
+    btnToggle.textContent = cfg.enabled ? 'Turn OFF' : 'Turn ON';
+  }
+  const ovScope = document.getElementById('ovPrivacyScope');
+  if(ovScope) ovScope.textContent = 'Scope: ' + (cfg.scope || 'free-only');
+  const ovSec = document.getElementById('ovPrivacySecrets');
+  if(ovSec) ovSec.textContent = 'Secrets: ' + (cfg.mask_secrets ? 'Masked' : 'Passthrough');
+  const ovPii = document.getElementById('ovPrivacyPii');
+  if(ovPii) ovPii.textContent = 'PII: ' + (cfg.mask_pii ? 'Masked' : 'Passthrough');
+  const vBadge = document.getElementById('pvViewBadge');
+  if(vBadge){
+    vBadge.textContent = cfg.enabled ? 'Active' : 'Disabled';
+    vBadge.className = 'tag ' + (cfg.enabled ? 'tag-green' : 'tag-gray');
+  }
+}
+
+async function togglePrivacyGlobal(){
+  try{
+    const next = !_currentPrivacy.enabled;
+    const payload = {..._currentPrivacy, enabled: next};
+    await api('/admin/config/privacy', {method:'PUT', body:JSON.stringify(payload)});
+    toast('Privacy Vault ' + (next ? 'enabled' : 'disabled'), 'success');
+    fetchAll();
+  }catch(e){
+    toast('Error toggling Privacy Vault: '+e.message, 'error');
+  }
+}
+
+async function savePrivacyConfig(){
+  try{
+    const payload = {
+      enabled: document.getElementById('pv_enabled').checked,
+      mode: document.getElementById('pv_mode').value || 'vault',
+      scope: document.getElementById('pv_scope').value || 'free-only',
+      mask_secrets: document.getElementById('pv_mask_secrets').checked,
+      mask_pii: document.getElementById('pv_mask_pii').checked
+    };
+    await api('/admin/config/privacy', {method:'PUT', body:JSON.stringify(payload)});
+    toast('Privacy Vault configuration saved successfully!','success');
+    fetchAll();
+  }catch(e){
+    toast('Error saving Privacy Vault: '+e.message, 'error');
+  }
+}
+
+function simulatePrivacyVault(){
+  const input = document.getElementById('pvTestInput').value;
+  const resBox = document.getElementById('pvTestResult');
+  const tokPrev = document.getElementById('pvTokenizedPreview');
+  const restPrev = document.getElementById('pvRestoredPreview');
+  if(!input.trim()){
+    toast('Please enter text in the sandbox textarea', 'info');
+    return;
+  }
+
+  let tokenized = input;
+  const detokenMap = {};
+
+  tokenized = tokenized.replace(/\b(sk-(?:proj-)?[A-Za-z0-9_-]{20,})\b/g, (match) => {
+    const syn = 'sk-live_vault' + Math.random().toString(36).substring(2, 18);
+    detokenMap[syn] = match;
+    return syn;
+  });
+
+  tokenized = tokenized.replace(/\b(AIzaSy[A-Za-z0-9_-]{33})\b/g, (match) => {
+    const syn = 'AIzaSyVault' + Math.random().toString(36).substring(2, 15).padEnd(22, '0');
+    detokenMap[syn] = match;
+    return syn;
+  });
+
+  if(document.getElementById('pv_mask_pii') && document.getElementById('pv_mask_pii').checked){
+    tokenized = tokenized.replace(/\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/g, (match) => {
+      const syn = 'vault.user' + Math.floor(Math.random()*900+100) + '@example.com';
+      detokenMap[syn] = match;
+      return syn;
+    });
+  }
+
+  let restored = tokenized;
+  for(const [syn, orig] of Object.entries(detokenMap)){
+    restored = restored.split(syn).join(orig);
+  }
+
+  tokPrev.textContent = tokenized;
+  restPrev.textContent = restored;
+  resBox.style.display = 'block';
+}
+
 function renderStats(stats, usage, providers, models, keys){
   const el = id => document.getElementById(id);
+  const upVal = (stats && stats.uptime) || (usage && usage.uptime) || '--';
   if(el('statTotal')) el('statTotal').textContent = fmt(stats.total_requests);
   if(el('statActive')) el('statActive').textContent = stats.active_requests || 0;
-  if(el('statUptime')) el('statUptime').textContent = stats.uptime || '--';
+  if(el('statUptime')) el('statUptime').textContent = upVal;
   if(el('statProviders')) el('statProviders').textContent = providers.length;
   if(el('statModels')) el('statModels').textContent = models.length;
   if(el('statKeys')) el('statKeys').textContent = keys.length;
-  if(el('uptime')) el('uptime').textContent = 'Uptime: ' + (stats.uptime || '--');
+  if(el('uptime')) el('uptime').textContent = 'Uptime: ' + upVal;
 
   const navP = document.getElementById('navProvCount'); if(navP) navP.textContent = providers.length;
   const navM = document.getElementById('navModelCount'); if(navM) navM.textContent = models.length;
@@ -3647,7 +4347,7 @@ function renderStats(stats, usage, providers, models, keys){
   renderBudgetCard(usage);
 
   const c = (usage && usage.cache) || {};
-  const hitRate = (c.hit_rate !== undefined) ? c.hit_rate.toFixed(1) + '%' : '0.0%';
+  const hitRate = typeof c.hit_rate === 'number' ? c.hit_rate.toFixed(1) + '%' : (c.hit_rate || '0.0%');
   if(el('statCache')) el('statCache').textContent = hitRate;
 }
 
@@ -3892,7 +4592,7 @@ function renderCache(c){
   if(el('cacheHits')) el('cacheHits').textContent = fmt(c.hits);
   if(el('cacheMisses')) el('cacheMisses').textContent = fmt(c.misses);
   if(el('cacheSize')) el('cacheSize').textContent = (c.size||0) + ' items';
-  if(el('cacheRate')) el('cacheRate').textContent = (c.hit_rate !== undefined) ? c.hit_rate.toFixed(1) + '%' : '0.0%';
+  if(el('cacheRate')) el('cacheRate').textContent = typeof c.hit_rate === 'number' ? c.hit_rate.toFixed(1) + '%' : (c.hit_rate || '0.0%');
 }
 
 function renderConfig(cfg){
@@ -4172,7 +4872,22 @@ function renderProviderHubPage(provName){
           <div id="hubFieldDirect" style="display:${isDirect ? 'block' : 'none'}; font-size:0.78rem; color:var(--text3);">Sends requests directly from server IP without proxying.</div>
           <div id="hubFieldPool" style="display:${isFreeProxy ? 'block' : 'none'}; font-size:0.78rem; color:var(--green);">Automatically routes requests through healthy free rotating public proxies.</div>
           <div id="hubFieldRelay" style="display:${isRelay ? 'block' : 'none'};">
-            <label style="font-size:0.78rem;">Worker Relay URL<input id="hub_relay_url" placeholder="https://my-relay.workers.dev" value="${esc(p.relay_url||'')}"></label>
+            <div style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-end;">
+              <div style="flex:1; min-width:220px;">
+                <label style="font-size:0.78rem;">Pilih Cloudflare Relay:
+                  <select id="hub_cf_relay_select" onchange="onHubCFRelaySelected(this.value)">
+                    <option value="">-- Masukkan Custom URL atau Pilih Relay --</option>
+                    ${(_currentCFRelays||[]).map(cr => `<option value="${esc(cr.name)}" ${p.relay_url===cr.name || p.relay_url===cr.base_url ? 'selected' : ''}>${esc(cr.name)} (${esc(cr.type)})</option>`).join('')}
+                  </select>
+                </label>
+              </div>
+              <div style="flex:1; min-width:220px;">
+                <label style="font-size:0.78rem;">Worker / Gateway Relay URL / Name:
+                  <input id="hub_relay_url" placeholder="nama-relay atau https://gateway.ai.cloudflare.com/..." value="${esc(p.relay_url||'')}">
+                </label>
+              </div>
+              <button type="button" class="btn btn-sm btn-purple" onclick="showAddCFRelayModal()" style="margin-bottom:0.15rem;">+ New CF Relay</button>
+            </div>
           </div>
           <div id="hubFieldCustom" style="display:${isCustom ? 'block' : 'none'};">
             <label style="font-size:0.78rem;">Custom Proxy URL<input id="hub_custom_proxy" placeholder="http://user:pass@host:port" value="${esc(isCustom ? (p.proxy_url||'') : '')}"></label>

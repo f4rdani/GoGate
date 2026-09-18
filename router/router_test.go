@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aigateway/config"
+	"github.com/aigateway/middleware"
 	"github.com/aigateway/models"
 	"github.com/aigateway/provider"
 )
@@ -21,6 +23,7 @@ type mockProvider struct {
 	responses map[string]*models.ChatCompletionResponse
 	errors    map[string]error
 	callCount atomic.Int64
+	lastReq   *models.ChatCompletionRequest
 }
 
 func newMockProvider(name string) *mockProvider {
@@ -35,6 +38,7 @@ func newMockProvider(name string) *mockProvider {
 func (m *mockProvider) Name() string { return m.name }
 func (m *mockProvider) ChatCompletion(ctx context.Context, req *models.ChatCompletionRequest) (*models.ChatCompletionResponse, error) {
 	m.callCount.Add(1)
+	m.lastReq = req
 	if err, ok := m.errors[req.Model]; ok {
 		return nil, err
 	}
@@ -630,3 +634,102 @@ func TestSmartVisionRouting(t *testing.T) {
 
 // ServeHTTP implements http.ResponseWriter for the mock provider's stream test.
 // This is already handled by httptest.ResponseRecorder in tests.
+
+func TestRouter_PrivacyFilter_FreeOnlyScope(t *testing.T) {
+	registry := provider.NewRegistry()
+	pPaid := newMockProvider("paid-prov")
+	pFree := newMockProvider("free-prov")
+	registry.Register("paid-prov", pPaid)
+	registry.Register("free-prov", pFree)
+
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "paid-prov", Type: "openai", Tier: 1},
+			{Name: "free-prov", Type: "opencode", Tier: 3},
+		},
+		Models: []config.ModelConfig{
+			{Name: "direct-paid", Provider: "paid-prov", Model: "gpt-4o"},
+			{Name: "direct-free", Provider: "free-prov", Model: "oc-free"},
+			{
+				Name:     "combo-fallback",
+				Strategy: "fallback",
+				Backends: []config.BackendConfig{
+					{Provider: "paid-prov", Model: "gpt-4o", Tier: 1},
+					{Provider: "free-prov", Model: "oc-free", Tier: 3},
+				},
+			},
+		},
+	}
+
+	r, err := NewRouter(cfg, registry)
+	if err != nil {
+		t.Fatalf("NewRouter failed: %v", err)
+	}
+
+	privCfg := config.PrivacyConfig{
+		Enabled:     true,
+		Mode:        "redact",
+		Scope:       "free-only",
+		MaskSecrets: true,
+		MaskPII:     true,
+	}
+	ctx := middleware.WithPrivacyConfig(context.Background(), privCfg)
+
+	secretPrompt := "My secret is sk-proj-1234567890abcdef1234567890"
+	contentBytes, _ := json.Marshal(secretPrompt)
+
+	// 1. Direct call to paid provider: should NOT be sanitized (secret remains intact)
+	req1 := &models.ChatCompletionRequest{
+		Model:    "direct-paid",
+		Messages: []models.Message{{Role: "user", Content: contentBytes}},
+	}
+	_, _, err = r.ChatCompletion(ctx, "direct-paid", req1)
+	if err != nil {
+		t.Fatalf("call to paid provider failed: %v", err)
+	}
+	if pPaid.lastReq == nil {
+		t.Fatal("expected paid provider to receive request")
+	}
+	var paidReceived string
+	json.Unmarshal(pPaid.lastReq.Messages[0].Content, &paidReceived)
+	if paidReceived != secretPrompt {
+		t.Fatalf("expected paid provider to receive original prompt, got: %s", paidReceived)
+	}
+
+	// 2. Direct call to free provider: MUST be sanitized
+	req2 := &models.ChatCompletionRequest{
+		Model:    "direct-free",
+		Messages: []models.Message{{Role: "user", Content: contentBytes}},
+	}
+	_, _, err = r.ChatCompletion(ctx, "direct-free", req2)
+	if err != nil {
+		t.Fatalf("call to free provider failed: %v", err)
+	}
+	if pFree.lastReq == nil {
+		t.Fatal("expected free provider to receive request")
+	}
+	var freeReceived string
+	json.Unmarshal(pFree.lastReq.Messages[0].Content, &freeReceived)
+	if !strings.Contains(freeReceived, "[REDACTED_API_KEY]") {
+		t.Fatalf("expected free provider to receive redacted prompt, got: %s", freeReceived)
+	}
+	if strings.Contains(freeReceived, "sk-proj-") {
+		t.Fatalf("sensitive key leaked to free provider: %s", freeReceived)
+	}
+
+	// 3. Fallback scenario: paid provider fails -> fallback to free provider gets sanitized
+	pPaid.errors["gpt-4o"] = &provider.ProviderError{StatusCode: 500, Body: "paid server error"}
+	req3 := &models.ChatCompletionRequest{
+		Model:    "combo-fallback",
+		Messages: []models.Message{{Role: "user", Content: contentBytes}},
+	}
+	_, _, err = r.ChatCompletion(ctx, "combo-fallback", req3)
+	if err != nil {
+		t.Fatalf("fallback call failed: %v", err)
+	}
+	var fallbackReceived string
+	json.Unmarshal(pFree.lastReq.Messages[0].Content, &fallbackReceived)
+	if !strings.Contains(fallbackReceived, "[REDACTED_API_KEY]") {
+		t.Fatalf("expected fallback free provider to receive redacted prompt, got: %s", fallbackReceived)
+	}
+}

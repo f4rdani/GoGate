@@ -415,6 +415,7 @@ func (b *BaseProvider) ForwardUpstream(ctx context.Context, method, endpointPath
 		}
 		if b.relaySecret != "" {
 			httpReq.Header.Set("X-Relay-Secret", b.relaySecret)
+			httpReq.Header.Set("cf-aig-authorization", "Bearer "+b.relaySecret)
 		}
 		if b.relayURL != "" && b.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", b.baseURL)
@@ -661,6 +662,16 @@ func FetchUpstreamModels(ctx context.Context, client *http.Client, baseURL, apiK
 	}
 	if apiKey != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	} else if providerType == "opencode" {
+		httpReq.Header.Set("Authorization", "Bearer public")
+	}
+	if providerType == "opencode" {
+		sess := GenerateOpenCodeSessionID()
+		httpReq.Header.Set("x-opencode-session", sess)
+		httpReq.Header.Set("X-Session-ID", sess)
+		httpReq.Header.Set("User-Agent", OpenCodeDefaultUA)
+	} else if providerType == "mimo" {
+		httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
 	}
 	httpReq.Header.Set("Accept", "application/json")
 

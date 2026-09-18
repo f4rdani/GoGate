@@ -17,6 +17,7 @@ type KeyInfo struct {
 	AllowedModels []string `json:"allowed_models"`
 	RateLimit     int      `json:"rate_limit"`      // requests per minute, 0 = unlimited
 	TokenSaver    *bool    `json:"token_saver,omitempty"` // nil=follow global, true/false=override
+	Privacy       *bool    `json:"privacy,omitempty"`     // nil=follow global, true/false=override
 	Disabled      bool     `json:"disabled"`
 
 	// Rate limiting state (sliding window counter, not serialized)
@@ -31,6 +32,15 @@ type KeyInfo struct {
 func (k *KeyInfo) IsTokenSaverEnabled(globalEnabled bool) bool {
 	if k.TokenSaver != nil {
 		return *k.TokenSaver
+	}
+	return globalEnabled
+}
+
+// IsPrivacyFilterEnabled checks if privacy filter is enabled for this key.
+// Returns the per-key override if set, otherwise defers to the global setting.
+func (k *KeyInfo) IsPrivacyFilterEnabled(globalEnabled bool) bool {
+	if k.Privacy != nil {
+		return *k.Privacy
 	}
 	return globalEnabled
 }
@@ -105,6 +115,7 @@ func NewKeyStore(configs []config.APIKeyConfig) *KeyStore {
 			AllowedModels: cfg.AllowedModels,
 			RateLimit:     cfg.RateLimit,
 			TokenSaver:    cfg.TokenSaver,
+			Privacy:       cfg.Privacy,
 			Disabled:      cfg.Disabled,
 		}
 	}

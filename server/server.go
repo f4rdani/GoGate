@@ -57,7 +57,7 @@ func (s *Server) getConfig() *config.Config {
 // proxies are evicted after 3 consecutive transport failures instead of
 // lingering until the next periodic refresh.
 func wireEgressPool(p provider.Provider, pCfg config.ProviderConfig, proxyPool *relay.ProxyPool) {
-	if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode") && proxyPool != nil {
+	if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode" || pCfg.Type == "mimo") && proxyPool != nil {
 		if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
 			if tr, ok := up.Client().Transport.(*http.Transport); ok {
 				tr.Proxy = proxyPool.ContextProxyFunc()
@@ -121,12 +121,20 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 			slog.Warn("skipping provider with no API keys", "name", pCfg.Name)
 			continue
 		}
+		if pCfg.RelayURL != "" {
+			if cr := cfg.FindCFRelay(pCfg.RelayURL); cr != nil {
+				pCfg.RelayURL = cr.GetEffectiveBaseURL()
+				if pCfg.RelaySecret == "" {
+					pCfg.RelaySecret = cr.Token
+				}
+			}
+		}
 		p, err := provider.NewProviderFromConfig(pCfg)
 		if err != nil {
 			return nil, fmt.Errorf("init provider %s: %w", pCfg.Name, err)
 		}
 
-		// Wire dynamic proxy pool if configured or specifically for opencode
+		// Wire dynamic proxy pool if configured or specifically for opencode/mimo
 		wireEgressPool(p, pCfg, proxyPool)
 
 		if pCfg.Disabled {
@@ -161,7 +169,7 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	)
 
 	// 5. Create handlers
-	proxyHandler := proxy.NewHandler(r, keyStore, limiter, cfg.TokenSaver)
+	proxyHandler := proxy.NewHandler(r, keyStore, limiter, cfg.TokenSaver, cfg.Privacy)
 
 	// Wire the limiter into the router for per-provider slots
 	r.SetLimiter(limiter)
@@ -240,6 +248,15 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("GET /admin/proxy-pool", adminHandler.HandleGetProxyPool)
 	wrapAdmin("POST /admin/proxy-pool/refresh", adminHandler.HandleRefreshProxyPool)
 	wrapAdmin("POST /admin/proxy-pool/toggle", adminHandler.HandleToggleProxyPool)
+	wrapAdmin("POST /admin/proxy-pool/manual", adminHandler.HandleAddManualProxy)
+	wrapAdmin("DELETE /admin/proxy-pool/manual", adminHandler.HandleRemoveManualProxy)
+	wrapAdmin("POST /admin/proxy-pool/test", adminHandler.HandleTestProxy)
+
+	// Cloudflare Relay CRUD
+	wrapAdmin("GET /admin/cf-relays", adminHandler.HandleGetCFRelays)
+	wrapAdmin("POST /admin/cf-relays", adminHandler.HandleAddCFRelay)
+	wrapAdmin("DELETE /admin/cf-relays/", adminHandler.HandleDeleteCFRelay)
+	wrapAdmin("POST /admin/cf-relays/test", adminHandler.HandleTestCFRelay)
 
 	// Provider CRUD
 	wrapAdmin("GET /admin/providers", adminHandler.HandleProviders)
@@ -264,6 +281,8 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("PUT /admin/config/retry", adminHandler.HandleUpdateConfigRetry)
 	wrapAdmin("GET /admin/config/token-saver", adminHandler.HandleGetTokenSaverConfig)
 	wrapAdmin("PUT /admin/config/token-saver", adminHandler.HandleUpdateTokenSaverConfig)
+	wrapAdmin("GET /admin/config/privacy", adminHandler.HandleGetPrivacyConfig)
+	wrapAdmin("PUT /admin/config/privacy", adminHandler.HandleUpdatePrivacyConfig)
 
 	// Diagnostic endpoints
 	wrapAdmin("GET /admin/templates", adminHandler.HandleTemplates)
@@ -653,6 +672,14 @@ func (s *Server) ReloadConfig() error {
 			slog.Warn("skipping provider with no API keys", "name", pCfg.Name)
 			continue
 		}
+		if pCfg.RelayURL != "" {
+			if cr := newCfg.FindCFRelay(pCfg.RelayURL); cr != nil {
+				pCfg.RelayURL = cr.GetEffectiveBaseURL()
+				if pCfg.RelaySecret == "" {
+					pCfg.RelaySecret = cr.Token
+				}
+			}
+		}
 		p, err := provider.NewProviderFromConfig(pCfg)
 		if err != nil {
 			return fmt.Errorf("init provider %s: %w", pCfg.Name, err)
@@ -696,7 +723,7 @@ func (s *Server) ReloadConfig() error {
 	}
 
 	// Thread-safe update of proxy handler configs
-	s.handler.UpdateConfig(r, keyStore, newLimiter, &newCfg.TokenSaver)
+	s.handler.UpdateConfig(r, keyStore, newLimiter, &newCfg.TokenSaver, &newCfg.Privacy)
 
 	// Swap the registry so health checks and lookups track the new providers.
 	// (Without this, post-reload health flips landed on orphaned objects.)

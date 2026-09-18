@@ -137,3 +137,245 @@ func TestHandler_HandleChatCompletion_AuthAndValidation(t *testing.T) {
 		t.Errorf("expected 403 for disallowed model, got %d", wDisallowed.Code)
 	}
 }
+
+func TestHandler_PrivacyFilter_BlockMode(t *testing.T) {
+	h, _ := setupTestHandler()
+	h.SetPrivacyConfig(config.PrivacyConfig{
+		Enabled:     true,
+		Mode:        "block",
+		Scope:       "all",
+		MaskSecrets: true,
+		MaskPII:     true,
+	})
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"My key is sk-proj-1234567890abcdef1234567890"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-valid-key")
+	w := httptest.NewRecorder()
+
+	h.HandleChatCompletion(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for blocked privacy violation, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "blocked by privacy policy") {
+		t.Fatalf("expected error message to mention privacy policy, got: %s", w.Body.String())
+	}
+}
+
+func TestHandler_PrivacyFilter_BypassHeader(t *testing.T) {
+	h, _ := setupTestHandler()
+	h.SetPrivacyConfig(config.PrivacyConfig{
+		Enabled:     true,
+		Mode:        "block",
+		Scope:       "all",
+		MaskSecrets: true,
+		MaskPII:     true,
+	})
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"My key is sk-proj-1234567890abcdef1234567890"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer sk-valid-key")
+	req.Header.Set("X-Privacy-Filter", "off")
+	w := httptest.NewRecorder()
+
+	h.HandleChatCompletion(w, req)
+	// Because dummy key fails at upstream, status will not be 400 (it bypassed block validation)
+	if w.Code == http.StatusBadRequest {
+		t.Fatalf("expected request with X-Privacy-Filter: off to bypass block mode, but got 400: %s", w.Body.String())
+	}
+}
+
+func TestHandler_PrivacyFilter_VaultMode_RoundTrip(t *testing.T) {
+	var upstreamReceivedPrompt string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Messages) > 0 {
+			upstreamReceivedPrompt = req.Messages[0].Content
+		}
+
+		resp := map[string]interface{}{
+			"id":      "chatcmpl-test",
+			"object":  "chat.completion",
+			"created": 1234567890,
+			"model":   "gpt-4o",
+			"choices": []map[string]interface{}{
+				{
+					"index": 0,
+					"message": map[string]interface{}{
+						"role":    "assistant",
+						"content": "Confirmed key is " + upstreamReceivedPrompt,
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "mock-openai", Type: "openai", BaseURL: upstream.URL, APIKeys: []string{"upstream-dummy-key"}},
+		},
+		Models: []config.ModelConfig{
+			{Name: "gpt-4o", Provider: "mock-openai", Model: "gpt-4o"},
+		},
+		APIKeys: []config.APIKeyConfig{
+			{Key: "sk-valid-key", Name: "User Key", AllowedModels: []string{"gpt-4o"}, RateLimit: 100},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	p, _ := provider.NewProviderFromConfig(cfg.Providers[0])
+	reg.Register("mock-openai", p)
+
+	r, _ := router.NewRouter(cfg, reg)
+	ks := auth.NewKeyStore(cfg.APIKeys)
+	limiter := middleware.NewConcurrencyLimiter(10)
+
+	h := NewHandler(r, ks, limiter, config.TokenSaverConfig{})
+	h.SetPrivacyConfig(config.PrivacyConfig{
+		Enabled:     true,
+		Mode:        "vault",
+		Scope:       "all",
+		MaskSecrets: true,
+		MaskPII:     true,
+	})
+
+	originalSecretKey := "sk-proj-1234567890abcdef1234567890"
+	clientBody := `{"model":"gpt-4o","messages":[{"role":"user","content":"My key is ` + originalSecretKey + `"}]}`
+	clientReq := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(clientBody))
+	clientReq.Header.Set("Authorization", "Bearer sk-valid-key")
+	w := httptest.NewRecorder()
+
+	h.HandleChatCompletion(w, clientReq)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from proxy, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 1. Verify UPSTREAM never saw the real secret key!
+	if strings.Contains(upstreamReceivedPrompt, originalSecretKey) {
+		t.Fatalf("LEAK: upstream received the original secret key! Got: %s", upstreamReceivedPrompt)
+	}
+	if !strings.Contains(upstreamReceivedPrompt, "sk-proj-mocksec") {
+		t.Fatalf("upstream did not receive synthetic dummy key! Got: %s", upstreamReceivedPrompt)
+	}
+
+	// 2. Verify CLIENT received the response with original secret key fully restored!
+	var clientResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&clientResp); err != nil {
+		t.Fatalf("failed to decode client response: %v", err)
+	}
+
+	clientGotContent := clientResp.Choices[0].Message.Content
+	if !strings.Contains(clientGotContent, originalSecretKey) {
+		t.Fatalf("CLIENT did not receive restored secret key! Got: %s", clientGotContent)
+	}
+	if strings.Contains(clientGotContent, "sk-proj-mocksec") {
+		t.Fatalf("CLIENT response still contains leaked synthetic token! Got: %s", clientGotContent)
+	}
+}
+
+func TestHandler_PrivacyFilter_VaultMode_StreamingRoundTrip(t *testing.T) {
+	var upstreamReceivedPrompt string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Messages) > 0 {
+			upstreamReceivedPrompt = req.Messages[0].Content
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+
+		flusher, _ := w.(http.Flusher)
+
+		// Upstream streams tokens in chunks:
+		// Chunk 1: "Confirmed: "
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Confirmed: \"}}]}\n\n"))
+		flusher.Flush()
+
+		// Chunk 2 & 3: Upstream emits the synthetic key split across chunks!
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"sk-proj-mocksec000000000000000000\"}}]}\n\n"))
+		flusher.Flush()
+
+		w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"01 done\"}}]}\n\n"))
+		flusher.Flush()
+
+		w.Write([]byte("data: [DONE]\n\n"))
+		flusher.Flush()
+	}))
+	defer upstream.Close()
+
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "mock-openai", Type: "openai", BaseURL: upstream.URL, APIKeys: []string{"upstream-dummy-key"}},
+		},
+		Models: []config.ModelConfig{
+			{Name: "gpt-4o", Provider: "mock-openai", Model: "gpt-4o"},
+		},
+		APIKeys: []config.APIKeyConfig{
+			{Key: "sk-valid-key", Name: "User Key", AllowedModels: []string{"gpt-4o"}, RateLimit: 100},
+		},
+	}
+
+	reg := provider.NewRegistry()
+	p, _ := provider.NewProviderFromConfig(cfg.Providers[0])
+	reg.Register("mock-openai", p)
+
+	r, _ := router.NewRouter(cfg, reg)
+	ks := auth.NewKeyStore(cfg.APIKeys)
+	limiter := middleware.NewConcurrencyLimiter(10)
+
+	h := NewHandler(r, ks, limiter, config.TokenSaverConfig{})
+	h.SetPrivacyConfig(config.PrivacyConfig{
+		Enabled:     true,
+		Mode:        "vault",
+		Scope:       "all",
+		MaskSecrets: true,
+	})
+
+	originalSecretKey := "sk-proj-1234567890abcdef1234567890"
+	clientBody := `{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"My key is ` + originalSecretKey + `"}]}`
+	clientReq := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(clientBody))
+	clientReq.Header.Set("Authorization", "Bearer sk-valid-key")
+	w := httptest.NewRecorder()
+
+	h.HandleChatCompletion(w, clientReq)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from proxy stream, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 1. Verify UPSTREAM never saw the real secret key!
+	if strings.Contains(upstreamReceivedPrompt, originalSecretKey) {
+		t.Fatalf("LEAK: upstream received the original secret key! Got: %s", upstreamReceivedPrompt)
+	}
+
+	// 2. Verify CLIENT received stream with the real secret key restored across chunk splits!
+	clientStreamOutput := w.Body.String()
+	if !strings.Contains(clientStreamOutput, originalSecretKey) {
+		t.Fatalf("CLIENT stream did not receive restored secret key! Got:\n%s", clientStreamOutput)
+	}
+	if strings.Contains(clientStreamOutput, "sk-proj-mocksec") {
+		t.Fatalf("CLIENT stream still contains synthetic dummy token! Got:\n%s", clientStreamOutput)
+	}
+}
+

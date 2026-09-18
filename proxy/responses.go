@@ -287,6 +287,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	limiter := h.limiter
 	tracker := h.tracker
 	tsCfg := h.tokenSaverCfg
+	privacyCfg := h.privacyCfg
 	h.mu.RUnlock()
 
 	apiKey := h.extractAPIKey(r)
@@ -346,6 +347,44 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// === OpenCode Meta & Context Setup ===
+	reqCtx := r.Context()
+	sessID := r.Header.Get("x-opencode-session")
+	if sessID == "" {
+		sessID = r.Header.Get("X-Session-ID")
+	}
+	clientTool := r.Header.Get("x-client-tool")
+	if clientTool == "" {
+		clientTool = "gogate"
+	}
+	reqCtx = provider.WithOpenCodeMeta(reqCtx, sessID, clientTool, r.Header.Get("User-Agent"))
+
+	// === Privacy Filter (DLP) ===
+	if keyInfo.IsPrivacyFilterEnabled(privacyCfg.Enabled) && !isPrivacyFilterBypassed(r) {
+		vault := middleware.NewPrivacyVault()
+		reqCtx = middleware.WithPrivacyVault(reqCtx, vault)
+		reqCtx = middleware.WithPrivacyConfig(reqCtx, privacyCfg)
+		if privacyCfg.Scope == "all" {
+			if privacyCfg.Mode == "block" {
+				if err := middleware.ValidateMessages(chatReq.Messages, privacyCfg); err != nil {
+					h.sendError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+					return
+				}
+			} else {
+				sanitizedMsgs, stats := middleware.SanitizeMessagesWithVault(chatReq.Messages, privacyCfg, vault)
+				if stats != nil && stats.RedactionsCount > 0 {
+					chatReq.Messages = sanitizedMsgs
+					slog.Info("🛡️ [PRIVACY] Sanitized prompt for responses request (scope: all)",
+						"redactions", stats.RedactionsCount,
+						"types", stats.DetectedTypes,
+						"mode", privacyCfg.Mode,
+					)
+				}
+			}
+		}
+	}
+	r = r.WithContext(reqCtx)
+
 	if !limiter.AcquireGlobalWithQueue() {
 		middleware.QueueFullResponse(w)
 		return
@@ -364,7 +403,7 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startTime := time.Now()
-	resp, provName, err := routerInst.ChatCompletion(r.Context(), chatReq.Model, chatReq)
+	resp, provName, err := routerInst.ChatCompletion(reqCtx, chatReq.Model, chatReq)
 	durationMs := time.Since(startTime).Milliseconds()
 	if err != nil {
 		slog.Error(fmt.Sprintf("❌ [RESPONSES] error: %v | model=%s | duration=%dms", err, req.Model, durationMs))
@@ -377,6 +416,13 @@ func (h *Handler) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		}
 		h.sendError(w, http.StatusBadGateway, "Provider error: "+err.Error(), "upstream_error")
 		return
+	}
+
+	if resp != nil {
+		vault := middleware.GetPrivacyVault(reqCtx)
+		if vault != nil {
+			middleware.DeAnonymizeResponse(resp, vault)
+		}
 	}
 
 	out := chatToResponses(req.Model, resp)
@@ -410,7 +456,17 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	chatReq.Stream = true
 	chatReq.StreamOptions = json.RawMessage(`{"include_usage":true}`)
 
-	translator := newResponsesStreamTranslator(w, flusher, routeModel)
+	var streamW http.ResponseWriter = w
+	var cleanupStream func()
+	vault := middleware.GetPrivacyVault(r.Context())
+	if vault != nil {
+		deanonymizer := middleware.NewDeAnonymizingResponseWriter(w, flusher, vault)
+		streamW = deanonymizer
+		cleanupStream = deanonymizer.FlushFinal
+		defer cleanupStream()
+	}
+
+	translator := newResponsesStreamTranslator(streamW, flusher, routeModel)
 	startTime := time.Now()
 	streamReq := *chatReq
 	err := routerInst.ChatCompletionStream(r.Context(), chatReq.Model, &streamReq, translator, translator)
@@ -440,6 +496,9 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 		if rerr != nil {
 			h.responsesStreamError(w, translator, tracker, routeModel, rerr, durationMs)
 			return
+		}
+		if resp != nil && vault != nil {
+			middleware.DeAnonymizeResponse(resp, vault)
 		}
 		out := chatToResponses(routeModel, resp)
 		if tracker != nil && resp.Usage != nil {

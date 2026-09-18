@@ -18,25 +18,31 @@ import (
 	"github.com/aigateway/provider"
 )
 
-// ProxyEntry represents a verified public proxy in the pool.
+// ProxyEntry represents a verified public or manual proxy in the pool.
 type ProxyEntry struct {
 	URL         string        `json:"url"`
 	Latency     time.Duration `json:"latency"`
 	LatencyMs   int64         `json:"latency_ms"`
 	LastChecked time.Time     `json:"last_checked"`
 	Failures    atomic.Int32  `json:"failures"`
+	IsManual    bool          `json:"is_manual,omitempty"`
 }
 
 // ProxyPoolStats holds snapshot metrics of the proxy pool.
 type ProxyPoolStats struct {
 	Enabled        bool          `json:"enabled"`
 	ActiveCount    int           `json:"active_count"`
+	HealthyCount   int           `json:"healthy_count"`
 	TotalFound     int           `json:"total_found"`
+	TotalScraped   int           `json:"total_scraped"`
 	AverageLatency string        `json:"average_latency"`
 	LastRefresh    string        `json:"last_refresh"`
 	CheckInterval  string        `json:"check_interval"`
 	Sources        []string      `json:"sources"`
 	TopProxies     []*ProxyEntry `json:"top_proxies,omitempty"`
+	Proxies        []*ProxyEntry `json:"proxies,omitempty"`
+	ManualCount    int           `json:"manual_count"`
+	ManualProxies  []*ProxyEntry `json:"manual_proxies,omitempty"`
 }
 
 // ProxyPool manages free public proxies, background validation, and round-robin rotation.
@@ -44,6 +50,8 @@ type ProxyPool struct {
 	mu            sync.RWMutex
 	enabled       bool
 	sources       []string
+	manualProxies []string
+	manualEntries []*ProxyEntry
 	checkInterval time.Duration
 	checkTimeout  time.Duration
 	testURL       string
@@ -76,12 +84,12 @@ func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
 
 	checkTimeout := cfg.CheckTimeout
 	if checkTimeout <= 0 {
-		checkTimeout = 5 * time.Second
+		checkTimeout = 4 * time.Second
 	}
 
 	testURL := cfg.TestURL
-	if testURL == "" || testURL == "http://www.google.com/generate_204" {
-		testURL = "https://www.google.com/generate_204"
+	if testURL == "" {
+		testURL = "https://cloudflare.com/cdn-cgi/trace"
 	}
 
 	maxProxies := cfg.MaxProxies
@@ -89,15 +97,39 @@ func NewProxyPool(cfg config.ProxyPoolConfig) *ProxyPool {
 		maxProxies = 50
 	}
 
-	return &ProxyPool{
+	pool := &ProxyPool{
 		enabled:       cfg.Enabled,
 		sources:       sources,
+		manualProxies: cfg.ManualProxies,
+		manualEntries: make([]*ProxyEntry, 0),
 		checkInterval: checkInterval,
 		checkTimeout:  checkTimeout,
 		testURL:       testURL,
 		maxProxies:    maxProxies,
 		proxies:       make([]*ProxyEntry, 0),
 	}
+
+	// Initialize manual proxies from config
+	for _, raw := range cfg.ManualProxies {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "socks5://") {
+			raw = "http://" + raw
+		}
+		entry := &ProxyEntry{
+			URL:         raw,
+			Latency:     100 * time.Millisecond,
+			LatencyMs:   100,
+			LastChecked: time.Now(),
+			IsManual:    true,
+		}
+		pool.manualEntries = append(pool.manualEntries, entry)
+		pool.proxies = append(pool.proxies, entry)
+	}
+
+	return pool
 }
 
 // IsEnabled returns true if the proxy pool is enabled.
@@ -188,12 +220,29 @@ func (p *ProxyPool) Refresh(ctx context.Context) error {
 	}
 
 	p.mu.Lock()
-	p.proxies = alive
+	var combined []*ProxyEntry
+	// Always prioritize manual proxies at top of pool
+	combined = append(combined, p.manualEntries...)
+	for _, a := range alive {
+		isMan := false
+		for _, m := range p.manualEntries {
+			if m.URL == a.URL {
+				isMan = true
+				break
+			}
+		}
+		if !isMan {
+			combined = append(combined, a)
+		}
+	}
+	p.proxies = combined
 	p.lastRefresh = time.Now()
 	p.mu.Unlock()
 
 	slog.Info("proxy pool refresh complete",
-		"alive_count", len(alive),
+		"alive_count", len(combined),
+		"scraped_alive", len(alive),
+		"manual_count", len(p.manualEntries),
 		"total_scraped", p.totalFound,
 	)
 	return nil
@@ -331,19 +380,42 @@ func (p *ProxyPool) testProxy(ctx context.Context, proxyStr string) (*ProxyEntry
 	}
 
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, "GET", p.testURL, nil)
+	targetURL := p.testURL
+	if targetURL == "" {
+		targetURL = "https://cloudflare.com/cdn-cgi/trace"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", targetURL, nil)
 	if err != nil {
 		return nil, false
 	}
 
 	resp, err := client.Do(req)
-	if err != nil {
-		return nil, false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return nil, false
+	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		fallbackURL := "https://www.google.com/generate_204"
+		if targetURL == fallbackURL {
+			fallbackURL = "https://cloudflare.com/cdn-cgi/trace"
+		}
+		req2, err2 := http.NewRequestWithContext(ctx, "GET", fallbackURL, nil)
+		if err2 != nil {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			return nil, false
+		}
+		resp2, err2 := client.Do(req2)
+		if err2 != nil || resp2.StatusCode < 200 || resp2.StatusCode >= 400 {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			if resp2 != nil {
+				resp2.Body.Close()
+			}
+			return nil, false
+		}
+		resp2.Body.Close()
+	} else {
+		resp.Body.Close()
 	}
 
 	latency := time.Since(start)
@@ -432,6 +504,11 @@ func (p *ProxyPool) MarkFailure(proxyURL string) {
 
 	for i, pe := range p.proxies {
 		if pe.URL == proxyURL {
+			if pe.IsManual {
+				// Record failure on manual proxy, but never evict from pool
+				pe.Failures.Add(1)
+				return
+			}
 			if pe.Failures.Add(1) >= 3 {
 				// Evict dead proxy
 				slog.Info("evicting failing proxy from pool", "proxy", proxyURL)
@@ -439,6 +516,149 @@ func (p *ProxyPool) MarkFailure(proxyURL string) {
 			}
 			return
 		}
+	}
+}
+
+// TestProxyDirect tests a proxy URL directly and returns the ProxyEntry with latency or an error.
+func (p *ProxyPool) TestProxyDirect(ctx context.Context, proxyStr string) (*ProxyEntry, error) {
+	proxyStr = strings.TrimSpace(proxyStr)
+	if !strings.HasPrefix(proxyStr, "http://") && !strings.HasPrefix(proxyStr, "https://") && !strings.HasPrefix(proxyStr, "socks5://") {
+		proxyStr = "http://" + proxyStr
+	}
+	entry, ok := p.testProxy(ctx, proxyStr)
+	if !ok {
+		return nil, fmt.Errorf("proxy is unreachable or failed health check")
+	}
+	return entry, nil
+}
+
+// AddManualProxy adds a manual proxy to the pool, testing it first.
+func (p *ProxyPool) AddManualProxy(ctx context.Context, rawURL string) (*ProxyEntry, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, fmt.Errorf("proxy URL cannot be empty")
+	}
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "socks5://") {
+		rawURL = "http://" + rawURL
+	}
+	if _, err := url.Parse(rawURL); err != nil {
+		return nil, fmt.Errorf("invalid proxy URL format: %w", err)
+	}
+
+	entry, err := p.TestProxyDirect(ctx, rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("proxy test failed: %w", err)
+	}
+	entry.IsManual = true
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// Check if already in manualProxies
+	exists := false
+	for _, mp := range p.manualProxies {
+		if mp == rawURL {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		p.manualProxies = append(p.manualProxies, rawURL)
+	}
+
+	// Update manualEntries
+	foundEntry := false
+	for i, me := range p.manualEntries {
+		if me.URL == rawURL {
+			p.manualEntries[i] = entry
+			foundEntry = true
+			break
+		}
+	}
+	if !foundEntry {
+		p.manualEntries = append(p.manualEntries, entry)
+	}
+
+	// Add to active pool at the front
+	inPool := false
+	for i, pe := range p.proxies {
+		if pe.URL == rawURL {
+			p.proxies[i] = entry
+			inPool = true
+			break
+		}
+	}
+	if !inPool {
+		p.proxies = append([]*ProxyEntry{entry}, p.proxies...)
+	}
+
+	return entry, nil
+}
+
+// RemoveManualProxy removes a manual proxy from the pool.
+func (p *ProxyPool) RemoveManualProxy(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "socks5://") {
+		rawURL = "http://" + rawURL
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	removed := false
+	var newManuals []string
+	for _, mp := range p.manualProxies {
+		if mp == rawURL {
+			removed = true
+		} else {
+			newManuals = append(newManuals, mp)
+		}
+	}
+	p.manualProxies = newManuals
+
+	var newEntries []*ProxyEntry
+	for _, me := range p.manualEntries {
+		if me.URL != rawURL {
+			newEntries = append(newEntries, me)
+		}
+	}
+	p.manualEntries = newEntries
+
+	var newPool []*ProxyEntry
+	for _, pe := range p.proxies {
+		if pe.URL != rawURL || !pe.IsManual {
+			newPool = append(newPool, pe)
+		}
+	}
+	p.proxies = newPool
+
+	return removed
+}
+
+// GetManualProxies returns the list of configured manual proxy URLs.
+func (p *ProxyPool) GetManualProxies() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	res := make([]string, len(p.manualProxies))
+	copy(res, p.manualProxies)
+	return res
+}
+
+// SetManualProxies initializes the manual proxies list.
+func (p *ProxyPool) SetManualProxies(proxies []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.manualProxies = proxies
+	p.manualEntries = nil
+	for _, mp := range proxies {
+		entry := &ProxyEntry{
+			URL:         mp,
+			Latency:     100 * time.Millisecond,
+			LatencyMs:   100,
+			LastChecked: time.Now(),
+			IsManual:    true,
+		}
+		p.manualEntries = append(p.manualEntries, entry)
 	}
 }
 
@@ -464,21 +684,31 @@ func (p *ProxyPool) Stats() ProxyPoolStats {
 
 	var top []*ProxyEntry
 	for i, pe := range p.proxies {
-		if i >= 10 {
+		if i >= 15 {
 			break
 		}
 		top = append(top, pe)
 	}
 
+	var manCopies []*ProxyEntry
+	for _, me := range p.manualEntries {
+		manCopies = append(manCopies, me)
+	}
+
 	return ProxyPoolStats{
 		Enabled:        p.enabled,
 		ActiveCount:    len(p.proxies),
+		HealthyCount:   len(p.proxies),
 		TotalFound:     p.totalFound,
+		TotalScraped:   p.totalFound,
 		AverageLatency: avgLatency,
 		LastRefresh:    lastRef,
 		CheckInterval:  p.checkInterval.String(),
 		Sources:        p.sources,
 		TopProxies:     top,
+		Proxies:        top,
+		ManualCount:    len(p.manualEntries),
+		ManualProxies:  manCopies,
 	}
 }
 

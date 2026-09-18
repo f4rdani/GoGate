@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,12 +17,34 @@ type Config struct {
 	Cache       CacheConfig       `yaml:"cache" json:"cache"`
 	Retry       RetryConfig       `yaml:"retry" json:"retry"`
 	TokenSaver  TokenSaverConfig  `yaml:"token_saver" json:"token_saver"`
+	Privacy     PrivacyConfig     `yaml:"privacy,omitempty" json:"privacy,omitempty"`
 	ProxyPool   ProxyPoolConfig        `yaml:"proxy_pool,omitempty" json:"proxy_pool,omitempty"`
+	CFRelays    []CFRelay              `yaml:"cf_relays,omitempty" json:"cf_relays,omitempty"`
 	Providers   []ProviderConfig       `yaml:"providers" json:"providers"`
 	Models      []ModelConfig          `yaml:"models" json:"models"`
 	APIKeys     []APIKeyConfig         `yaml:"api_keys" json:"api_keys"`
 	Prices      map[string]ModelPrice  `yaml:"prices,omitempty" json:"prices,omitempty"`
 	Budgets     []BudgetConfig         `yaml:"budgets,omitempty" json:"budgets,omitempty"`
+}
+
+// CFRelay represents a Cloudflare reverse proxy relay or AI Gateway configuration.
+type CFRelay struct {
+	Name      string `yaml:"name" json:"name"`                         // Nama relay (e.g. "cf-main", "my-gateway")
+	AccountID string `yaml:"account_id" json:"account_id"`             // Cloudflare Account ID (id)
+	Token     string `yaml:"token" json:"token"`                       // Cloudflare API Token / Secret
+	Type      string `yaml:"type,omitempty" json:"type,omitempty"`     // "ai-gateway" (default), "tunnel", "worker"
+	BaseURL   string `yaml:"base_url,omitempty" json:"base_url,omitempty"` // Computed or custom base URL
+}
+
+// GetEffectiveBaseURL returns the computed base URL for routing upstream AI requests.
+func (r *CFRelay) GetEffectiveBaseURL() string {
+	if r.BaseURL != "" {
+		return strings.TrimRight(r.BaseURL, "/")
+	}
+	if r.AccountID != "" && r.Name != "" {
+		return fmt.Sprintf("https://gateway.ai.cloudflare.com/v1/%s/%s", r.AccountID, r.Name)
+	}
+	return ""
 }
 
 // BudgetConfig caps monthly token spend per upstream provider. When a
@@ -36,6 +59,7 @@ type BudgetConfig struct {
 type ProxyPoolConfig struct {
 	Enabled       bool          `yaml:"enabled" json:"enabled"`
 	Sources       []string      `yaml:"sources,omitempty" json:"sources,omitempty"`
+	ManualProxies []string      `yaml:"manual_proxies,omitempty" json:"manual_proxies,omitempty"`
 	CheckInterval time.Duration `yaml:"check_interval,omitempty" json:"check_interval,omitempty"`
 	CheckTimeout  time.Duration `yaml:"check_timeout,omitempty" json:"check_timeout,omitempty"`
 	TestURL       string        `yaml:"test_url,omitempty" json:"test_url,omitempty"`
@@ -51,6 +75,15 @@ type TokenSaverConfig struct {
 	CompressUser  bool   `yaml:"compress_user" json:"compress_user"`     // also compress user messages (default: true)
 	MinifyJSON    bool   `yaml:"minify_json" json:"minify_json"`         // minify JSON blobs in messages (default: true)
 	StripComments bool   `yaml:"strip_comments" json:"strip_comments"`   // strip code comments (default: false)
+}
+
+// PrivacyConfig holds settings for DLP / PII and sensitive secret masking.
+type PrivacyConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`                   // master toggle (default: false)
+	Mode        string `yaml:"mode,omitempty" json:"mode,omitempty"`     // "vault" (reversible synthetic dummy) or "redact" or "block" (default: "vault")
+	Scope       string `yaml:"scope,omitempty" json:"scope,omitempty"`   // "free-only" (default: only Tier 3/free) or "all"
+	MaskSecrets bool   `yaml:"mask_secrets" json:"mask_secrets"`         // mask API keys, private keys, passwords (default: true)
+	MaskPII     bool   `yaml:"mask_pii" json:"mask_pii"`                 // mask email, phone, IP, credit cards (default: true)
 }
 
 // ServerConfig holds HTTP server settings.
@@ -156,6 +189,7 @@ type APIKeyConfig struct {
 	AllowedModels []string `yaml:"allowed_models" json:"allowed_models"`
 	RateLimit     int      `yaml:"rate_limit" json:"rate_limit"`                       // requests per minute, 0 = unlimited
 	TokenSaver    *bool    `yaml:"token_saver,omitempty" json:"token_saver,omitempty"` // per-key toggle (nil = follow global, true/false = override)
+	Privacy       *bool    `yaml:"privacy,omitempty" json:"privacy,omitempty"`         // per-key privacy toggle (nil = follow global, true/false = override)
 	Disabled      bool     `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
@@ -241,6 +275,14 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.TokenSaver.MinifyJSON = true
 	}
 
+	// Privacy defaults
+	if cfg.Privacy.Mode == "" {
+		cfg.Privacy.Mode = "vault"
+	}
+	if cfg.Privacy.Scope == "" {
+		cfg.Privacy.Scope = "free-only"
+	}
+
 	// Apply provider tier defaults
 	for i := range cfg.Providers {
 		if cfg.Providers[i].Tier == 0 {
@@ -321,10 +363,10 @@ func (c *Config) Validate() error {
 			"openai": true, "anthropic": true, "groq": true,
 			"mistral": true, "custom": true, "cohere": true,
 			"opencode": true, "cerebras": true, "cloudflare": true,
-			"oauth": true, "kiro": true,
+			"oauth": true, "kiro": true, "mimo": true,
 		}
 		if !validTypes[p.Type] {
-			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare, oauth, kiro)", p.Name, p.Type)
+			return fmt.Errorf("provider %s: invalid type %q (valid: openai, cohere, opencode, cerebras, anthropic, groq, mistral, custom, cloudflare, oauth, kiro, mimo)", p.Name, p.Type)
 		}
 
 		if p.Type == "kiro" {
@@ -479,3 +521,14 @@ func (c *Config) RenameModelCascade(oldName, newName string) {
 		}
 	}
 }
+
+// FindCFRelay searches for a configured Cloudflare Relay by name.
+func (c *Config) FindCFRelay(name string) *CFRelay {
+	for i := range c.CFRelays {
+		if strings.EqualFold(c.CFRelays[i].Name, name) {
+			return &c.CFRelays[i]
+		}
+	}
+	return nil
+}
+

@@ -72,14 +72,20 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 		}
 		if o.RelaySecret() != "" {
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
 		if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
-			sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			sess, tool, ua := GetOpenCodeMeta(attemptCtx)
+			sessionID := TranslateOpenCodeSessionID(sess, tool)
 			httpReq.Header.Set("x-opencode-session", sessionID)
 			httpReq.Header.Set("X-Session-ID", sessionID)
+			httpReq.Header.Set("User-Agent", FormatOpenCodeUserAgent(ua))
+			if apiKey == "" {
+				httpReq.Header.Set("Authorization", "Bearer public")
+			}
 		}
 		if o.providerType == "mimo" {
 			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
@@ -195,14 +201,20 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 		}
 		if o.RelaySecret() != "" {
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
 		if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
 		}
 		if o.providerType == "opencode" {
-			sessionID := fmt.Sprintf("ses_%d", time.Now().UnixNano())
+			sess, tool, ua := GetOpenCodeMeta(attemptCtx)
+			sessionID := TranslateOpenCodeSessionID(sess, tool)
 			httpReq.Header.Set("x-opencode-session", sessionID)
 			httpReq.Header.Set("X-Session-ID", sessionID)
+			httpReq.Header.Set("User-Agent", FormatOpenCodeUserAgent(ua))
+			if apiKey == "" {
+				httpReq.Header.Set("Authorization", "Bearer public")
+			}
 		}
 		if o.providerType == "mimo" {
 			httpReq.Header.Set("X-Mimo-Source", "mimocode-cli")
@@ -328,6 +340,7 @@ func (o *OpenAIProvider) Embeddings(ctx context.Context, req *models.EmbeddingsR
 		}
 		if o.RelaySecret() != "" {
 			httpReq.Header.Set("X-Relay-Secret", o.RelaySecret())
+			httpReq.Header.Set("cf-aig-authorization", "Bearer "+o.RelaySecret())
 		}
 		if o.RelayURL() != "" && o.baseURL != "" {
 			httpReq.Header.Set("X-Target-URL", o.baseURL)
