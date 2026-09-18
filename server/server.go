@@ -57,16 +57,29 @@ func (s *Server) getConfig() *config.Config {
 // proxies are evicted after 3 consecutive transport failures instead of
 // lingering until the next periodic refresh.
 func wireEgressPool(p provider.Provider, pCfg config.ProviderConfig, proxyPool *relay.ProxyPool) {
-	if ((pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool") || pCfg.Type == "opencode" || pCfg.Type == "mimo") && proxyPool != nil {
-		if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
-			if tr, ok := up.Client().Transport.(*http.Transport); ok {
-				tr.Proxy = proxyPool.ContextProxyFunc()
-				slog.Info("provider routed through dynamic proxy pool", "name", pCfg.Name)
-			}
+	if proxyPool == nil {
+		return
+	}
+	if pCfg.ProxyURL == "direct" || pCfg.ProxyURL == "none" {
+		return
+	}
+	if pCfg.ProxyURL != "" && pCfg.ProxyURL != "auto" && pCfg.ProxyURL != "pool" {
+		return
+	}
+	isKeyless := len(pCfg.APIKeys) == 0 && (pCfg.Type == "opencode" || pCfg.Type == "mimo")
+	shouldPool := pCfg.ProxyURL == "auto" || pCfg.ProxyURL == "pool" || isKeyless
+	if !shouldPool {
+		return
+	}
+
+	if up, ok := p.(provider.UpstreamConfigProvider); ok && up.Client() != nil {
+		if tr, ok := up.Client().Transport.(*http.Transport); ok {
+			tr.Proxy = proxyPool.ContextProxyFunc()
+			slog.Info("provider routed through dynamic proxy pool", "name", pCfg.Name)
 		}
-		if ep, ok := p.(interface{ SetEgressPool(provider.EgressPool) }); ok {
-			ep.SetEgressPool(proxyPool)
-		}
+	}
+	if ep, ok := p.(interface{ SetEgressPool(provider.EgressPool) }); ok {
+		ep.SetEgressPool(proxyPool)
 	}
 }
 

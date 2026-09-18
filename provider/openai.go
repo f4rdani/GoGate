@@ -50,6 +50,7 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 	}
 
 	var lastErr error
+	proxyRetries := 0
 	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
 		keyObj, err := o.NextAPIKey()
 		if err != nil {
@@ -106,6 +107,10 @@ func (o *OpenAIProvider) ChatCompletion(ctx context.Context, req *models.ChatCom
 			// keys (likely via other proxies) are still untried.
 			if egressProxy != "" && ctx.Err() == nil {
 				lastErr = fmt.Errorf("do request: %w", err)
+				if proxyRetries < 2 {
+					proxyRetries++
+					attempt--
+				}
 				continue
 			}
 			return nil, fmt.Errorf("do request: %w", err)
@@ -208,6 +213,7 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 	var lastErr error
 	var resp *http.Response
 	var streamStart time.Time
+	proxyRetries := 0
 	for attempt := 0; attempt < o.keyAttempts(); attempt++ {
 		keyObj, keyErr := o.NextAPIKey()
 		if keyErr != nil {
@@ -261,6 +267,10 @@ func (o *OpenAIProvider) ChatCompletionStream(ctx context.Context, req *models.C
 			o.reportEgress(egressProxy, true)
 			if egressProxy != "" && ctx.Err() == nil {
 				lastErr = fmt.Errorf("do request: %w", err)
+				if proxyRetries < 2 {
+					proxyRetries++
+					attempt--
+				}
 				continue
 			}
 			return fmt.Errorf("do request: %w", err)
