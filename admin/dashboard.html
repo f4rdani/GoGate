@@ -13,6 +13,13 @@
       var saved = localStorage.getItem('gogate_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
       document.documentElement.setAttribute('data-theme', saved);
     } catch(e) {}
+    try {
+      var s = localStorage.getItem('admin_secret') || sessionStorage.getItem('admin_secret') || localStorage.getItem('adminSecret');
+      if (!s) {
+        var target = window.location.pathname + window.location.search;
+        window.location.replace('/login' + (target && target !== '/' && target !== '/admin' ? '?redirect=' + encodeURIComponent(target) : ''));
+      }
+    } catch(e) {}
   })();
 </script>
 <style>
@@ -1778,7 +1785,7 @@ input:focus, select:focus, textarea:focus {
 <body>
 
 <!-- Auth Modal -->
-<div id="authModal" class="modal-overlay">
+<div id="authModal" class="modal-overlay hidden">
   <div class="modal" style="max-width:440px;padding:2rem;">
     <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
       <div class="brand-logo" style="width:38px;height:38px;flex-shrink:0;">
@@ -3220,11 +3227,13 @@ function handleConfirmClick(val){
 }
 
 function showAuth(){
-  document.getElementById('authModal').classList.remove('hidden');
-  document.getElementById('secretInput').focus();
+  var target = window.location.pathname + window.location.search;
+  var redirectParam = (target && target !== '/' && target !== '/admin') ? '?redirect=' + encodeURIComponent(target) : '';
+  window.location.replace('/login' + redirectParam);
 }
 function hideAuth(){
-  document.getElementById('authModal').classList.add('hidden');
+  var modal = document.getElementById('authModal');
+  if (modal) modal.classList.add('hidden');
 }
 
 async function doLogin() {
@@ -3290,9 +3299,10 @@ window.togglePasswordVisibility = togglePasswordVisibility;
 function doLogout(){
   secret='';
   localStorage.removeItem('adminSecret');
+  localStorage.removeItem('admin_secret');
+  sessionStorage.removeItem('admin_secret');
   if(_consoleSSE){_consoleSSE.close();_consoleSSE=null;}
-  showAuth();
-  toast('Logged out','info');
+  window.location.replace('/login');
 }
 
 /* ===== Dual Theme Logic ===== */
@@ -7385,7 +7395,10 @@ function downloadConsoleLogs(){
   if(baseEl) baseEl.textContent = window.location.origin + '/v1';
 
   if(!secret){
-    showAuth();
+    var target = window.location.pathname + window.location.search;
+    var redirectParam = (target && target !== '/' && target !== '/admin') ? '?redirect=' + encodeURIComponent(target) : '';
+    window.location.replace('/login' + redirectParam);
+    return;
   } else {
     try{
       await api('/admin/stats');
@@ -7393,15 +7406,15 @@ function downloadConsoleLogs(){
       fetchAll();
       initConsole();
     }catch(e){
-      showAuth();
+      var target = window.location.pathname + window.location.search;
+      var redirectParam = (target && target !== '/' && target !== '/admin') ? '?redirect=' + encodeURIComponent(target) : '';
+      window.location.replace('/login' + redirectParam);
+      return;
     }
   }
 
   // Polling every 10 seconds
   setInterval(()=>{
-    if(secret && !document.getElementById('authModal').classList.contains('hidden')){
-      return;
-    }
     if(secret) fetchAll();
   }, 10000);
 })();

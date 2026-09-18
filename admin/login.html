@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login &mdash; GoGate AI Gateway Control Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>
+  (function(){
+    try {
+      var saved = localStorage.getItem('gogate_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      document.documentElement.setAttribute('data-theme', saved);
+    } catch(e) {}
+  })();
+</script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root, [data-theme="dark"] {
+  --bg: #070a13;
+  --surface: #0f172a;
+  --surface-subtle: #1e293b;
+  --border: #1e293b;
+  --border-hover: #334155;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --text1: #ffffff;
+  --text2: #94a3b8;
+  --text3: #64748b;
+  --accent: #6366f1;
+  --accent-hover: #4f46e5;
+  --accent-soft: rgba(99, 102, 241, 0.15);
+  --cyan: #06b6d4;
+  --cyan-soft: rgba(6, 182, 212, 0.15);
+  --red: #ef4444;
+  --red-soft: rgba(239, 68, 68, 0.15);
+  --red-border: rgba(239, 68, 68, 0.35);
+  --green: #10b981;
+}
+
+[data-theme="light"] {
+  --bg: #f1f5f9;
+  --surface: #ffffff;
+  --surface-subtle: #f8fafc;
+  --border: #e2e8f0;
+  --border-hover: #cbd5e1;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --text1: #0f172a;
+  --text2: #475569;
+  --text3: #94a3b8;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: rgba(79, 70, 229, 0.1);
+  --cyan: #0891b2;
+  --cyan-soft: rgba(8, 145, 178, 0.1);
+  --red: #dc2626;
+  --red-soft: rgba(220, 38, 38, 0.1);
+  --red-border: rgba(220, 38, 38, 0.25);
+  --green: #059669;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text1);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Atmospheric glow effect */
+.bg-glow {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(6, 182, 212, 0.05) 50%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.35);
+  width: 100%;
+  max-width: 440px;
+  padding: 2.5rem 2.25rem;
+  backdrop-filter: blur(12px);
+}
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
+}
+
+.brand-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--accent) 0%, var(--cyan) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+  flex-shrink: 0;
+}
+
+.brand-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text1);
+}
+
+.brand-subtitle {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 0.1rem;
+}
+
+.login-desc {
+  font-size: 0.875rem;
+  color: var(--text2);
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+}
+
+.form-group {
+  margin-bottom: 1.25rem;
+}
+
+.form-label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text1);
+  margin-bottom: 0.5rem;
+}
+
+.input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-icon {
+  position: absolute;
+  left: 0.9rem;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.login-input {
+  width: 100%;
+  padding: 0.75rem 2.75rem 0.75rem 2.5rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text1);
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.login-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: var(--surface);
+}
+
+.btn-toggle-eye {
+  position: absolute;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.btn-toggle-eye:hover {
+  color: var(--text1);
+}
+
+.error-box {
+  display: none;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  background: var(--red-soft);
+  border: 1px solid var(--red-border);
+  color: var(--red);
+  font-size: 0.82rem;
+  margin-bottom: 1.25rem;
+  line-height: 1.4;
+}
+
+.btn-submit {
+  width: 100%;
+  padding: 0.8rem 1.25rem;
+  background: linear-gradient(135deg, var(--accent) 0%, #4338ca 100%);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);
+  transition: all 0.2s ease;
+}
+
+.btn-submit:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(79, 70, 229, 0.45);
+}
+
+.btn-submit:active {
+  transform: translateY(0);
+}
+
+.btn-submit:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.login-footer {
+  margin-top: 2rem;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.badge-tag {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text2);
+}
+
+.theme-toggle-btn {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 100;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  transition: all 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+  color: var(--text1);
+  border-color: var(--border-hover);
+  transform: scale(1.06);
+}
+</style>
+</head>
+<body>
+
+<button class="theme-toggle-btn" id="themeToggleBtn" onclick="toggleTheme()" title="Toggle Light / Dark Theme">
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+</button>
+
+<div class="bg-glow"></div>
+
+<div class="login-card">
+  <div class="brand-header">
+    <div class="brand-icon">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+      </svg>
+    </div>
+    <div>
+      <div class="brand-title">GoGate AI Gateway</div>
+      <div class="brand-subtitle">Control Center Login</div>
+    </div>
+  </div>
+
+  <p class="login-desc">
+    Silakan masukkan <strong>Admin Secret</strong> yang terkonfigurasi pada server untuk mengakses panel manajemen gateway.
+  </p>
+
+  {{DEFAULT_PASS_BOX}}
+
+  <form id="loginForm" onsubmit="event.preventDefault(); submitLogin();">
+    <div class="form-group">
+      <label class="form-label" for="adminSecretInput">Admin Secret / Password</label>
+      <div class="input-wrapper">
+        <div class="input-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        </div>
+        <input type="password" id="adminSecretInput" class="login-input" placeholder="Masukkan admin secret..." autofocus autocomplete="current-password">
+        <button type="button" class="btn-toggle-eye" id="btnEyeToggle" onclick="togglePassVisibility()" title="Lihat / Sembunyikan Password">
+          <svg id="eyeIcon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="error-box" id="errorBox"></div>
+
+    <button type="submit" id="btnSubmit" class="btn-submit">
+      <span>Masuk ke Dashboard</span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+    </button>
+  </form>
+
+  <div class="login-footer">
+    <span>GoGate Gateway Control Center</span>
+    <span class="badge-tag">{{APP_VERSION}}</span>
+  </div>
+</div>
+
+<script>
+const THEME_SUN_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`;
+const THEME_MOON_SVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`;
+
+function updateThemeBtn() {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  const btn = document.getElementById('themeToggleBtn');
+  if (btn) {
+    btn.innerHTML = isDark ? THEME_SUN_SVG : THEME_MOON_SVG;
+    btn.title = isDark ? 'Beralih ke Tema Terang (Light Mode)' : 'Beralih ke Tema Gelap (Dark Mode)';
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme') || 'dark';
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('gogate_theme', next); } catch(e){}
+  updateThemeBtn();
+}
+
+updateThemeBtn();
+
+// Check if already authenticated on page load
+(async function checkExistingAuth() {
+  const existing = localStorage.getItem('admin_secret') || sessionStorage.getItem('admin_secret') || localStorage.getItem('adminSecret');
+  if (existing) {
+    try {
+      const res = await fetch('/admin/stats', {
+        headers: { 'Authorization': 'Bearer ' + existing }
+      });
+      if (res.ok) {
+        // Valid secret, redirect directly to dashboard
+        const params = new URLSearchParams(window.location.search);
+        const redirect = params.get('redirect') || '/admin';
+        window.location.replace(redirect);
+      }
+    } catch (e) {}
+  }
+})();
+
+function togglePassVisibility() {
+  const input = document.getElementById('adminSecretInput');
+  const icon = document.getElementById('eyeIcon');
+  if (!input) return;
+  if (input.type === 'password') {
+    input.type = 'text';
+    icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+  } else {
+    input.type = 'password';
+    icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+  }
+}
+
+async function submitLogin() {
+  const input = document.getElementById('adminSecretInput');
+  const errBox = document.getElementById('errorBox');
+  const btn = document.getElementById('btnSubmit');
+
+  const secret = (input.value || '').trim();
+  if (!secret) {
+    showError('Silakan masukkan admin secret terlebih dahulu');
+    input.focus();
+    return;
+  }
+
+  hideError();
+  btn.disabled = true;
+  btn.innerHTML = '<span>Memverifikasi Secret...</span>';
+
+  try {
+    const res = await fetch('/admin/stats', {
+      headers: {
+        'Authorization': 'Bearer ' + secret,
+        'X-Admin-Secret': secret
+      }
+    });
+
+    if (res.status === 401) {
+      throw new Error('Admin secret salah. Silakan periksa kembali secret Anda.');
+    }
+    if (!res.ok) {
+      throw new Error('Gagal menghubungi server: status ' + res.status);
+    }
+
+    // Success: save credentials and redirect
+    localStorage.setItem('admin_secret', secret);
+    sessionStorage.setItem('admin_secret', secret);
+    localStorage.setItem('adminSecret', secret);
+
+    btn.innerHTML = '<span>Login Berhasil! Mengalihkan...</span>';
+    btn.style.background = 'linear-gradient(135deg, var(--green) 0%, #059669 100%)';
+
+    setTimeout(() => {
+      // Redirect to target URL if query parameter exists, otherwise /admin
+      const params = new URLSearchParams(window.location.search);
+      const redirect = params.get('redirect') || '/admin';
+      window.location.replace(redirect);
+    }, 400);
+
+  } catch (err) {
+    showError(err.message || 'Verifikasi gagal');
+    input.focus();
+    btn.disabled = false;
+    btn.innerHTML = '<span>Masuk ke Dashboard</span> <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>';
+  }
+}
+
+function showError(msg) {
+  const errBox = document.getElementById('errorBox');
+  if (errBox) {
+    errBox.style.display = 'block';
+    errBox.textContent = msg;
+  }
+}
+
+function hideError() {
+  const errBox = document.getElementById('errorBox');
+  if (errBox) {
+    errBox.style.display = 'none';
+    errBox.textContent = '';
+  }
+}
+</script>
+</body>
+</html>

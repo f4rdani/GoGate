@@ -315,8 +315,13 @@ func New(cfg *config.Config, configPath string) (*Server, error) {
 	wrapAdmin("GET /admin/logs", adminHandler.HandleGetLogs)
 	wrapAdmin("GET /admin/logs/stream", adminHandler.HandleStreamLogs)
 
+	// Login page — standalone authentication page
+	wrapAdmin("GET /login", adminHandler.ServeLogin)
+	wrapAdmin("GET /admin/login", adminHandler.ServeLogin)
+
 	// Dashboard — admin web UI (with dynamic secret injection)
 	wrapAdmin("GET /admin", adminHandler.ServeDashboard)
+	wrapAdmin("GET /dashboard", adminHandler.ServeDashboard)
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin", http.StatusTemporaryRedirect)
 	})
