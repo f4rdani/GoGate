@@ -1421,7 +1421,8 @@ func diagFetchModels(client *http.Client, baseURL, apiKey, providerType, proxyUR
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
 
-	reqCtx := context.Background()
+	reqCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	if strings.TrimSpace(proxyURL) != "" {
 		reqCtx = provider.WithEgressProxy(reqCtx, proxyURL)
 	}
@@ -1641,7 +1642,8 @@ func diagTestModel(client *http.Client, baseURL, apiKey, modelID, providerType, 
 			headers["X-Mimo-Source"] = "mimocode-cli"
 		}
 	}
-	reqCtx := context.Background()
+	reqCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
 	if strings.TrimSpace(proxyURL) != "" {
 		reqCtx = provider.WithEgressProxy(reqCtx, proxyURL)
 	}
@@ -2441,8 +2443,13 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 	var lastLatency int64
 	var lastProxy diagProxyInfo
 	proxyModeLabel := a.diagProxyModeLabel(req.Provider)
-	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → trying %d key(s) · proxy %s", req.Provider, req.Model, len(candidates), proxyModeLabel))
-	for i, cand := range candidates {
+	maxAttempts := len(candidates)
+	if maxAttempts > 3 {
+		maxAttempts = 3
+	}
+	slog.Info(fmt.Sprintf("🧪 [DIAG] test-model %s/%s → trying up to %d of %d key(s) · proxy %s", req.Provider, req.Model, maxAttempts, len(candidates), proxyModeLabel))
+	for i := 0; i < maxAttempts; i++ {
+		cand := candidates[i]
 		keyTag := diagKeyTag(cand.Index, cand.Key)
 		px := a.diagCheckoutProxy(req.Provider)
 		proxySuffix := diagProxySuffix(px)
@@ -2488,7 +2495,7 @@ func (a *AdminHandler) HandleDiagTestModel(w http.ResponseWriter, r *http.Reques
 		}
 		failures = append(failures, keyFailure{KeyIndex: idx, KeyMasked: maskDiagKey(cand.Key), Proxy: px.Display, ProxyMode: px.Mode, Error: err.Error()})
 		slog.Warn(fmt.Sprintf("❌ [DIAG] test-model %s/%s fail via %s · %s · %dms · %s", req.Provider, req.Model, keyTag, proxySuffix, latency, err.Error()))
-		if i < len(candidates)-1 {
+		if i < maxAttempts-1 {
 			if !isDiagFallbackRetryable(err) {
 				break
 			}
@@ -2589,8 +2596,13 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 	var lastErr error
 	var lastProxy diagProxyInfo
 	proxyModeLabel := a.diagProxyModeLabel(req.Provider)
-	slog.Info(fmt.Sprintf("🧪 [DIAG] fetch-models %s → trying %d key(s) · proxy %s", req.Provider, len(candidates), proxyModeLabel))
-	for i, cand := range candidates {
+	maxAttempts := len(candidates)
+	if maxAttempts > 3 {
+		maxAttempts = 3
+	}
+	slog.Info(fmt.Sprintf("🧪 [DIAG] fetch-models %s → trying up to %d of %d key(s) · proxy %s", req.Provider, maxAttempts, len(candidates), proxyModeLabel))
+	for i := 0; i < maxAttempts; i++ {
+		cand := candidates[i]
 		keyTag := diagKeyTag(cand.Index, cand.Key)
 		px := a.diagCheckoutProxy(req.Provider)
 		proxySuffix := diagProxySuffix(px)
@@ -2629,7 +2641,7 @@ func (a *AdminHandler) HandleDiagFetchModels(w http.ResponseWriter, r *http.Requ
 		lastErr = err
 		lastProxy = px
 		slog.Warn(fmt.Sprintf("❌ [DIAG] fetch-models %s fail via %s · %s · %s", req.Provider, keyTag, proxySuffix, err.Error()))
-		if i < len(candidates)-1 {
+		if i < maxAttempts-1 {
 			if !isDiagFallbackRetryable(err) {
 				break
 			}
